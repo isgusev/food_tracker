@@ -3,29 +3,41 @@
 Модуль не знает ни про FastAPI, ни про БД — чистая утилита core-слоя.
 """
 
+import base64
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import get_settings
 
-# bcrypt выбран сознательно: argon2 требует системной библиотеки libargon2,
-# которую сложно поставить на Windows. Ограничение passlib на bcrypt < 4
-# снимается пином bcrypt==4.* в requirements (см. requirements.txt).
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# --- Хэширование паролей: bcrypt напрямую (без passlib) ---
+# passlib 1.7.x несовместим с bcrypt>=4.1 (падает при детекте бэкенда) и
+# давно не развивается. Чтобы длинные/юникодные пароли не упирались в
+# 72-байтовое ограничение bcrypt молча, секрет пред-хэшируется SHA-512 и
+# передаётся в bcrypt уже в безопасной фиксированной форме (стандартный
+# приём). При переходе на argon2 менять нужно только эти две функции.
+_BCRYPT_MAX_INPUT = 72
+
+
+def _prehash(password: str) -> bytes:
+    digest = hashlib.sha512(password.encode("utf-8")).digest()
+    return base64.b64encode(digest)[:_BCRYPT_MAX_INPUT]
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    if not password:
+        raise ValueError("Пустой пароль")
+    return bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Constant-time сравнение; False при битом/чужом хэше — без исключения."""
     try:
-        return pwd_context.verify(plain, hashed)
-    except ValueError:
-        # повреждённый/чужой хэш в БД — считаем невалидным, не роняем запрос
+        return bcrypt.checkpw(_prehash(plain), hashed.encode("ascii"))
+    except (ValueError, TypeError):
         return False
 
 

@@ -15,8 +15,7 @@ alembic==1.16.*
 
 # --- Безопасность (JWT-аутентификация) ---
 python-jose[cryptography]==3.5.*
-passlib==1.7.5
-bcrypt==4.3.*   # пин: passlib 1.7.x несовместим с bcrypt>=4.1 (предупреждение об отсутствии __about__)
+bcrypt==5.0.*   # хэширование напрямую (см. app/core/security.py); passlib исключён: 1.7.x несовместим с bcrypt>=4.1
 
 # --- UI (Streamlit, общается с API по HTTP) ---
 requests==2.32.4
