@@ -82,23 +82,15 @@ class RecipeActualIngredientResponse(ORMModel):
 
 
 class RecipeCookingLogCreate(BaseModel):
-    user_id: str
+    # user_id берётся из JWT — см. endpoints/recipes.py
     total_cooked_weight: Decimal = Field(gt=0, le=Decimal("9999.9"))
     ingredients: list[IngredientLine] = Field(min_length=1)
-
-    @field_validator("user_id")
-    @classmethod
-    def _strip(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("user_id не может быть пустым")
-        return v
 
 
 class RecipeCookingLogResponse(ORMModel):
     id: int
     recipe_id: Optional[int]
-    user_id: str
+    user_id: int
     cooked_at: Optional[datetime] = None
     total_raw_weight: Decimal
     total_cooked_weight: Decimal

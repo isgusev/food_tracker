@@ -38,9 +38,16 @@ class DiaryService:
         self._cooking_logs = cooking_logs
 
     # --- ЧТЕНИЕ ---
-    async def list_for_day(self, user_id: str, date_day: str) -> list[DiaryLogResponse]:
+    async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLogResponse]:
         logs = await self._diary.list_for_day(user_id, date_day)
         return [self._to_response(log) for log in logs]
+
+    async def get_owned(self, log_id: int, user_id: int) -> DiaryLog:
+        """Возвращает запись только её владельцу; чужая запись = 404 (без утечки)."""
+        log = await self._diary.get_full(log_id)
+        if log is None or log.user_id != user_id:
+            raise NotFoundError("Запись в дневнике не найдена")
+        return log
 
     def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
         res = DiaryLogResponse.model_validate(log)
@@ -67,13 +74,13 @@ class DiaryService:
         return res
 
     # --- СОЗДАНИЕ ПЛАНА ---
-    async def add_plan(self, data: DiaryLogCreate) -> DiaryLog:
+    async def add_plan(self, user_id: int, data: DiaryLogCreate) -> DiaryLog:
         recipe = await self._recipes.get(data.recipe_id)
         if recipe is None:
             raise NotFoundError("Рецепт не найден")
 
         log = DiaryLog(
-            user_id=data.user_id,
+            user_id=user_id,
             date_day=data.date_day,
             meal_type=data.meal_type,
             status=STATUS_TEMPLATE_PLAN,
@@ -87,12 +94,8 @@ class DiaryService:
         return log
 
     # --- ОБНОВЛЕНИЕ ВЕСА ---
-    async def update_weight(self, log_id: int, new_weight: Decimal) -> DiaryLog:
+    async def update_weight(self, log: DiaryLog, new_weight: Decimal) -> DiaryLog:
         """Меняет вес порции, не переключая статус; для факта синхронизирует кастрюлю."""
-        log = await self._diary.get_full(log_id)
-        if log is None:
-            raise NotFoundError("Запись в дневнике не найдена")
-
         if log.status == STATUS_FACT and log.cooking_log_id:
             pot = await self._cooking_logs.get(log.cooking_log_id)
             if pot is not None:
@@ -106,12 +109,8 @@ class DiaryService:
         return log
 
     # --- «СЪЕДЕНО» ---
-    async def mark_eaten(self, log_id: int, new_weight: Decimal) -> DiaryLog:
+    async def mark_eaten(self, log: DiaryLog, new_weight: Decimal) -> DiaryLog:
         """План → факт (или правка веса уже съеденного); списывает вес из кастрюли."""
-        log = await self._diary.get_full(log_id)
-        if log is None:
-            raise NotFoundError("Запись в дневнике не найдена")
-
         # Если запись висела без кастрюли — пробуем привязать активную по её рецепту
         if log.cooking_log_id is None and log.recipe_id is not None:
             pot = await self._cooking_logs.find_active_pot(log.user_id, log.recipe_id)
@@ -142,10 +141,7 @@ class DiaryService:
         return log
 
     # --- УДАЛЕНИЕ ---
-    async def delete(self, log_id: int) -> None:
-        log = await self._diary.get(log_id)
-        if log is None:
-            raise NotFoundError("Запись в дневнике не найдена")
+    async def delete(self, log: DiaryLog) -> None:
         # Факт удаляем — возвращаем вес в кастрюлю, иначе холодильник «врёт»
         if log.status == STATUS_FACT and log.cooking_log_id is not None:
             pot = await self._cooking_logs.get(log.cooking_log_id)
@@ -156,7 +152,7 @@ class DiaryService:
 
     # --- СПИСОК ПОКУПОК ---
     async def shopping_list(
-        self, user_id: str, start_date: str, end_date: str
+        self, user_id: int, start_date: str, end_date: str
     ) -> list[ShoppingListItem]:
         """Агрегированная закупка по планам (template_plan) за диапазон дат."""
         plans = await self._diary.list_planned_in_range(user_id, start_date, end_date)

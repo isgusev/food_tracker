@@ -1,10 +1,12 @@
-"""Эндпоинты дневника питания и списка покупок."""
+"""Эндпоинты дневника питания: планы, факты, список покупок.
 
-from datetime import date
+user_id всегда берётся из JWT (CurrentUserDep) — клиент не может
+читать/писать чужие записи.
+"""
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import DiaryServiceDep
+from app.api.deps import CurrentUserDep, DiaryServiceDep
 from app.schemas.diary import (
     DiaryLogCreate,
     DiaryLogResponse,
@@ -15,48 +17,64 @@ from app.schemas.diary import (
 router = APIRouter(prefix="/diary", tags=["Дневник питания"])
 
 
-@router.get("/shopping-list", response_model=ShoppingListResponse)
-async def shopping_list(
-    service: DiaryServiceDep,
-    user_id: str = Query(min_length=1),
-    start_date: date = Query(),
-    end_date: date = Query(),
+@router.get("/day/{date_day}", response_model=list[DiaryLogResponse])
+async def get_day_logs(
+    date_day: str, service: DiaryServiceDep, current_user: CurrentUserDep
 ):
-    items = await service.shopping_list(user_id, start_date.isoformat(), end_date.isoformat())
-    return ShoppingListResponse(start_date=start_date, end_date=end_date, items=items)
-
-
-@router.get("/{user_id}/{date_day}", response_model=list[DiaryLogResponse])
-async def get_diary_for_day(user_id: str, date_day: str, service: DiaryServiceDep):
-    return await service.list_for_day(user_id, date_day)
+    """Записи дневника текущего пользователя на указанную дату (YYYY-MM-DD)."""
+    return await service.list_for_day(current_user.id, date_day)
 
 
 @router.post("/", response_model=DiaryLogResponse, status_code=201)
-async def add_plan(plan_in: DiaryLogCreate, service: DiaryServiceDep):
-    log = await service.add_plan(plan_in)
-    day_logs = await service.list_for_day(log.user_id, log.date_day)
-    return next(entry for entry in day_logs if entry.id == log.id)
+async def add_plan(
+    plan_in: DiaryLogCreate, service: DiaryServiceDep, current_user: CurrentUserDep
+):
+    """Добавить план блюда в дневник."""
+    return await service.add_plan(current_user.id, plan_in)
 
 
 @router.patch("/{log_id}/weight", response_model=DiaryLogResponse)
-async def change_planned_weight(
-    log_id: int, weight_update: DiaryLogUpdateWeight, service: DiaryServiceDep
+async def update_weight(
+    log_id: int,
+    payload: DiaryLogUpdateWeight,
+    service: DiaryServiceDep,
+    current_user: CurrentUserDep,
 ):
-    log = await service.update_weight(log_id, weight_update.weight_g)
-    day_logs = await service.list_for_day(log.user_id, log.date_day)
-    return next(entry for entry in day_logs if entry.id == log.id)
+    """Изменить вес порции (план или факт) без смены статуса."""
+    log = await service.get_owned(log_id, current_user.id)
+    return await service.update_weight(log, payload.weight_g)
 
 
-@router.patch("/{log_id}/eat", response_model=DiaryLogResponse)
-async def commit_or_change_fact(
-    log_id: int, weight_update: DiaryLogUpdateWeight, service: DiaryServiceDep
+@router.post("/{log_id}/eat", response_model=DiaryLogResponse)
+async def mark_eaten(
+    log_id: int,
+    payload: DiaryLogUpdateWeight,
+    service: DiaryServiceDep,
+    current_user: CurrentUserDep,
 ):
-    """Превращаем план в факт или меняем вес порции съеденного."""
-    log = await service.mark_eaten(log_id, weight_update.weight_g)
-    day_logs = await service.list_for_day(log.user_id, log.date_day)
-    return next(entry for entry in day_logs if entry.id == log.id)
+    """Отметить «съедено»: план → факт, списание веса из кастрюли."""
+    log = await service.get_owned(log_id, current_user.id)
+    return await service.mark_eaten(log, payload.weight_g)
 
 
 @router.delete("/{log_id}", status_code=204)
-async def delete_diary_log(log_id: int, service: DiaryServiceDep):
-    await service.delete(log_id)
+async def delete_log(
+    log_id: int, service: DiaryServiceDep, current_user: CurrentUserDep
+):
+    """Удалить запись дневника (факт возвращает вес в кастрюлю)."""
+    log = await service.get_owned(log_id, current_user.id)
+    await service.delete(log)
+
+
+@router.get("/shopping-list", response_model=ShoppingListResponse)
+async def get_shopping_list(
+    service: DiaryServiceDep,
+    current_user: CurrentUserDep,
+    start_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    """Агрегированный список покупок по планам на диапазон дат."""
+    items = await service.shopping_list(current_user.id, start_date, end_date)
+    return ShoppingListResponse(
+        start_date=start_date, end_date=end_date, items=items
+    )

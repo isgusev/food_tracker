@@ -5,6 +5,7 @@ from sqlalchemy.orm import joinedload
 
 from app.domain import STATUS_COOKED_PLAN, STATUS_TEMPLATE_PLAN
 from app.models.diary import DiaryLog
+from app.models.recipe import Recipe, RecipeCookingLog
 from app.repositories.base import BaseRepository
 
 
@@ -12,9 +13,7 @@ class DiaryRepository(BaseRepository[DiaryLog]):
     model = DiaryLog
 
     def full_query(self):
-        # одним JOIN'ом тянем рецепт (с ингредиентами), кастрюлю и её ингредиенты — лечит N+1
-        from app.models.recipe import RecipeCookingLog
-
+        # одним JOIN'ом тянем рецепт (с категорией), кастрюлю и её ингредиенты — лечит N+1
         return (
             select(DiaryLog)
             .options(
@@ -29,7 +28,7 @@ class DiaryRepository(BaseRepository[DiaryLog]):
         stmt = self.full_query().where(DiaryLog.id == log_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
-    async def list_for_day(self, user_id: str, date_day: str) -> list[DiaryLog]:
+    async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLog]:
         stmt = (
             self.full_query()
             .where(DiaryLog.user_id == user_id, DiaryLog.date_day == date_day)
@@ -38,7 +37,7 @@ class DiaryRepository(BaseRepository[DiaryLog]):
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def list_planned_in_range(
-        self, user_id: str, start_date: str, end_date: str
+        self, user_id: int, start_date: str, end_date: str
     ) -> list[DiaryLog]:
         stmt = (
             self.full_query()
@@ -52,7 +51,7 @@ class DiaryRepository(BaseRepository[DiaryLog]):
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def reattach_template_plans(
-        self, user_id: str, recipe_id: int, cooking_log_id: int
+        self, user_id: int, recipe_id: int, cooking_log_id: int
     ) -> int:
         """При готовке инстанса привязываем будущие template_plan → cooked_plan."""
         from sqlalchemy import update

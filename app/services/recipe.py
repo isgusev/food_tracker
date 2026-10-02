@@ -123,7 +123,7 @@ class RecipeService:
         return await self._recipes.list_full(limit=limit, offset=offset)
 
     # --- ХОЛОДИЛЬНИК ---
-    async def cook(self, recipe_id: int, data: RecipeCookingLogCreate) -> RecipeCookingLog:
+    async def cook(self, user_id: int, recipe_id: int, data: RecipeCookingLogCreate) -> RecipeCookingLog:
         template = await self._recipes.get(recipe_id)
         if template is None:
             raise NotFoundError("Шаблон рецепта не найден")
@@ -133,7 +133,7 @@ class RecipeService:
 
         pot = RecipeCookingLog(
             recipe_id=recipe_id,
-            user_id=data.user_id,
+            user_id=user_id,
             total_raw_weight=quantize(total_raw),
             total_cooked_weight=data.total_cooked_weight,
             current_remaining_weight=data.total_cooked_weight,  # кастрюля полная
@@ -151,27 +151,28 @@ class RecipeService:
         await self._cooking_logs.flush()
 
         # Автоуточнение планов: template_plan по этому рецепту → cooked_plan на свежую кастрюлю
-        await self._diary.reattach_template_plans(data.user_id, recipe_id, pot.id)
+        await self._diary.reattach_template_plans(user_id, recipe_id, pot.id)
 
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
         return full
 
-    async def list_pots(self, limit: int = 200, offset: int = 0) -> list[RecipeCookingLog]:
-        return await self._cooking_logs.list_full(limit=limit, offset=offset)
+    async def list_pots(self, user_id: int, limit: int = 200, offset: int = 0) -> list[RecipeCookingLog]:
+        return await self._cooking_logs.list_full(user_id, limit=limit, offset=offset)
 
-    async def delete_pot(self, log_id: int) -> None:
+    async def get_owned_pot(self, log_id: int, user_id: int) -> RecipeCookingLog:
+        """Кастрюля только для её владельца; чужая = 404 (без утечки информации)."""
         pot = await self._cooking_logs.get_full(log_id)
-        if pot is None:
+        if pot is None or pot.user_id != user_id:
             raise NotFoundError("Запись готовки не найдена")
+        return pot
+
+    async def delete_pot(self, pot: RecipeCookingLog) -> None:
         # Связанные планы откатываются в template_plan (иначе остались бы «висячие» ссылки)
-        await self._diary.detach_plans_from_pot(log_id)
+        await self._diary.detach_plans_from_pot(pot.id)
         await self._cooking_logs.delete(pot)
 
-    async def update_pot_remainder(self, log_id: int, data: CookingLogUpdate) -> RecipeCookingLog:
-        pot = await self._cooking_logs.get_full(log_id)
-        if pot is None:
-            raise NotFoundError("Запись готовки не найдена")
+    async def update_pot_remainder(self, pot: RecipeCookingLog, data: CookingLogUpdate) -> RecipeCookingLog:
         remainder = data.current_remaining_weight
         if remainder > pot.total_cooked_weight:
             raise ValidationError("Остаток не может превышать общий вес готового блюда")

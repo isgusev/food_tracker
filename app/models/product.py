@@ -89,10 +89,10 @@ class ProductVariant(Base):
         ForeignKey("product_manufacturers.id", ondelete="CASCADE"),
         nullable=False,
     )
-    calories = Column(Numeric(5, 1, asdecimal=False), nullable=False)
-    proteins = Column(Numeric(4, 1, asdecimal=False), nullable=False)
-    fats = Column(Numeric(4, 1, asdecimal=False), nullable=False)
-    carbs = Column(Numeric(4, 1, asdecimal=False), nullable=False)
+    calories = Column(Numeric(5, 1), nullable=False)
+    proteins = Column(Numeric(4, 1), nullable=False)
+    fats = Column(Numeric(4, 1), nullable=False)
+    carbs = Column(Numeric(4, 1), nullable=False)
     wrong_nutrients = Column(Boolean, default=False, nullable=False)
     version = Column(Integer, default=1, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

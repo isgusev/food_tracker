@@ -22,7 +22,11 @@ class DiaryLog(Base):
     __tablename__ = "diary_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(100), nullable=False, index=True)
+    # FK на пользователей: изоляция данных проверяется на уровне БД,
+    # чужой/несуществующий user_id больше нельзя записать даже теоретически
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     # На какую дату запись (например, "2026-06-04")
     date_day = Column(String(10), nullable=False, index=True)
@@ -42,12 +46,13 @@ class DiaryLog(Base):
     )
 
     # Сколько грамм пользователь планирует съесть или уже съел по факту
-    weight_g = Column(Numeric(5, 1, asdecimal=False), nullable=False)
+    weight_g = Column(Numeric(5, 1), nullable=False)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     recipe = relationship("Recipe")
+    user = relationship("User")
 
     # НОВАЯ_ЕСЛИ ЧТО УДАЛИМ
     scale_all_proportions = Column(Boolean, default=False, nullable=True)
