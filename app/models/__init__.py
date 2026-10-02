@@ -3,6 +3,8 @@
 Модели разбиты по доменам; здесь они пересобираются, чтобы ``Base.metadata``
 содержал все таблицы при генерации миграций.
 """
+from __future__ import annotations
+
 
 from app.db.base import Base
 from app.models.diary import DiaryLog

@@ -1,4 +1,6 @@
 """Агрегатор версий API: /api/v1/..."""
+from __future__ import annotations
+
 
 from fastapi import APIRouter, Depends
 

@@ -4,6 +4,8 @@
 схема живёт только в Alembic). Числовые колонки моделей объявлены asdecimal=False,
 поэтому SQLite отдаёт float без crash; Pydantic-схемы конвертируют их в Decimal.
 """
+from __future__ import annotations
+
 
 import os
 

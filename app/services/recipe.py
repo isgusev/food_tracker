@@ -1,4 +1,6 @@
 """Сервис рецептов и «холодильника» (инстансов готовки)."""
+from __future__ import annotations
+
 
 from decimal import Decimal
 

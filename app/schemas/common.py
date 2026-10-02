@@ -1,4 +1,6 @@
 """Общие схемы Pydantic v2."""
+from __future__ import annotations
+
 
 from pydantic import BaseModel, ConfigDict
 

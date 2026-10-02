@@ -3,6 +3,8 @@
 Единый ``naming_convention`` делает автогенерацию миграций Alembic
 предсказуемой (констрейнты получают человекочитаемые имена вместо ``anon_1``).
 """
+from __future__ import annotations
+
 
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase

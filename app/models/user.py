@@ -1,4 +1,6 @@
 """ORM-модель пользователя."""
+from __future__ import annotations
+
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.sql import func

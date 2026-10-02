@@ -1,4 +1,6 @@
 """Окружение Alembic: async-движок + метаданные моделей."""
+from __future__ import annotations
+
 
 import asyncio
 from logging.config import fileConfig

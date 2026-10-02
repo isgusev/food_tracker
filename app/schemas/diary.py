@@ -1,4 +1,6 @@
 """Схемы дневника питания (Pydantic v2)."""
+from __future__ import annotations
+
 
 import re
 from datetime import date as date_type

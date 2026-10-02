@@ -2,6 +2,8 @@
 
 Вся «магия» КБЖУ и холодильника собрана здесь; роутер — тонкая HTTP-обёртка.
 """
+from __future__ import annotations
+
 
 from decimal import Decimal
 

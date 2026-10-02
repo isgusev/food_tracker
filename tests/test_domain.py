@@ -1,4 +1,6 @@
 """Unit-тесты чистого домена (app/domain.py) — без БД и HTTP."""
+from __future__ import annotations
+
 
 from decimal import Decimal
 

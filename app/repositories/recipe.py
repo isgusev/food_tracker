@@ -1,4 +1,6 @@
 """Репозитории рецептов и «холодильника»."""
+from __future__ import annotations
+
 
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload

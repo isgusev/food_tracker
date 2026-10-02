@@ -4,9 +4,13 @@
 Движок создаётся ОДИН раз на процесс в lifespan (см. app/main.py); тесты могут
 подменить глобальный фабричный синглтон через ``set_session_factory``.
 """
+from __future__ import annotations
+
 
 from collections.abc import AsyncGenerator
+from typing import Annotated
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +23,8 @@ from app.core.config import Settings
 
 def _to_async_url(url: str) -> str:
     """Конвертирует postgresql:// URL в async-вариант (postgresql+asyncpg://)."""
+    if url.startswith("sqlite+aiosqlite://"):
+        return url  # тестовый/лайтвейт вариант уже async
     if url.startswith("postgresql+asyncpg://"):
         return url
     if url.startswith("postgresql://"):
@@ -29,13 +35,17 @@ def _to_async_url(url: str) -> str:
 
 
 def create_engine_from_settings(settings: Settings) -> AsyncEngine:
-    return create_async_engine(
-        _to_async_url(settings.database_url),
+    kwargs: dict = dict(
         echo=settings.db_echo,
-        pool_size=settings.db_pool_size,
-        max_overflow=settings.db_max_overflow,
         pool_pre_ping=True,  # отлавливать «мёртвые» соединения после рестарта PG
     )
+    if settings.database_url.startswith("sqlite"):
+        # SQLite не поддерживает пуловые параметры SQLAlchemy — только файл/память
+        kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        kwargs["pool_size"] = settings.db_pool_size
+        kwargs["max_overflow"] = settings.db_max_overflow
+    return create_async_engine(_to_async_url(settings.database_url), **kwargs)
 
 
 # --- Глобальный синглтон фабрики (инициализируется в lifespan приложения) ---
@@ -76,3 +86,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+# Переиспользуемая DI-зависимость: сессия БД на запрос (Unit of Work).
+# Определяется ПОСЛЕ get_session — иначе FastAPI не сможет её разрешить.
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
