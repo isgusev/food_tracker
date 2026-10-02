@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 from decimal import Decimal
 
@@ -7,6 +7,8 @@ from app.database import get_db
 from app import models, schemas
 
 from datetime import date as date_type
+
+from app.domain import STATUS_COOKED_PLAN, STATUS_FACT, STATUS_TEMPLATE_PLAN
 
 router = APIRouter(
     prefix="/api/diary",
@@ -31,7 +33,7 @@ def get_shopping_list(
         models.DiaryLog.user_id == user_id,
         models.DiaryLog.date_day >= start_str,
         models.DiaryLog.date_day <= end_str,
-        models.DiaryLog.status.in_(["template_plan", "plan"])
+        models.DiaryLog.status.in_([STATUS_TEMPLATE_PLAN])
     ).all()
     
     shopping_cart = {}
@@ -109,7 +111,7 @@ def add_to_diary_plan(log_in: schemas.DiaryLogCreate, db: Session = Depends(get_
         user_id=log_in.user_id.strip(),
         date_day=log_in.date_day.strip(),
         meal_type=log_in.meal_type.strip(),
-        status="plan",  # Оставляем чистый дефолт
+        status=STATUS_TEMPLATE_PLAN,  # FIX: был "plan" — рассинхрон с UI и коок-логикой
         recipe_id=log_in.recipe_id,
         weight_g=log_in.weight_g,
         servings_multiplier=log_in.servings_multiplier # Сохраняем наше (возможно отрицательное) число
@@ -125,15 +127,21 @@ def get_diary_per_day(user_id: str, date_day: str, db: Session = Depends(get_db)
     logs = db.query(models.DiaryLog).filter(
         models.DiaryLog.user_id == user_id,
         models.DiaryLog.date_day == date_day
+    ).options(
+        # FIX N+1: одним JOIN подгружаем рецепт, кастрюлю и её ингредиенты
+        joinedload(models.DiaryLog.recipe),
+        joinedload(models.DiaryLog.cooking_log).joinedload(
+            models.RecipeCookingLog.actual_ingredients
+        ),
     ).all()
 
     response_list = []
     for log in logs:
-        res = schemas.DiaryLogResponse.from_orm(log)
+        res = schemas.DiaryLogResponse.model_validate(log)
         res.recipe_name = log.recipe.name if log.recipe else "Удаленный рецепт"
         
         # Определяем, по какому КБЖУ считать (точный инстанс или шаблон)
-        if log.status in ["cooked_plan", "fact"] and log.cooking_log:
+        if log.status in [STATUS_COOKED_PLAN, STATUS_FACT] and log.cooking_log:
             source = log.cooking_log
         else:
             source = log.recipe
@@ -157,7 +165,7 @@ def update_diary_log_weight(log_id: int, weight_update: schemas.DiaryLogUpdateWe
         raise HTTPException(status_code=404, detail="Запись в дневнике не найдена")
 
     # Если запись уже была в статусе "fact", то изменение веса должно скорректировать холодильник!
-    if log.status == "fact" and log.cooking_log_id:
+    if log.status == STATUS_FACT and log.cooking_log_id:
         pot = db.query(models.RecipeCookingLog).filter(models.RecipeCookingLog.id == log.cooking_log_id).first()
         if pot:
             # Возвращаем старый вес в кастрюлю и вычитаем новый

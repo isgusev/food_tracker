@@ -1,0 +1,29 @@
+# --- API ---
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+
+# --- Конфигурация и схемы ---
+pydantic==2.11.7
+pydantic-settings==2.10.1
+email-validator==2.2.0
+
+# --- БД: PostgreSQL + SQLAlchemy 2.0 (async) + миграции ---
+sqlalchemy[asyncio]==2.0.*
+asyncpg==0.31.0
+alembic==1.16.*
+
+# --- Безопасность (этап JWT-аутентификации) ---
+# python-jose[cryptography]
+# passlib[bcrypt]
+
+# --- UI (Streamlit, общается с API по HTTP) ---
+requests==2.32.4
+streamlit
+pandas
+
+# --- Dev / тесты ---
+pytest
+pytest-asyncio
+httpx
+aiosqlite
