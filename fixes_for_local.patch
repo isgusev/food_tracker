@@ -11,33 +11,6 @@ index 7a84c06..11a8287 100644
  POSTGRES_DB=food_db
  POSTGRES_USER=food_user
  POSTGRES_PASSWORD=change_me
-diff --git a/.gitignore b/.gitignore
-index a198503..9f037e8 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -1,3 +1,20 @@
- # Python bytecode
- __pycache__/
--*.pyc
-\ No newline at end of file
-+*.pyc
-+*.pyo
-+
-+# Virtual environments
-+.venv/
-+venv/
-+
-+# Environment variables (секреты не должны попадать в git!)
-+.env
-+
-+# IDE / OS
-+.idea/
-+.vscode/
-+.DS_Store
-+
-+# pytest / mypy caches
-+.pytest_cache/
-+.mypy_cache/
 diff --git a/alembic/env.py b/alembic/env.py
 index 0148fc8..f6b89d1 100644
 --- a/alembic/env.py
