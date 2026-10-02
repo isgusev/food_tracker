@@ -1,8 +1,2 @@
-# Python compiled files
-__pycache__/
-*.pyc
-
-# Environment and secrets
-.env
-.env.local
-.env.*.localfood_tracker_fixes.bundle
+#Git bundle files
+*.bundle
