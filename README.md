@@ -26,7 +26,7 @@ ui/              # Streamlit-приложение
    python -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. PostgreSQL (docker): `docker compose -f docker-compose.dev.yml up -d`
+2. PostgreSQL (docker): `docker compose up -d db`
 3. Конфигурация: скопируйте `.env.example` → `.env`, укажите `POSTGRES_*` и **свой** `SECRET_KEY`.
 4. Миграции (первый запуск — сгенерировать initial-ревизию):
    ```bash

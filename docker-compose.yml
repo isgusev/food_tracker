@@ -1,0 +1,26 @@
+# Локальная PostgreSQL для разработки.
+# Запуск из корня проекта:  docker compose up -d db
+# Остановка:                docker compose down            (данные останутся в named volume)
+# Полная очистка данных:    docker compose down -v
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: food_tracker_db
+    restart: unless-stopped
+    environment:
+      # Значения должны совпадать с вашим .env (POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB)
+      POSTGRES_DB: food_db
+      POSTGRES_USER: food_user
+      POSTGRES_PASSWORD: change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U food_user -d food_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
