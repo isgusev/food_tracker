@@ -5,4 +5,4 @@ __pycache__/
 # Environment and secrets
 .env
 .env.local
-.env.*.local
+.env.*.localfood_tracker_fixes.bundle
