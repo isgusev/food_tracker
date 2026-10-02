@@ -57,16 +57,16 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
         stmt = self.full_query().where(RecipeCookingLog.id == log_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
-    async def list_full(self, limit: int = 200, offset: int = 0) -> list[RecipeCookingLog]:
-        stmt = (
-            self.full_query()
-            .order_by(RecipeCookingLog.cooked_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+    async def list_full(
+        self, user_id: int | None = None, limit: int = 200, offset: int = 0
+    ) -> list[RecipeCookingLog]:
+        stmt = self.full_query()
+        if user_id is not None:
+            stmt = stmt.where(RecipeCookingLog.user_id == user_id)
+        stmt = stmt.order_by(RecipeCookingLog.cooked_at.desc()).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
-    async def find_active_pot(self, user_id: str, recipe_id: int) -> RecipeCookingLog | None:
+    async def find_active_pot(self, user_id: int, recipe_id: int) -> RecipeCookingLog | None:
         """Самая свежая недоеденная кастрюля пользователя по рецепту."""
         stmt = (
             select(RecipeCookingLog)

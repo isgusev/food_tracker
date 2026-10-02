@@ -40,12 +40,12 @@ class Recipe(Base):
     instructions = Column(Text, nullable=True)
     created_by_user = Column(String(100), nullable=False, default="system")
     default_servings = Column(Integer, default=1, nullable=False)
-    total_raw_weight = Column(Numeric(6, 1, asdecimal=False), default=0.0, nullable=False)
-    estimated_cooked_weight = Column(Numeric(6, 1, asdecimal=False), nullable=False)
-    calories_per_100g = Column(Numeric(5, 1, asdecimal=False), default=0.0, nullable=False)
-    proteins_per_100g = Column(Numeric(4, 1, asdecimal=False), default=0.0, nullable=False)
-    fats_per_100g = Column(Numeric(4, 1, asdecimal=False), default=0.0, nullable=False)
-    carbs_per_100g = Column(Numeric(4, 1, asdecimal=False), default=0.0, nullable=False)
+    total_raw_weight = Column(Numeric(6, 1), default=0.0, nullable=False)
+    estimated_cooked_weight = Column(Numeric(6, 1), nullable=False)
+    calories_per_100g = Column(Numeric(5, 1), default=0.0, nullable=False)
+    proteins_per_100g = Column(Numeric(4, 1), default=0.0, nullable=False)
+    fats_per_100g = Column(Numeric(4, 1), default=0.0, nullable=False)
+    carbs_per_100g = Column(Numeric(4, 1), default=0.0, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
     recipe_category = relationship("RecipeCategory", back_populates="recipes")
@@ -69,7 +69,7 @@ class RecipeTemplateIngredient(Base):
     variant_id = Column(
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
     )
-    weight_g = Column(Numeric(5, 1, asdecimal=False), nullable=False)
+    weight_g = Column(Numeric(5, 1), nullable=False)
 
     recipe = relationship("Recipe", back_populates="template_ingredients")
     variant = relationship("ProductVariant")
@@ -84,20 +84,22 @@ class RecipeCookingLog(Base):
     recipe_id = Column(
         Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True
     )
-    user_id = Column(String(100), nullable=False)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     cooked_at = Column(DateTime, server_default=func.now())
 
-    total_raw_weight = Column(Numeric(6, 1, asdecimal=False), nullable=False)
-    total_cooked_weight = Column(Numeric(6, 1, asdecimal=False), nullable=False)
+    total_raw_weight = Column(Numeric(6, 1), nullable=False)
+    total_cooked_weight = Column(Numeric(6, 1), nullable=False)
 
     # Храним остаток еды в кастрюле
-    current_remaining_weight = Column(Numeric(6, 1, asdecimal=False), nullable=False)
+    current_remaining_weight = Column(Numeric(6, 1), nullable=False)
     is_finished = Column(Boolean, default=False, nullable=False)  # Кастрюля пуста?
 
-    calories_per_100g = Column(Numeric(5, 1, asdecimal=False), nullable=False)
-    proteins_per_100g = Column(Numeric(4, 1, asdecimal=False), nullable=False)
-    fats_per_100g = Column(Numeric(4, 1, asdecimal=False), nullable=False)
-    carbs_per_100g = Column(Numeric(4, 1, asdecimal=False), nullable=False)
+    calories_per_100g = Column(Numeric(5, 1), nullable=False)
+    proteins_per_100g = Column(Numeric(4, 1), nullable=False)
+    fats_per_100g = Column(Numeric(4, 1), nullable=False)
+    carbs_per_100g = Column(Numeric(4, 1), nullable=False)
 
     actual_ingredients = relationship(
         "RecipeActualIngredient",
@@ -121,7 +123,7 @@ class RecipeActualIngredient(Base):
     variant_id = Column(
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
     )
-    weight_g = Column(Numeric(5, 1, asdecimal=False), nullable=False)
+    weight_g = Column(Numeric(5, 1), nullable=False)
 
     cooking_log = relationship("RecipeCookingLog", back_populates="actual_ingredients")
     variant = relationship("ProductVariant")

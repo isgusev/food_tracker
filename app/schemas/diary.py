@@ -14,20 +14,13 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class DiaryLogCreate(BaseModel):
-    user_id: str
+    # user_id берётся из JWT (endpoints внедряют текущего пользователя) —
+    # клиент не может создать запись от чужого имени
     date_day: str  # ISO-дата "YYYY-MM-DD" — формат согласован с фильтром в SQL
     meal_type: str
     recipe_id: int
-    weight_g: Decimal = Field(gt=0, le=Decimal("9999.9"))
+    weight_g: Decimal = Field(gt=0, le=Decimal("999.9"))
     servings_multiplier: int = Field(default=1, ge=-100, le=100)
-
-    @field_validator("user_id")
-    @classmethod
-    def _strip_user(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("user_id не может быть пустым")
-        return v
 
     @field_validator("date_day")
     @classmethod
@@ -54,12 +47,12 @@ class DiaryLogCreate(BaseModel):
 
 
 class DiaryLogUpdateWeight(BaseModel):
-    weight_g: Decimal = Field(gt=0, le=Decimal("9999.9"))
+    weight_g: Decimal = Field(gt=0, le=Decimal("999.9"))
 
 
 class DiaryLogResponse(ORMModel):
     id: int
-    user_id: str
+    user_id: int
     date_day: str
     meal_type: str
     status: str
