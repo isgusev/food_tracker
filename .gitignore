@@ -1,2 +1,2 @@
-# Git bundles
-*.bundle
+__pycache__/
+*.pyc

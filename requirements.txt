@@ -26,6 +26,12 @@ requests==2.32.4
 streamlit
 pandas
 
+# --- Совместимость с Python 3.9 (macOS Intel) ---
+# Pydantic v2 при вычислении аннотаций вида "str | None" на Python < 3.10
+# требует backport-пакет, даже при наличии "from __future__ import annotations"
+# (схемы/настройки резолвятся в рантайме). На Python 3.10+ безвреден.
+eval-type-backport
+
 # --- Dev / тесты ---
 pytest
 pytest-asyncio
