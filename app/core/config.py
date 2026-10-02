@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # --- База данных (PostgreSQL) ---
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 5433  # совпадает с docker-compose.yml (5432 часто занят на macOS)
     postgres_db: str = "food_db"
     postgres_user: str = "food_user"
     postgres_password: str = "food_password"
