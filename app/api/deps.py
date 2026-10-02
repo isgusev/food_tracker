@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_access_token
-from app.db.session import get_session
+from app.db.session import SessionDep, get_session
 from app.models.user import User
 from app.repositories.diary import DiaryRepository
 from app.repositories.product import (

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     db_echo: bool = False
     db_pool_size: int = 5
     db_max_overflow: int = 10
+    # Аварийный полный override URL (например, sqlite+aiosqlite:///./dev.db для демо
+    # без Docker). В норме не задаётся — URL собирается из POSTGRES_* выше.
+    database_url_override: str | None = None
 
     # --- Безопасность ---
     secret_key: str = "CHANGE_ME_IN_PRODUCTION"
@@ -46,9 +49,20 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_origins: list[str] = ["http://localhost:8501", "http://localhost:3000"]
 
+    def validate_runtime(self) -> None:
+        """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""
+        if self.is_production and self.secret_key == "CHANGE_ME_IN_PRODUCTION":
+            raise RuntimeError(
+                "SECRET_KEY не задан: сгенерируйте его командой "
+                "`openssl rand -hex 32` и пропишите в .env. "
+                "Запуск с секретом по умолчанию в production запрещён."
+            )
+
     @property
     def database_url(self) -> str:
         """Async URL для приложения (asyncpg)."""
+        if self.database_url_override:
+            return self.database_url_override
         return self._url("postgresql+asyncpg")
 
     @property
