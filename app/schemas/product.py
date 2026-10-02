@@ -1,4 +1,6 @@
 """Схемы каталога продуктов (Pydantic v2): строгая валидация на границе API."""
+from __future__ import annotations
+
 
 from decimal import Decimal
 from typing import Optional

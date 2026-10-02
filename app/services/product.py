@@ -4,6 +4,8 @@
 Транзакция (commit) — на границе запроса (Unit of Work в app/db/session.py),
 здесь только flush для получения id внутри одной транзакции.
 """
+from __future__ import annotations
+
 
 from decimal import Decimal
 

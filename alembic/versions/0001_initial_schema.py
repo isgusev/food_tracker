@@ -12,6 +12,8 @@ Create Date: 2026-10-03
     alembic upgrade head
     alembic check          # "No new upgrade operations detected"
 """
+from __future__ import annotations
+
 from typing import Sequence, Union
 
 from alembic import op

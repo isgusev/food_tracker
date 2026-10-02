@@ -4,6 +4,8 @@
 Движок создаётся ОДИН раз на процесс в lifespan (см. app/main.py); тесты могут
 подменить глобальный фабричный синглтон через ``set_session_factory``.
 """
+from __future__ import annotations
+
 
 from collections.abc import AsyncGenerator
 

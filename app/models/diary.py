@@ -1,4 +1,6 @@
 """ORM-модель дневника питания (планы/факты приемов пищи)."""
+from __future__ import annotations
+
 
 from sqlalchemy import (
     Boolean,

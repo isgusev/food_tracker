@@ -1,4 +1,6 @@
 """Эндпоинты каталога продуктов: тонкие HTTP-обёртки над ProductService."""
+from __future__ import annotations
+
 
 from fastapi import APIRouter, Query
 

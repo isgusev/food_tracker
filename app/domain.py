@@ -4,6 +4,8 @@
 статусы записей дневника, валидация согласованности КБЖУ, расчет нутриентов
 рецепта/порции. Слой сервисов будет переиспользовать эти функции.
 """
+from __future__ import annotations
+
 
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal

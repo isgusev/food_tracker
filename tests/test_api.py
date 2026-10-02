@@ -5,6 +5,8 @@
 - изоляция пользователей в дневнике питания;
 - доменная валидация КБЖУ через HTTP.
 """
+from __future__ import annotations
+
 
 import pytest
 from httpx import AsyncClient

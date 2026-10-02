@@ -1,4 +1,6 @@
 """DI-обёртки FastAPI: аутентификация и сборка сервисов из сессии БД."""
+from __future__ import annotations
+
 
 from typing import Annotated
 

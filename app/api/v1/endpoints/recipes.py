@@ -1,4 +1,6 @@
 """Эндпоинты рецептов и «холодильника»."""
+from __future__ import annotations
+
 
 from fastapi import APIRouter, Query
 

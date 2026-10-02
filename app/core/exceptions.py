@@ -3,6 +3,8 @@
 Роутеры переводят их в HTTP-коды (единственное место, где сервис «знает» про HTTP —
 ничего; маппинг живёт в api-слое). Это позволяет слоям сервисов не зависеть от FastAPI.
 """
+from __future__ import annotations
+
 
 
 class DomainError(Exception):

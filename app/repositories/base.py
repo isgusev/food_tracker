@@ -1,4 +1,6 @@
 """Базовый асинхронный репозиторий: единственная точка доступа к ORM-сессии."""
+from __future__ import annotations
+
 
 from collections.abc import Sequence
 from typing import Generic, TypeVar

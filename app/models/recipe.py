@@ -1,4 +1,6 @@
 """ORM-модели рецептов: категории, шаблоны, ингредиенты, логи готовки («холодильник»)."""
+from __future__ import annotations
+
 
 from sqlalchemy import (
     Boolean,

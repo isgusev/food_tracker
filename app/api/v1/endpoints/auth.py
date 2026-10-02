@@ -1,4 +1,6 @@
 """Эндпоинты аутентификации: регистрация, логин (OAuth2 password flow), профиль."""
+from __future__ import annotations
+
 
 from typing import Annotated
 

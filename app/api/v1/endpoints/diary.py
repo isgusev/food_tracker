@@ -3,6 +3,8 @@
 user_id всегда берётся из JWT (CurrentUserDep) — клиент не может
 читать/писать чужие записи.
 """
+from __future__ import annotations
+
 
 from fastapi import APIRouter, Query
 

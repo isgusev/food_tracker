@@ -1,4 +1,6 @@
 """ORM-модели каталога продуктов: категории, бренды, продукты, производители, версии КБЖУ."""
+from __future__ import annotations
+
 
 from sqlalchemy import (
     Boolean,

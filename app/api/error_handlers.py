@@ -1,4 +1,6 @@
 """Маппинг доменных исключений в HTTP-коды (единственное место, где это происходит)."""
+from __future__ import annotations
+
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse

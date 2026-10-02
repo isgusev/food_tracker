@@ -3,6 +3,8 @@
 Не знает про HTTP; исключительные ситуации выражены доменными ошибками
 (ConflictError / UnauthorizedError), которые api-слой маппит в коды.
 """
+from __future__ import annotations
+
 
 from app.core.exceptions import ConflictError, UnauthorizedError
 from app.core.security import create_access_token, hash_password, verify_password
