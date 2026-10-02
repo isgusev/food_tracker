@@ -1,3 +1,20 @@
 # Python bytecode
 __pycache__/
 *.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment variables (секреты не должны попадать в git!)
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# pytest / mypy caches
+.pytest_cache/
+.mypy_cache/
