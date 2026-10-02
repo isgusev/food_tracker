@@ -1,1 +1,18 @@
-(empty)
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Env / секреты
+.env
+
+# Тесты / инструменты
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# БД локально
+*.db
+*.sqlite3
