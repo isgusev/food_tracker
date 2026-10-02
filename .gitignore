@@ -1,6 +1,3 @@
-# Python compiled files
+# Python bytecode
 __pycache__/
 *.pyc
-
-# Environment variables
-.env
