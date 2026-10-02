@@ -1,33 +1,18 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Virtual environments
+*.egg-info/
 .venv/
 venv/
-env/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment files (keep .env.example tracked)
+# Env / секреты
 .env
-.env.local
-.env.*.local
 
-# Testing and coverage
+# Тесты / инструменты
 .pytest_cache/
-.coverage
-htmlcov/
-coverage/
+.mypy_cache/
+.ruff_cache/
 
-# Alembic cache
-alembic/cache
+# БД локально
+*.db
+*.sqlite3

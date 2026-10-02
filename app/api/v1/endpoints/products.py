@@ -1,8 +1,8 @@
 """Эндпоинты каталога продуктов: тонкие HTTP-обёртки над ProductService."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import ProductServiceDep
+from app.api.deps import CurrentUserDep, ProductServiceDep
 from app.schemas.product import (
     CategoryCreate,
     CategoryResponse,
@@ -15,7 +15,12 @@ from app.schemas.product import (
 router = APIRouter(prefix="/products", tags=["Продукты, Производители и Версии КБЖУ"])
 
 
-@router.post("/categories", response_model=CategoryResponse, status_code=201)
+@router.post(
+    "/categories",
+    response_model=CategoryResponse,
+    status_code=201,
+    dependencies=[Depends(CurrentUserDep)],
+)
 async def create_category(category: CategoryCreate, service: ProductServiceDep):
     return await service.create_category(category.name)
 
@@ -25,7 +30,12 @@ async def get_categories(service: ProductServiceDep):
     return await service.list_categories()
 
 
-@router.post("/", response_model=ProductResponse, status_code=201)
+@router.post(
+    "/",
+    response_model=ProductResponse,
+    status_code=201,
+    dependencies=[Depends(CurrentUserDep)],
+)
 async def create_product(product: ProductCreate, service: ProductServiceDep):
     return await service.create_product(product)
 
@@ -39,7 +49,12 @@ async def get_products(
     return await service.list_products(limit=limit, offset=offset)
 
 
-@router.post("/{product_id}/variants", response_model=ProductVariantResponse, status_code=201)
+@router.post(
+    "/{product_id}/variants",
+    response_model=ProductVariantResponse,
+    status_code=201,
+    dependencies=[Depends(CurrentUserDep)],
+)
 async def add_variant_to_product(
     product_id: int, variant_in: ProductVariantCreate, service: ProductServiceDep
 ):
@@ -49,6 +64,7 @@ async def add_variant_to_product(
 @router.post(
     "/{product_id}/manufacturers/{manufacturer_id}/rollback",
     response_model=ProductVariantResponse,
+    dependencies=[Depends(CurrentUserDep)],
 )
 async def rollback_to_previous_version(
     product_id: int, manufacturer_id: int, service: ProductServiceDep
