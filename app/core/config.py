@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     app_name: str = "Учет продуктов КБЖУ"
     app_version: str = "0.1.0"
     debug: bool = False
+    environment: str = "dev"  # dev | prod
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() in ("prod", "production")
 
     # --- База данных (PostgreSQL) ---
     postgres_host: str = "localhost"
@@ -41,8 +46,17 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        """Async URL для приложения (asyncpg)."""
+        return self._url("postgresql+asyncpg")
+
+    @property
+    def sync_database_url(self) -> str:
+        """Синхронный URL — только для тестов на aiosqlite-замене/утилит."""
+        return self._url("postgresql")
+
+    def _url(self, driver: str) -> str:
         return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"{driver}://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 

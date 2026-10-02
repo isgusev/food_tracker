@@ -1,0 +1,58 @@
+"""ORM-модель дневника питания (планы/факты приемов пищи)."""
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+)
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
+from app.db.base import Base
+from app.domain import STATUS_TEMPLATE_PLAN
+
+
+class DiaryLog(Base):
+    """ДНЕВНИК ПИТАНИЯ: объединяет планы, уточненные планы и факты приемов пищи."""
+
+    __tablename__ = "diary_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(100), nullable=False, index=True)
+
+    # На какую дату запись (например, "2026-06-04")
+    date_day = Column(String(10), nullable=False, index=True)
+
+    # Прием пищи: "breakfast", "lunch", "dinner", "snack"
+    meal_type = Column(String(20), nullable=False)
+
+    # ТРИ СТАТУСА: "template_plan", "cooked_plan", "fact" (см. app/domain.py)
+    status = Column(String(20), default=STATUS_TEMPLATE_PLAN, nullable=False)
+
+    # Связи (Может ссылаться ИЛИ на шаблон рецепта, ИЛИ на конкретную готовку)
+    recipe_id = Column(
+        Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True
+    )
+    cooking_log_id = Column(
+        Integer, ForeignKey("recipe_cooking_logs.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Сколько грамм пользователь планирует съесть или уже съел по факту
+    weight_g = Column(Numeric(5, 1, asdecimal=False), nullable=False)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    recipe = relationship("Recipe")
+
+    # НОВАЯ_ЕСЛИ ЧТО УДАЛИМ
+    scale_all_proportions = Column(Boolean, default=False, nullable=True)
+
+    # --- ЗАДЕЛ НА БУДУЩЕЕ ---
+    cooking_log = relationship("RecipeCookingLog", back_populates="diary_entries")
+    household_id = Column(String, index=True, nullable=True)  # Чтобы видеть планы друг друга
+    servings_multiplier = Column(Integer, default=1)  # Множитель порций

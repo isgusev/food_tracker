@@ -1,0 +1,194 @@
+"""Сервис каталога продуктов: бизнес-правила поверх репозиториев.
+
+Роутеры не знают про ORM и SQL; сервисы не знают про HTTP.
+Транзакция (commit) — на границе запроса (Unit of Work в app/db/session.py),
+здесь только flush для получения id внутри одной транзакции.
+"""
+
+from decimal import Decimal
+
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.domain import Nutrients, nutrients_are_inconsistent
+from app.models.product import Brand, Product, ProductManufacturer, ProductVariant
+from app.repositories.product import (
+    BrandRepository,
+    ManufacturerRepository,
+    ProductCategoryRepository,
+    ProductRepository,
+    VariantRepository,
+)
+from app.schemas.product import ProductCreate, ProductVariantCreate
+
+
+class ProductService:
+    def __init__(
+        self,
+        products: ProductRepository,
+        categories: ProductCategoryRepository,
+        brands: BrandRepository,
+        manufacturers: ManufacturerRepository,
+        variants: VariantRepository,
+    ) -> None:
+        self._products = products
+        self._categories = categories
+        self._brands = brands
+        self._manufacturers = manufacturers
+        self._variants = variants
+
+    # --- КАТЕГОРИИ ---
+    async def create_category(self, name: str):
+        normalized = name.strip().lower()
+        if await self._categories.get_by_name_ilike(normalized):
+            raise ConflictError("Такая категория уже существует")
+        from app.models.product import ProductCategory
+
+        category = ProductCategory(name=name.strip())
+        self._categories.add(category)
+        await self._categories.flush()
+        return category
+
+    async def list_categories(self):
+        from app.models.product import ProductCategory
+        from sqlalchemy import select
+
+        return await self._categories.list(select(ProductCategory).order_by(ProductCategory.name))
+
+    # --- ПРОДУКТЫ ---
+    async def create_product(self, data: ProductCreate) -> Product:
+        category = await self._categories.get(data.category_id)
+        if category is None:
+            raise NotFoundError("Категория не найдена")
+
+        brand_id = await self._resolve_brand_id(data)
+
+        search_name = data.name.lower()
+        if await self._products.find_duplicate(brand_id, search_name):
+            raise ConflictError(
+                f"Продукт '{data.name}' для этого бренда уже существует (регистр не имеет значения)"
+            )
+
+        product = Product(
+            category_id=data.category_id,
+            brand_id=brand_id,
+            name=data.name,
+            search_name=search_name,
+        )
+        self._products.add(product)
+        await self._products.flush()  # получаем product.id внутри той же транзакции
+
+        await self.create_variant(product.id, data.base_variant)
+        full = await self._products.get_full(product.id)
+        assert full is not None
+        return full
+
+    async def _resolve_brand_id(self, data: ProductCreate) -> int:
+        if data.brand_id is not None:
+            brand = await self._brands.get(data.brand_id)
+            if brand is None:
+                raise NotFoundError("Указанный ID бренда не найден")
+            return brand.id
+        assert data.brand_name is not None
+        return await self.get_or_create_brand(data.brand_name)
+
+    async def get_or_create_brand(self, brand_name: str) -> int:
+        display_name = brand_name.strip()
+        search_name = display_name.lower()
+        existing = await self._brands.get_by_search_name(search_name)
+        if existing:
+            return existing.id
+        brand = Brand(name=display_name, search_name=search_name)
+        self._brands.add(brand)
+        await self._brands.flush()
+        return brand.id
+
+    async def list_products(self, limit: int = 100, offset: int = 0) -> list[Product]:
+        return await self._products.list_full(limit=limit, offset=offset)
+
+    async def get_product(self, product_id: int) -> Product:
+        product = await self._products.get_full(product_id)
+        if product is None:
+            raise NotFoundError("Продукт не найден")
+        return product
+
+    # --- ВЕРСИИ КБЖУ ---
+    async def get_or_create_manufacturer(
+        self, product_id: int, m_name: str | None
+    ) -> ProductManufacturer:
+        display_name = m_name.strip() if m_name else None
+        search_name = display_name.lower() if display_name else None
+        existing = await self._manufacturers.find(product_id, search_name)
+        if existing:
+            return existing
+        manufacturer = ProductManufacturer(
+            product_id=product_id, name=display_name, search_name=search_name
+        )
+        self._manufacturers.add(manufacturer)
+        await self._manufacturers.flush()
+        return manufacturer
+
+    async def create_variant(
+        self, product_id: int, data: ProductVariantCreate
+    ) -> ProductVariant:
+        product = await self._products.get(product_id)
+        if product is None:
+            raise NotFoundError("Продукт не найден")
+
+        manufacturer = await self.get_or_create_manufacturer(product_id, data.manufacturer_name)
+        new_n = Nutrients(data.calories, data.proteins, data.fats, data.carbs)
+
+        current_active = await self._variants.get_active(manufacturer.id)
+        if current_active and self._same(current_active, data):
+            raise ConflictError("Данные идентичны текущей активной версии")
+
+        last = await self._variants.latest_version(manufacturer.id)
+        next_version = (last.version + 1) if last else 1
+
+        if current_active:
+            current_active.is_active = False
+
+        variant = ProductVariant(
+            manufacturer_id=manufacturer.id,
+            calories=data.calories,
+            proteins=data.proteins,
+            fats=data.fats,
+            carbs=data.carbs,
+            wrong_nutrients=nutrients_are_inconsistent(new_n),
+            version=next_version,
+            is_active=True,
+        )
+        self._variants.add(variant)
+        await self._variants.flush()
+        return variant
+
+    @staticmethod
+    def _same(variant: ProductVariant, data: ProductVariantCreate) -> bool:
+        return (
+            variant.calories == data.calories
+            and variant.proteins == data.proteins
+            and variant.fats == data.fats
+            and variant.carbs == data.carbs
+        )
+
+    async def rollback_version(self, product_id: int, manufacturer_id: int) -> ProductVariant:
+        manufacturer = await self._manufacturers.get_for_product(manufacturer_id, product_id)
+        if manufacturer is None:
+            raise NotFoundError("Указанный производитель для данного продукта не найден")
+
+        current_active = await self._variants.get_active(manufacturer_id)
+        if current_active is None:
+            raise NotFoundError("У этого производителя нет активной версии КБЖУ")
+        if current_active.version <= 1:
+            raise ValidationError(
+                "Невозможно откатиться: у производителя только одна версия данных"
+            )
+
+        previous = await self._variants.get_by_version(manufacturer_id, current_active.version - 1)
+        if previous is None:
+            raise NotFoundError(
+                f"Предыдущая версия №{current_active.version - 1} не найдена в истории"
+            )
+
+        current_active.is_active = False
+        previous.is_active = True
+        await self._variants.flush()
+        return previous
