@@ -14,7 +14,11 @@ asyncpg==0.31.0
 alembic==1.16.*
 
 # --- Безопасность (JWT-аутентификация) ---
-python-jose[cryptography]==3.5.*
+# PyJWT вместо python-jose: у python-jose extras [cryptography] тянет сборку
+# cryptography из исходников (нужны Rust + OpenSSL), а готовые wheels для
+# cryptography нет на macOS Intel + Python 3.9. PyJWT — чистый Python, HS256
+# работает без бинарных зависимостей.
+PyJWT==2.10.*
 bcrypt==5.0.*   # хэширование напрямую (см. app/core/security.py); passlib исключён: 1.7.x несовместим с bcrypt>=4.1
 
 # --- UI (Streamlit, общается с API по HTTP) ---
