@@ -34,6 +34,9 @@ class Recipe(Base):
     __tablename__ = "recipes"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     recipe_category_id = Column(
         Integer, ForeignKey("recipe_categories.id", ondelete="RESTRICT"), nullable=False
     )
@@ -51,6 +54,7 @@ class Recipe(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     recipe_category = relationship("RecipeCategory", back_populates="recipes")
+    user = relationship("User")
     template_ingredients = relationship(
         "RecipeTemplateIngredient", back_populates="recipe", cascade="all, delete-orphan"
     )

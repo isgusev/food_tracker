@@ -243,17 +243,26 @@ async def test_full_flow_plan_cook_eaten_pot_accounting(client):
     assert float(pot["current_remaining_weight"]) == 600
 
 
+async def get_variant_id(client, headers) -> int:
+    """ID первой версии продукта текущего пользователя (для кастрюль)."""
+    r = await client.get("/api/v1/products/", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()[0]["manufacturers"][0]["variants"][0]["id"]
+
+
 async def test_pots_isolated_between_users(client):
     vera = await register_and_login(client, "vera2", "vera2@test.com")
     guy = await register_and_login(client, "guy", "guy@test.com")
     _, recipe_id = await build_recipe_stack(client, vera)
+    vid = await get_variant_id(client, vera)
 
     r = await client.post(
         f"/api/v1/recipes/{recipe_id}/cook",
         json={"total_cooked_weight": 500,
-              "ingredients": [{"variant_id": 1, "weight_g": 100}]},
+              "ingredients": [{"variant_id": vid, "weight_g": 100}]},
         headers=vera,
     )
+    assert r.status_code == 201, r.text
     pot_id = r.json()["id"]
 
     # чужие кастрюли не видны и не редактируются
@@ -266,4 +275,126 @@ async def test_pots_isolated_between_users(client):
     )
     assert r.status_code == 404
     r = await client.delete(f"/api/v1/recipes/cooking-logs/{pot_id}", headers=guy)
+    assert r.status_code == 404
+
+
+# --- РЕДАКТИРОВАНИЕ/УДАЛЕНИЕ РЕЦЕПТОВ И СОСТАВА КАСТРЮЛИ ---
+
+
+async def test_recipe_update_and_delete(client):
+    vera = await register_and_login(client, "vera3", "vera3@test.com")
+    vid, recipe_id = await build_recipe_stack(client, vera)
+
+    # PATCH: меняем название и состав (добавили второй ингредиент)
+    r = await client.patch(
+        f"/api/v1/recipes/{recipe_id}",
+        json={
+            "name": "Каша овсяная с мёдом",
+            "ingredients": [
+                {"variant_id": vid, "weight_g": 60},
+                {"variant_id": vid, "weight_g": 10},
+            ],
+        },
+        headers=vera,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "Каша овсяная с мёдом"
+    assert float(body["total_raw_weight"]) == 70.0
+    assert len(body["template_ingredients"]) == 2
+
+    # DELETE чужого рецепта -> 404 (без утечки существования)
+    boris = await register_and_login(client, "boris3", "boris3@test.com")
+    r = await client.delete(f"/api/v1/recipes/{recipe_id}", headers=boris)
+    assert r.status_code == 404
+
+    # DELETE своего -> 204, рецепт исчез
+    r = await client.delete(f"/api/v1/recipes/{recipe_id}", headers=vera)
+    assert r.status_code == 204, r.text
+    r = await client.get(f"/api/v1/recipes/{recipe_id}", headers=vera)
+    assert r.status_code == 404
+
+
+async def test_recipes_isolated_between_users(client):
+    """Рецепты — личная библиотека: чужие не видны и недоступны (404 без утечки)."""
+    owner = await register_and_login(client, "own1", "own1@test.com")
+    thief = await register_and_login(client, "thief1", "thief1@test.com")
+    _, recipe_id = await build_recipe_stack(client, owner)
+
+    # список содержит только свои рецепты
+    r = await client.get("/api/v1/recipes/", headers=owner)
+    assert [x["id"] for x in r.json()] == [recipe_id]
+    r = await client.get("/api/v1/recipes/", headers=thief)
+    assert r.json() == []
+
+    # чужой рецепт недоступен ни на чтение, ни на изменение/удаление
+    assert (await client.get(f"/api/v1/recipes/{recipe_id}", headers=thief)).status_code == 404
+    assert (
+        await client.patch(f"/api/v1/recipes/{recipe_id}", json={"name": "Взлом"}, headers=thief)
+    ).status_code == 404
+    assert (await client.delete(f"/api/v1/recipes/{recipe_id}", headers=thief)).status_code == 404
+
+    # дубликат названия внутри своего аккаунта -> 409; у другого пользователя — ок
+    rcat = (await client.get("/api/v1/recipes/categories", headers=owner)).json()[0]["id"]
+    dup = {
+        "name": "Каша овсяная",
+        "recipe_category_id": rcat,
+        "estimated_cooked_weight": 300,
+        "ingredients": [{"variant_id": 1, "weight_g": 60}],
+    }
+    r = await client.post("/api/v1/recipes/", json=dup, headers=owner)
+    assert r.status_code == 409
+
+    # план дневника по чужому рецепту невозможен
+    r = await client.post(
+        "/api/v1/diary/",
+        json={"date_day": "2026-10-03", "meal_type": "lunch",
+              "recipe_id": recipe_id, "weight_g": 150},
+        headers=thief,
+    )
+    assert r.status_code == 404
+
+
+async def test_pot_ingredients_replace(client):
+    vera = await register_and_login(client, "vera4", "vera4@test.com")
+    guy = await register_and_login(client, "guy4", "guy4@test.com")
+    vid, recipe_id = await build_recipe_stack(client, vera)
+
+    r = await client.post(
+        f"/api/v1/recipes/{recipe_id}/cook",
+        json={"total_cooked_weight": 500,
+              "ingredients": [{"variant_id": vid, "weight_g": 100}]},
+        headers=vera,
+    )
+    assert r.status_code == 201, r.text
+    pot_id = r.json()["id"]
+
+    # полная замена закладки: было 100 г -> стало два слоя 80+20 = 100 г сырого
+    r = await client.put(
+        f"/api/v1/recipes/cooking-logs/{pot_id}/ingredients",
+        json={"ingredients": [
+            {"variant_id": vid, "weight_g": 80},
+            {"variant_id": vid, "weight_g": 20},
+        ]},
+        headers=vera,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["actual_ingredients"]) == 2
+    assert float(body["total_raw_weight"]) == 100.0
+
+    # пустой список ингредиентов -> 422 (схема требует min_length=1)
+    r = await client.put(
+        f"/api/v1/recipes/cooking-logs/{pot_id}/ingredients",
+        json={"ingredients": []},
+        headers=vera,
+    )
+    assert r.status_code == 422
+
+    # чужая кастрюля недоступна для замены
+    r = await client.put(
+        f"/api/v1/recipes/cooking-logs/{pot_id}/ingredients",
+        json={"ingredients": [{"variant_id": vid, "weight_g": 1}]},
+        headers=guy,
+    )
     assert r.status_code == 404

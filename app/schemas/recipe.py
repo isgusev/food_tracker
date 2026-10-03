@@ -60,8 +60,37 @@ class RecipeCreate(BaseModel):
         return v
 
 
+class RecipeUpdate(BaseModel):
+    """Изменение шаблона рецепта. Все поля опциональны — обновляем только переданные."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    recipe_category_id: Optional[int] = None
+    cooking_time_minutes: Optional[int] = Field(default=None, ge=0)
+    instructions: Optional[str] = None
+    default_servings: Optional[int] = Field(default=None, ge=1, le=100)
+    estimated_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("9999.9"))
+    ingredients: Optional[list[IngredientLine]] = Field(default=None, min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Название не может быть пустым")
+        return v
+
+
+class CookingLogUpdateIngredients(BaseModel):
+    """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
+
+    ingredients: list[IngredientLine] = Field(min_length=1)
+
+
 class RecipeResponse(ORMModel):
     id: int
+    user_id: int
     recipe_category_id: int
     name: str
     cooking_time_minutes: Optional[int]
