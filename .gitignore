@@ -1,1 +1,7 @@
-(empty)
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+*.bundle
+*.patch
+.venv/
