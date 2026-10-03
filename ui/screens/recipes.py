@@ -44,6 +44,11 @@ def _load_options() -> dict[str, dict]:
     return options
 
 
+def _variant_options(options: dict[str, dict]) -> dict[str, int]:
+    """label -> variant_id (по тому же каталогу, что и _load_options)."""
+    return {label: info["variant_id"] for label, info in options.items()}
+
+
 def _nutrition_table(options: dict[str, dict], selected: list[str]) -> None:
     """КБЖУ выбранных продуктов — чтобы выбирать по составу, а не вслепую."""
     if not selected:
@@ -218,22 +223,63 @@ def _create_form(categories: list[dict], edit_recipe: dict | None = None) -> Non
             st.rerun()
 
 
-def _cooking_block(recipe: dict, names: dict[int, str]) -> None:
-    """Фактическая закладка + вес готового. Кастрюль может быть сколько угодно."""
+def _cooking_block(recipe: dict, names: dict[int, str], options: dict[str, dict]) -> None:
+    """Фактическая закладка: черновик с добавлением/удалением ингредиентов.
+
+    Черновик (draft) живёт в session_state: изменения веса и состава НЕ
+    сбрасываются при rerun, пока пользователь не нажмёт «Записать готовку»
+    или «Отмена». Вес готового блюда предзаполняется суммой сырья минус 15%
+    усушки — его можно изменить вручную после взвешивания.
+    """
+    rid = recipe["id"]
+    draft_key = f"cook_draft_{rid}"
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = {
+            line["variant_id"]: float(line["weight_g"])
+            for line in recipe.get("template_ingredients", [])
+        }
+    draft: dict[int, float] = st.session_state[draft_key]
+
     st.markdown("**Фактическая закладка:**")
-    lines: dict[int, float] = {}
-    for line in recipe.get("template_ingredients", []):
-        vid = line["variant_id"]
-        label = names.get(vid, f"продукт #{vid}")
-        key = f"cl_{recipe['id']}_{vid}"
-        lines[vid] = st.number_input(
-            f"{label}, г", min_value=1.0, max_value=9999.0,
-            value=float(st.session_state.get(key, float(line["weight_g"]))),
-            step=10.0, key=key,
-        )
-    raw_sum = sum(lines.values())
+    if draft:
+        vids = list(draft.keys())
+        cols_per_row = 3
+        for i in range(0, len(vids), cols_per_row):
+            row_cols = st.columns(cols_per_row + 1)
+            for j, vid in enumerate(vids[i:i + cols_per_row]):
+                label = names.get(vid, f"продукт #{vid}")
+                with row_cols[j]:
+                    draft[vid] = row_cols[j].number_input(
+                        f"{label}, г", min_value=1.0, max_value=9999.0,
+                        value=float(draft[vid]), step=10.0,
+                        key=f"ckw_{rid}_{vid}",
+                    )
+                with row_cols[cols_per_row]:
+                    if st.button("✖", key=f"ckm_{rid}_{vid}", help="Убрать ингредиент"):
+                        draft.pop(vid, None)
+                        st.session_state.pop(f"ckw_{rid}_{vid}", None)
+                        st.rerun()
+
+    # добавить продукт, которого ещё нет в закладке
+    existing_labels = {l for l, vid in _variant_options(options).items() if vid in draft}
+    free_labels = [l for l in options if l not in existing_labels]
+    if free_labels:
+        add_col1, add_col2, add_col3 = st.columns([3, 1, 1])
+        with add_col1:
+            chosen = st.selectbox("Добавить продукт", free_labels, key=f"ckadd_sel_{rid}")
+        with add_col2:
+            add_w = st.number_input("Вес, г", 1.0, 9999.0, 100.0, step=10.0,
+                                    key=f"ckadd_w_{rid}")
+        with add_col3:
+            st.write("")
+            st.write("")
+            if st.button("➕", key=f"ckadd_btn_{rid}"):
+                draft[_variant_options(options)[chosen]] = float(add_w)
+                st.rerun()
+
+    raw_sum = sum(draft.values())
     default_cooked = min(max(round(raw_sum * 0.85, 1), 1.0), 9999.0)
-    cooked_key = f"cooked_total_{recipe['id']}"
+    cooked_key = f"cooked_total_{rid}"
     total = st.number_input(
         "Фактический вес готового блюда, г *",
         min_value=1.0, max_value=9999.0,
@@ -245,25 +291,28 @@ def _cooking_block(recipe: dict, names: dict[int, str]) -> None:
 
     bc1, bc2 = st.columns(2)
     with bc1:
-        if st.button("Записать готовку", type="primary", key=f"save_{recipe['id']}"):
+        if st.button("Записать готовку", type="primary", key=f"save_{rid}",
+                     disabled=not draft):
             try:
                 api_client.post(
-                    f"recipes/{recipe['id']}/cook",
+                    f"recipes/{rid}/cook",
                     {
                         "total_cooked_weight": total,
                         "ingredients": [
-                            {"variant_id": v, "weight_g": w} for v, w in lines.items()
+                            {"variant_id": v, "weight_g": w} for v, w in draft.items()
                         ],
                     },
                 )
-                st.session_state[f"show_cook_{recipe['id']}"] = False
+                st.session_state[f"show_cook_{rid}"] = False
+                st.session_state.pop(draft_key, None)
                 st.success("Готовка записана — блюдо в холодильнике.")
                 st.rerun()
             except api_client.ApiError as exc:
                 st.error(str(exc))
     with bc2:
-        if st.button("Отмена", key=f"cancel_{recipe['id']}"):
-            st.session_state[f"show_cook_{recipe['id']}"] = False
+        if st.button("Отмена", key=f"cancel_{rid}"):
+            st.session_state[f"show_cook_{rid}"] = False
+            st.session_state.pop(draft_key, None)
             st.rerun()
 
 
@@ -284,14 +333,16 @@ def render() -> None:
     # имена продуктов для человекочитаемых заголовков (вместо «продукт #id»)
     names: dict[int, str] = {}
     try:
+        options = _load_options()  # label -> {variant_id, КБЖУ}
         for product in api_client.get("products/", params={"limit": 500}) or []:
             brand = (product.get("brand") or {}).get("name") or ""
             base = f"{product['name']} · {brand}" if brand else product["name"]
             for mfr in product.get("manufacturers", []):
                 for v in mfr.get("variants", []):
                     names[v["id"]] = base
-    except api_client.ApiError:
-        pass
+    except api_client.ApiError as exc:
+        st.error(str(exc))
+        return
 
     # --- Форма создания (раскрывается кнопкой, сворачивается после сохранения) ---
     just_saved = st.session_state.pop("just_saved", None)
@@ -387,4 +438,4 @@ def render() -> None:
                         st.rerun()
 
             if st.session_state.get(f"show_cook_{recipe['id']}"):
-                _cooking_block(recipe, names)
+                _cooking_block(recipe, names, options)

@@ -1,6 +1,7 @@
 """Эндпоинты рецептов и «холодильника»."""
 from __future__ import annotations
 
+import datetime as dt
 
 from fastapi import APIRouter, Query
 
@@ -8,6 +9,7 @@ from app.api.deps import CurrentUserDep, RecipeServiceDep
 from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
+    PotUsageResponse,
     RecipeCategoryCreate,
     RecipeCategoryResponse,
     RecipeCookingLogCreate,
@@ -87,12 +89,33 @@ async def cook_recipe_instance(
     return await service.cook(current_user.id, recipe_id, log_in)
 
 
-@router.delete("/cooking-logs/{log_id}", status_code=204)
-async def delete_cooking_log(
+@router.get("/cooking-logs/{log_id}/usage", response_model=PotUsageResponse)
+async def get_cooking_log_usage(
     log_id: int, service: RecipeServiceDep, current_user: CurrentUserDep
 ):
+    """Даты, в которых кастрюля учтена в дневнике (прошлые / текущий+будущие)."""
     pot = await service.get_owned_pot(log_id, current_user.id)
-    await service.delete_pot(pot)
+    usage = await service.pot_diary_usage(pot, dt.date.today().isoformat())
+    return PotUsageResponse(past_dates=usage["past"], current_future_dates=usage["current_future"])
+
+
+@router.delete("/cooking-logs/{log_id}", status_code=204)
+async def delete_cooking_log(
+    log_id: int,
+    service: RecipeServiceDep,
+    current_user: CurrentUserDep,
+    remove_from_diary: bool = Query(
+        default=False,
+        description="True — удалить и связанные планы/факты текущего и будущих дней; "
+                    "False — оставить их в дневнике, отвязав от кастрюли.",
+    ),
+):
+    """Удалить приготовленное блюдо из холодильника.
+
+    409, если блюдо учтено в дневнике за прошедшие даты (список дат в ответе).
+    """
+    pot = await service.get_owned_pot(log_id, current_user.id)
+    await service.delete_pot_safe(pot, remove_from_diary, dt.date.today().isoformat())
 
 
 @router.patch("/cooking-logs/{log_id}", response_model=RecipeCookingLogResponse)

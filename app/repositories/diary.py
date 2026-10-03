@@ -84,3 +84,29 @@ class DiaryRepository(BaseRepository[DiaryLog]):
         )
         result = await self._session.execute(stmt)
         return result.rowcount or 0
+
+    async def logs_using_pot(self, cooking_log_id: int) -> list[DiaryLog]:
+        """Все записи дневника (планы и факты), ссылающиеся на кастрюлю."""
+        stmt = (
+            self.full_query()
+            .where(DiaryLog.cooking_log_id == cooking_log_id)
+            .order_by(DiaryLog.date_day)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def unattach_pot_keep_recipe(self, cooking_log_id: int) -> int:
+        """Отвязка записей дневника от удаляемой кастрюли, сохраняя recipe_id.
+
+        Планы остаются «надо приготовить» (template_plan, привязка к шаблону →
+        попадают в план покупок); факты («съедено») сохраняются как приём пищи
+        без холодильника — обязательность учёта в нём снимается.
+        """
+        from sqlalchemy import update
+
+        stmt = (
+            update(DiaryLog)
+            .where(DiaryLog.cooking_log_id == cooking_log_id)
+            .values(cooking_log_id=None)
+        )
+        result = await self._session.execute(stmt)
+        return result.rowcount or 0
