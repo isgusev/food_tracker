@@ -61,20 +61,6 @@ def _nutrition_table(options: dict[str, dict], selected: list[str]) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
-def _weight_inputs(options: dict[str, dict], selected: list[str]) -> dict[str, float]:
-    """Веса ингредиентов. Значения живут в session_state и переживают rerun."""
-    weights: dict[str, float] = {}
-    cols = st.columns(min(len(selected), 3) or 1)
-    for idx, label in enumerate(selected):
-        key = f"rc_w_{options[label]['variant_id']}"
-        with cols[idx % len(cols)]:
-            weights[label] = st.number_input(
-                f"Вес, г — {label}", min_value=1.0, max_value=9999.0,
-                value=float(st.session_state.get(key, 100.0)), step=10.0, key=key,
-            )
-    return weights
-
-
 def _create_form(categories: list[dict], edit_recipe: dict | None = None) -> None:
     """Форма создания/редактирования рецепта. edit_recipe — если режим правки."""
     cat_names = {c["name"]: c["id"] for c in categories}
@@ -91,45 +77,44 @@ def _create_form(categories: list[dict], edit_recipe: dict | None = None) -> Non
     editing = edit_recipe is not None
     pfx = "rc" if not editing else f"re{edit_recipe['id']}"
 
-    def _prefill(field: str, default):
-        """Подставить текущее значение один раз (при первом открытии формы)."""
-        key = f"{pfx}_{field}"
-        init_key = f"{key}_init"
-        if not st.session_state.get(init_key, False):
-            st.session_state[key] = default
-            st.session_state[init_key] = True
-        return st.session_state.get(key, default)
+    # При первом открытии формы (создание или правка) принудительно
+    # очищаем её поля, чтобы не показывать данные предыдущей сессии/рецепта.
+    open_key = f"{pfx}_opened"
+    if not st.session_state.get(open_key):
+        for k in list(st.session_state.keys()):
+            if k.startswith(f"{pfx}_"):
+                st.session_state.pop(k, None)
+        st.session_state[open_key] = True
+
+    # Значения полей живут только в session_state (у виджетов есть key),
+    # поэтому value передаём как статический default при ПЕРВОМ создании
+    # виджета. Никаких записей в st.session_state[key_виджета] после этого —
+    # иначе Streamlit ругается («default value + Session State API»).
+    ed = edit_recipe or {}
 
     name = st.text_input(
-        "Название рецепта *", key=f"{pfx}_name",
-        value=_prefill("name", edit_recipe["name"] if editing else ""),
+        "Название рецепта *", key=f"{pfx}_name", value=ed.get("name", ""),
     )
     col_a, col_b = st.columns(2)
     with col_a:
-        default_cat = id_to_cat.get(edit_recipe["recipe_category_id"], "") if editing else ""
+        default_cat = id_to_cat.get(ed.get("recipe_category_id"), "") if editing else ""
         if default_cat and default_cat not in cat_names:
             default_cat = ""
         cat_options = [default_cat] + [n for n in cat_names if n != default_cat] if default_cat else list(cat_names)
-        cat_index = 0
-        if editing and default_cat:
-            cat_index = cat_options.index(default_cat)
         category_name = st.selectbox(
-            "Категория *", cat_options or [""], index=cat_index, key=f"{pfx}_cat",
+            "Категория *", cat_options or [""], key=f"{pfx}_cat",
         )
         servings = st.number_input(
-            "Порций", 1, 100,
-            int(_prefill("servings", edit_recipe["default_servings"] if editing else 2)),
+            "Порций", 1, 100, int(ed.get("default_servings") or 2),
             key=f"{pfx}_servings",
         )
     with col_b:
         time_min = st.number_input(
-            "Время готовки, мин", 0, 1440,
-            int(_prefill("time", edit_recipe.get("cooking_time_minutes") or 30)),
+            "Время готовки, мин", 0, 1440, int(ed.get("cooking_time_minutes") or 30),
             key=f"{pfx}_time",
         )
     instructions = st.text_area(
-        "Приготовление", key=f"{pfx}_instr",
-        value=_prefill("instr", edit_recipe.get("instructions") or ""),
+        "Приготовление", key=f"{pfx}_instr", value=ed.get("instructions") or "",
     )
 
     st.markdown("**Ингредиенты (на весь рецепт):**")
@@ -162,7 +147,9 @@ def _create_form(categories: list[dict], edit_recipe: dict | None = None) -> Non
     cols = st.columns(min(len(selected), 3) or 1)
     for idx, label in enumerate(selected):
         vid = options[label]["variant_id"]
-        key = f"{pfx}_w_{vid}"
+        # КЛЮЧ не содержит префикс формы: одно и то же поле переживает
+        # rerun и сохранение/сброс формы, вес не теряется.
+        key = f"rc_w_{vid}"
         default_w = prefill_weights.get(vid, 100.0)
         with cols[idx % len(cols)]:
             weights[label] = st.number_input(
