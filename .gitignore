@@ -1,8 +1,7 @@
-# Python bytecode and caches
 __pycache__/
 *.pyc
-
-# Environment variables
 .env
 .env.local
-.env.*.localfood_tracker_recipes.bundle
+.env.*.local
+food_tracker_recipes.bundle
+recipes_fix_final.patch
