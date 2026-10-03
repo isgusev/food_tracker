@@ -7,12 +7,14 @@ from fastapi import APIRouter, Query
 from app.api.deps import CurrentUserDep, RecipeServiceDep
 from app.schemas.recipe import (
     CookingLogUpdate,
+    CookingLogUpdateIngredients,
     RecipeCategoryCreate,
     RecipeCategoryResponse,
     RecipeCookingLogCreate,
     RecipeCookingLogResponse,
     RecipeCreate,
     RecipeResponse,
+    RecipeUpdate,
 )
 
 router = APIRouter(prefix="/recipes", tags=["Рецепты и Сложные Блюда"])
@@ -29,17 +31,50 @@ async def get_recipe_categories(service: RecipeServiceDep):
 
 
 @router.post("/", response_model=RecipeResponse, status_code=201)
-async def create_recipe_template(recipe_in: RecipeCreate, service: RecipeServiceDep):
-    return await service.create_recipe(recipe_in)
+async def create_recipe_template(
+    recipe_in: RecipeCreate, service: RecipeServiceDep, current_user: CurrentUserDep
+):
+    return await service.create_recipe(current_user.id, recipe_in)
+
+
+@router.get("/cooking-logs", response_model=list[RecipeCookingLogResponse])
+async def get_all_cooking_logs(
+    service: RecipeServiceDep,
+    current_user: CurrentUserDep,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """Кастрюли (факты готовки) текущего пользователя — «Холодильник»."""
+    return await service.list_pots(current_user.id, limit=limit, offset=offset)
 
 
 @router.get("/", response_model=list[RecipeResponse])
 async def get_recipes(
     service: RecipeServiceDep,
+    current_user: CurrentUserDep,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    return await service.list_recipes(limit=limit, offset=offset)
+    """Личная библиотека рецептов текущего пользователя."""
+    return await service.list_recipes(current_user.id, limit=limit, offset=offset)
+
+
+@router.get("/{recipe_id}", response_model=RecipeResponse)
+async def get_recipe(recipe_id: int, service: RecipeServiceDep, current_user: CurrentUserDep):
+    return await service.get_recipe(recipe_id, current_user.id)
+
+
+@router.patch("/{recipe_id}", response_model=RecipeResponse)
+async def update_recipe(
+    recipe_id: int, payload: RecipeUpdate, service: RecipeServiceDep, current_user: CurrentUserDep
+):
+    """Частичное изменение шаблона рецепта (состав, название, порции и т.д.)."""
+    return await service.update_recipe(recipe_id, current_user.id, payload)
+
+
+@router.delete("/{recipe_id}", status_code=204)
+async def delete_recipe(recipe_id: int, service: RecipeServiceDep, current_user: CurrentUserDep):
+    await service.delete_recipe(recipe_id, current_user.id)
 
 
 @router.post("/{recipe_id}/cook", response_model=RecipeCookingLogResponse, status_code=201)
@@ -50,16 +85,6 @@ async def cook_recipe_instance(
     current_user: CurrentUserDep,
 ):
     return await service.cook(current_user.id, recipe_id, log_in)
-
-
-@router.get("/cooking-logs", response_model=list[RecipeCookingLogResponse])
-async def get_all_cooking_logs(
-    service: RecipeServiceDep,
-    current_user: CurrentUserDep,
-    limit: int = Query(default=200, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-):
-    return await service.list_pots(current_user.id, limit=limit, offset=offset)
 
 
 @router.delete("/cooking-logs/{log_id}", status_code=204)
@@ -80,3 +105,15 @@ async def update_cooking_log_weight(
     """Ручная корректировка остатка еды в кастрюле."""
     pot = await service.get_owned_pot(log_id, current_user.id)
     return await service.update_pot_remainder(pot, payload)
+
+
+@router.put("/cooking-logs/{log_id}/ingredients", response_model=RecipeCookingLogResponse)
+async def replace_cooking_log_ingredients(
+    log_id: int,
+    payload: CookingLogUpdateIngredients,
+    service: RecipeServiceDep,
+    current_user: CurrentUserDep,
+):
+    """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
+    pot = await service.get_owned_pot(log_id, current_user.id)
+    return await service.replace_pot_ingredients(pot, payload)

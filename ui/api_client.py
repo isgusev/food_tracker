@@ -132,3 +132,7 @@ def patch(endpoint: str, json_body: dict | None = None) -> Any:
 
 def delete(endpoint: str) -> Any:
     return request_json("DELETE", endpoint, expect_none=True)
+
+
+def put(endpoint: str, json_body: dict | None = None) -> Any:
+    return request_json("PUT", endpoint, json_body=json_body)

@@ -36,13 +36,39 @@ class RecipeRepository(BaseRepository[Recipe]):
             ).joinedload(Product.brand),
         )
 
-    async def get_full(self, recipe_id: int) -> Recipe | None:
+    async def get_by_id(self, pk: int, user_id: int | None = None) -> Recipe | None:
+        """Рецепт без состава; если указан user_id — только рецепт владельца."""
+        if user_id is None:
+            return await self.get(pk)
+        stmt = select(Recipe).where(Recipe.id == pk, Recipe.user_id == user_id)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def get_full(self, recipe_id: int, user_id: int | None = None) -> Recipe | None:
+        """Получить рецепт с составом. Если указан user_id — только рецепт этого владельца."""
         stmt = self.full_query().where(Recipe.id == recipe_id)
+        if user_id is not None:
+            stmt = stmt.where(Recipe.user_id == user_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
-    async def list_full(self, limit: int = 100, offset: int = 0) -> list[Recipe]:
-        stmt = self.full_query().limit(limit).offset(offset)
+    async def list_full(
+        self, user_id: int | None = None, limit: int = 100, offset: int = 0
+    ) -> list[Recipe]:
+        """Список рецептов; если user_id задан — только рецепты пользователя."""
+        stmt = self.full_query()
+        if user_id is not None:
+            stmt = stmt.where(Recipe.user_id == user_id)
+        stmt = stmt.order_by(Recipe.id).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def name_exists(self, user_id: int, name: str) -> bool:
+        """Есть ли у пользователя рецепт с таким названием (без учёта регистра)."""
+        from sqlalchemy import func as sa_func
+
+        stmt = select(Recipe.id).where(
+            Recipe.user_id == user_id,
+            sa_func.lower(Recipe.name) == name.strip().lower(),
+        ).limit(1)
+        return (await self._session.execute(stmt)).first() is not None
 
 
 class CookingLogRepository(BaseRepository[RecipeCookingLog]):

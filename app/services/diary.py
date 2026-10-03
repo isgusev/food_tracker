@@ -58,7 +58,6 @@ class DiaryService:
             # eager load) — подтягиваем название напрямую.
             recipe = await self._recipes.get_full(log.recipe_id)
             res.recipe_name = recipe.name if recipe else "Удаленный рецепт"
-
         # Источник КБЖУ: точный инстанс (кастрюля) или шаблон рецепта
         source = None
         if log.status in (STATUS_COOKED_PLAN, STATUS_FACT) and log.cooking_log_id:
@@ -86,7 +85,7 @@ class DiaryService:
 
     # --- СОЗДАНИЕ ПЛАНА ---
     async def add_plan(self, user_id: int, data: DiaryLogCreate) -> DiaryLogResponse:
-        recipe = await self._recipes.get(data.recipe_id)
+        recipe = await self._recipes.get_by_id(data.recipe_id, user_id=user_id)
         if recipe is None:
             raise NotFoundError("Рецепт не найден")
 
