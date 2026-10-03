@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
+    STATUS_COOKED_PLAN,
     ZERO,
     Nutrients,
     per_100g_from_totals,
@@ -260,6 +261,52 @@ class RecipeService:
         # Связанные планы откатываются в template_plan (иначе остались бы «висячие» ссылки)
         await self._diary.detach_plans_from_pot(pot.id)
         await self._cooking_logs.delete(pot)
+
+    async def pot_diary_usage(
+        self, pot: RecipeCookingLog, today_iso: str
+    ) -> dict[str, list[str]]:
+        """Даты упоминания кастрюли в дневнике: past / current_future."""
+        logs = await self._diary.logs_using_pot(pot.id)
+        past = sorted({log.date_day for log in logs if log.date_day < today_iso})
+        future = sorted({log.date_day for log in logs if log.date_day >= today_iso})
+        return {"past": past, "current_future": future}
+
+    async def delete_pot_safe(
+        self, pot: RecipeCookingLog, remove_from_diary: bool, today_iso: str
+    ) -> None:
+        """Удаление кастрюли с учётом её использования в дневнике.
+
+        - Есть факты/планы в ПРОШЛЫХ датах → удаление запрещено (409), чтобы
+          не ломать уже учтённое питание.
+        - Упоминания только в текущем/будущем → при remove_from_diary=True
+          удаляем эти записи дневника; иначе кастрюля отвязывается:
+          * планы остаются «надо приготовить» (template_plan по шаблону →
+            попадают в план покупок);
+          * съеденное остаётся в дневнике без привязки к холодильнику.
+        """
+        usage = await self.pot_diary_usage(pot, today_iso)
+        if usage["past"]:
+            raise ConflictError(
+                "Кастрюлю нельзя удалить: она учтена в дневнике питания за даты: "
+                + ", ".join(usage["past"])
+            )
+        linked = await self._diary.logs_using_pot(pot.id)
+        if remove_from_diary:
+            for log in linked:
+                await self._diary.delete(log)
+        else:
+            # планы, отвязанные от кастрюли, должны остаться «планами по шаблону»
+            # (иначе попадут в план покупок с нулевым весом); факты не трогаем
+            for log in linked:
+                if log.status == STATUS_COOKED_PLAN and log.recipe_id is None:
+                    raise ValidationError(
+                        "Некоторые планы не связаны с шаблоном рецепта — "
+                        "удалите их вручную или подтвердите удаление из дневника."
+                    )
+            await self._diary.unattach_pot_keep_recipe(pot.id)
+            await self._diary.detach_plans_from_pot(pot.id)
+        await self._cooking_logs.delete(pot)
+        await self._cooking_logs.flush()
 
     async def update_pot_remainder(self, pot: RecipeCookingLog, data: CookingLogUpdate) -> RecipeCookingLog:
         remainder = data.current_remaining_weight

@@ -45,6 +45,69 @@ def _variant_options() -> dict[str, int]:
     return opts
 
 
+def _delete_pot(pot_id: int) -> None:
+    """Удалить кастрюлю из холодильника с проверкой привязки к дневнику.
+
+    Логика (по требованиям пользователя):
+    - учтена в ПРОШЛЫХ днях → сервер вернёт 409 со списком дат — удаление
+      запрещено, показываем даты;
+    - учтена в текущем/будущих днях → спрашиваем «удалить из дневника питания?»:
+      * Да — удаляем и кастрюлю, и связанные записи дневника;
+      * Нет — кастрюля удаляется, планы остаются «надо приготовить»
+        (template_plan → попадут в план покупок), съеденное остаётся в
+        дневнике без привязки к холодильнику.
+    """
+    try:
+        usage = api_client.get(f"recipes/cooking-logs/{pot_id}/usage") or {}
+    except api_client.ApiError as exc:
+        st.error(str(exc))
+        return
+    past = usage.get("past_dates") or []
+    future = usage.get("current_future_dates") or []
+    if past:
+        st.session_state.pop(f"del_pot_{pot_id}", None)
+        st.error(
+            "Нельзя удалить блюдо: оно учтено в дневнике питания за даты: "
+            + ", ".join(past)
+        )
+        return
+    remove_diary = False
+    if future:
+        # двухшаговое подтверждение: сначала вопрос, затем «Да/Нет»
+        answer = st.session_state.get(f"del_confirm_{pot_id}")
+        if answer is None:
+            st.warning(
+                "Блюдо упомянуто в дневнике за сегодня/будущие дни: "
+                + ", ".join(future)
+            )
+            qc1, qc2 = st.columns(2)
+            with qc1:
+                if st.button("Удалить из дневника питания? Да",
+                             key=f"dcd_yes_{pot_id}", type="primary"):
+                    st.session_state[f"del_confirm_{pot_id}"] = "yes"
+                    st.rerun()
+            with qc2:
+                if st.button("Нет — оставить записи, отвязав от кастрюли",
+                             key=f"dcd_no_{pot_id}"):
+                    st.session_state[f"del_confirm_{pot_id}"] = "no"
+                    st.rerun()
+            return
+        remove_diary = answer == "yes"
+    try:
+        api_client.delete(
+            f"recipes/cooking-logs/{pot_id}",
+            params={"remove_from_diary": str(remove_diary).lower()},
+        )
+        st.session_state.pop(f"del_pot_{pot_id}", None)
+        st.session_state.pop(f"del_confirm_{pot_id}", None)
+        st.success("Блюдо удалено из холодильника.")
+        st.rerun()
+    except api_client.ApiError as exc:
+        # гонка: кто-то успел внести в прошлое — сервер защитился 409
+        st.session_state.pop(f"del_confirm_{pot_id}", None)
+        st.error(str(exc))
+
+
 def _ingredient_editor(pot: dict, names: dict[int, str]) -> None:
     """Правка фактической закладки кастрюли: добавить / убрать / заменить ингредиент.
 
@@ -171,7 +234,7 @@ def render() -> None:  # noqa: C901 — большой UI-блок, сознат
             if st.session_state.get(f"edit_ing_{pot['id']}"):
                 _ingredient_editor(pot, names)
 
-            c1, c2, c3 = st.columns([2, 1, 1])
+            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
             with c1:
                 eat_label = f"eat_pot_{pot['id']}"
                 if eat_label not in st.session_state:
@@ -210,6 +273,48 @@ def render() -> None:  # noqa: C901 — большой UI-блок, сознат
                     key=f"sel_srv_{pot['id']}",
                     help="Сколько таких порций съесть (вес умножается на это число).",
                 )
+            with c4:
+                st.write("")
+                st.write("")
+                st.write("")
+                if st.button("🗑 Удалить", use_container_width=True,
+                             key=f"delpot_{pot['id']}",
+                             help="Убрать блюдо из холодильника"):
+                    st.session_state[f"del_pot_{pot['id']}"] = True
+
+            # --- Списать часть (гости съели / испортилось) ---
+            sc1, sc2 = st.columns([2, 1])
+            with sc1:
+                waste_label = f"waste_pot_{pot['id']}"
+                max_waste = float(pot["current_remaining_weight"])
+                if waste_label not in st.session_state:
+                    st.session_state[waste_label] = min(max_waste, 100.0)
+                waste_w = st.number_input(
+                    "Списать, г", 0.0, max_waste,
+                    value=float(min(st.session_state[waste_label], max_waste)),
+                    step=10.0, key=f"inp_{waste_label}",
+                    help="Например, пришли гости и съели, или продукт испортился. "
+                         "В дневник питания НЕ попадает.",
+                )
+            with sc2:
+                st.write("")
+                st.write("")
+                if st.button("➖ Списать", use_container_width=True,
+                             key=f"wbtn_{pot['id']}", disabled=waste_w <= 0):
+                    new_left = round(max_waste - float(waste_w), 1)
+                    try:
+                        api_client.patch(
+                            f"recipes/cooking-logs/{pot['id']}",
+                            {"current_remaining_weight": new_left},
+                        )
+                        st.session_state[waste_label] = min(max(new_left, 0.0), 999.0)
+                        st.success(f"Списано {waste_w:.0f} г, осталось {new_left:.0f} г.")
+                        st.rerun()
+                    except api_client.ApiError as exc:
+                        st.error(str(exc))
+
+            if st.session_state.get(f"del_pot_{pot['id']}"):
+                _delete_pot(pot["id"])
 
             if st.button("✅ Съел", use_container_width=True, key=f"btn_{pot['id']}"):
                 total_eaten = min(weight * int(servings), float(pot["current_remaining_weight"]))

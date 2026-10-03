@@ -138,3 +138,10 @@ class CookingLogUpdate(BaseModel):
     """Ручная корректировка остатка в кастрюле (замена «сырого» dict-payload)."""
 
     current_remaining_weight: Decimal = Field(ge=0, le=Decimal("9999.9"))
+
+
+class PotUsageResponse(BaseModel):
+    """Использование кастрюли в дневнике: разделённое по датам."""
+
+    past_dates: list[str] = []           # учтено в прошедших днях → удаление запрещено
+    current_future_dates: list[str] = []  # текущий/будущие дни → спрашиваем пользователя
