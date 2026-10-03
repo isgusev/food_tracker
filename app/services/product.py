@@ -55,6 +55,19 @@ class ProductService:
 
         return await self._categories.list(select(ProductCategory).order_by(ProductCategory.name))
 
+    async def get_or_create_category(self, name: str) -> int:
+        """Возвращает id существующей категории (без учёта регистра) или создаёт новую."""
+        normalized = name.strip()
+        existing = await self._categories.get_by_name_ilike(normalized.lower())
+        if existing is not None:
+            return existing.id
+        from app.models.product import ProductCategory
+
+        category = ProductCategory(name=normalized)
+        self._categories.add(category)
+        await self._categories.flush()
+        return category.id
+
     # --- ПРОДУКТЫ ---
     async def create_product(self, data: ProductCreate) -> Product:
         category = await self._categories.get(data.category_id)
