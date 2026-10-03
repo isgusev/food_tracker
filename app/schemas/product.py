@@ -25,6 +25,23 @@ class ProductVariantCreate(BaseModel):
         return v.strip() if v and v.strip() else None
 
 
+class ProductWithCategoryCreate(BaseModel):
+    """Создание продукта с авто-созданием категории по имени (для UI)."""
+
+    category_name: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=255)
+    brand_name: Optional[str] = None
+    base_variant: ProductVariantCreate
+
+    @field_validator("category_name", "name")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Поле не может быть пустым")
+        return v
+
+
 class ProductVariantResponse(ORMModel):
     id: int
     manufacturer_id: int

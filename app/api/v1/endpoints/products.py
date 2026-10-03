@@ -12,6 +12,7 @@ from app.schemas.product import (
     ProductResponse,
     ProductVariantCreate,
     ProductVariantResponse,
+    ProductWithCategoryCreate,
 )
 
 router = APIRouter(prefix="/products", tags=["Продукты, Производители и Версии КБЖУ"])
@@ -24,6 +25,25 @@ router = APIRouter(prefix="/products", tags=["Продукты, Производ
 )
 async def create_category(category: CategoryCreate, service: ProductServiceDep):
     return await service.create_category(category.name)
+
+
+@router.post(
+    "/with-category",
+    response_model=ProductResponse,
+    status_code=201,
+)
+async def create_product_with_category(
+    product: ProductWithCategoryCreate, service: ProductServiceDep
+):
+    """Продукт + авто-создание категории по имени (get-or-create)."""
+    category_id = await service.get_or_create_category(product.category_name)
+    payload = ProductCreate(
+        category_id=category_id,
+        name=product.name,
+        brand_name=product.brand_name,
+        base_variant=product.base_variant,
+    )
+    return await service.create_product(payload)
 
 
 @router.get("/categories", response_model=list[CategoryResponse])
