@@ -22,19 +22,24 @@ ui/              # Streamlit-приложение
 ## Локальный запуск
 
 1. Зависимости:
-   ```bash
-   python -m venv .venv && source .venv/bin/activate
+   > ⚠️ Требуется **Python 3.12 или 3.13**. Python 3.9 не поддерживается (streamlit>=1.36),
+> а Python 3.14 пока не имеет готовых бинарных пакетов pydantic-core/sqlalchemy —
+> установка завершится ошибкой сборки из исходников.
+
+```bash
+   python3.12 -m venv .venv && source .venv/bin/activate
    pip install -r requirements.txt
    ```
 2. PostgreSQL (docker): `docker compose up -d db`
 3. Конфигурация: скопируйте `.env.example` → `.env`, укажите `POSTGRES_*` и **свой** `SECRET_KEY`.
-4. Миграции (первый запуск — сгенерировать initial-ревизию):
+4. Миграции (initial-ревизия уже в репозитории, autogenerate не нужен):
    ```bash
-   alembic revision --autogenerate -m "initial schema"
    alembic upgrade head
    ```
-5. Запуск API: `uvicorn app.main:app --reload` (docs: http://localhost:8000/docs)
-6. UI: `streamlit run ui/app.py`
+5. Демо-данные (при запущенном API): `python -m scripts.seed`
+   (доступ: `demo / demo-pass-123`)
+6. Запуск API: `uvicorn app.main:app --reload` (docs: http://localhost:8000/docs)
+7. UI: `streamlit run ui_app.py` (откроется на http://localhost:8501)
 
 ## Тесты
 
