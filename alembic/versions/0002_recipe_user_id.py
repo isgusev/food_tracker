@@ -1,7 +1,7 @@
 """recipes: привязка к владельцу (user_id) — рецепты становятся личными
 
 Revision ID: 0002_recipe_user_id
-Revises: 0001_initial_schema
+Revises: 0001
 Create Date: 2026-10-03
 """
 from __future__ import annotations
@@ -11,7 +11,9 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0002_recipe_user_id"
-down_revision = "0001_initial_schema"
+# ID миграции 0001 — это "0001" (значение переменной revision в файле),
+# а НЕ имя файла; иначе Alembic падает с KeyError при построении графа.
+down_revision = "0001"
 branch_labels = None
 depends_on = None
 
