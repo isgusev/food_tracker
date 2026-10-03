@@ -61,14 +61,18 @@ class RecipeRepository(BaseRepository[Recipe]):
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def name_exists(self, user_id: int, name: str) -> bool:
-        """Есть ли у пользователя рецепт с таким названием (без учёта регистра)."""
-        from sqlalchemy import func as sa_func
+        """Есть ли у пользователя рецепт с таким названием (без учёта регистра).
 
-        stmt = select(Recipe.id).where(
-            Recipe.user_id == user_id,
-            sa_func.lower(Recipe.name) == name.strip().lower(),
-        ).limit(1)
-        return (await self._session.execute(stmt)).first() is not None
+        Регистронезависимость обеспечивается прикладным сравнением, а не SQL LOWER():
+        в SQLite LOWER() не работает для кириллицы, а в PostgreSQL collation может
+        отличаться от Python .lower().
+        """
+        stmt = select(Recipe.name).where(Recipe.user_id == user_id)
+        target = name.strip().lower()
+        for (existing,) in (await self._session.execute(stmt)).fetchall():
+            if existing.strip().lower() == target:
+                return True
+        return False
 
 
 class CookingLogRepository(BaseRepository[RecipeCookingLog]):
