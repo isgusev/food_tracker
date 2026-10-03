@@ -8,7 +8,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ui import api_client
-from ui.screens import auth, catalog, diary, recipes, shopping
+from ui.screens import auth, catalog, diary, fridge, recipes, shopping
 
 st.set_page_config(
     page_title="Food Tracker", layout="wide", initial_sidebar_state="expanded"
@@ -22,6 +22,7 @@ menu = st.sidebar.radio(
     "Навигация",
     [
         "📅 Дневник питания",
+        "🧊 Холодильник",
         "🍲 Рецепты",
         "🛒 Список покупок",
         "📦 Каталог продуктов",
@@ -36,6 +37,7 @@ with st.sidebar:
 
 screens = {
     "📅 Дневник питания": diary.render,
+    "🧊 Холодильник": fridge.render,
     "🍲 Рецепты": recipes.render,
     "🛒 Список покупок": shopping.render,
     "📦 Каталог продуктов": catalog.render,

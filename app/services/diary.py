@@ -42,7 +42,7 @@ class DiaryService:
     # --- ЧТЕНИЕ ---
     async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLogResponse]:
         logs = await self._diary.list_for_day(user_id, date_day)
-        return [self._to_response(log) for log in logs]
+        return [await self._to_response(log) for log in logs]
 
     async def get_owned(self, log_id: int, user_id: int) -> DiaryLog:
         """Возвращает запись только её владельцу; чужая запись = 404 (без утечки)."""
@@ -51,15 +51,24 @@ class DiaryService:
             raise NotFoundError("Запись в дневнике не найдена")
         return log
 
-    def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
+    async def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
         res = DiaryLogResponse.model_validate(log)
-        res.recipe_name = log.recipe.name if log.recipe else "Удаленный рецепт"
+        if res.recipe_name is None and log.recipe_id is not None:
+            # Связь с рецептом не загружена (объект после flush/создания без
+            # eager load) — подтягиваем название напрямую.
+            recipe = await self._recipes.get_full(log.recipe_id)
+            res.recipe_name = recipe.name if recipe else "Удаленный рецепт"
 
         # Источник КБЖУ: точный инстанс (кастрюля) или шаблон рецепта
-        if log.status in (STATUS_COOKED_PLAN, STATUS_FACT) and log.cooking_log:
+        source = None
+        if log.status in (STATUS_COOKED_PLAN, STATUS_FACT) and log.cooking_log_id:
             source = log.cooking_log
-        else:
+            if source is None:  # связь не загружена — тянем кастрюлю
+                source = await self._cooking_logs.get_full(log.cooking_log_id)
+        if source is None:
             source = log.recipe
+            if source is None and log.recipe_id is not None:
+                source = await self._recipes.get_full(log.recipe_id)
 
         if source is not None:
             per_100 = Nutrients(
@@ -76,7 +85,7 @@ class DiaryService:
         return res
 
     # --- СОЗДАНИЕ ПЛАНА ---
-    async def add_plan(self, user_id: int, data: DiaryLogCreate) -> DiaryLog:
+    async def add_plan(self, user_id: int, data: DiaryLogCreate) -> DiaryLogResponse:
         recipe = await self._recipes.get(data.recipe_id)
         if recipe is None:
             raise NotFoundError("Рецепт не найден")
@@ -93,10 +102,12 @@ class DiaryService:
         )
         self._diary.add(log)
         await self._diary.flush()
-        return log
+        return await self._to_response(log)
 
     # --- ОБНОВЛЕНИЕ ВЕСА ---
-    async def update_weight(self, log: DiaryLog, new_weight: Decimal) -> DiaryLog:
+    async def update_weight(
+        self, log: DiaryLog, new_weight: Decimal
+    ) -> DiaryLogResponse:
         """Меняет вес порции, не переключая статус; для факта синхронизирует кастрюлю."""
         if log.status == STATUS_FACT and log.cooking_log_id:
             pot = await self._cooking_logs.get(log.cooking_log_id)
@@ -108,12 +119,14 @@ class DiaryService:
 
         log.weight_g = new_weight
         await self._diary.flush()
-        return log
+        return await self._to_response(log)
 
     # --- «СЪЕДЕНО» ---
-    async def mark_eaten(self, log: DiaryLog, new_weight: Decimal) -> DiaryLog:
+    async def mark_eaten(self, log: DiaryLog, new_weight: Decimal) -> DiaryLogResponse:
         """План → факт (или правка веса уже съеденного); списывает вес из кастрюли."""
-        # Если запись висела без кастрюли — пробуем привязать активную по её рецепту
+        # Если запись висела без кастрюли — привязываем активную по её рецепту.
+        # Иначе (даже для template_plan!) считаем КБЖУ по шаблону рецепта:
+        # «съел» можно и то, что готовил без записи в холодильник.
         if log.cooking_log_id is None and log.recipe_id is not None:
             pot = await self._cooking_logs.find_active_pot(log.user_id, log.recipe_id)
             if pot is not None:
