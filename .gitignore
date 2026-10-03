@@ -1,7 +1,1 @@
-__pycache__/
-*.pyc
-.env
-.env.local
-.env.*.local
-food_tracker_recipes.bundle
-recipes_fix_final.patch
+(empty)
