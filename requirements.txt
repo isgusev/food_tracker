@@ -23,7 +23,8 @@ bcrypt==5.0.*   # хэширование напрямую (см. app/core/securi
 
 # --- UI (Streamlit, общается с API по HTTP) ---
 requests==2.32.4
-streamlit
+streamlit>=1.36
+altair>=5,<6
 pandas
 
 # --- Совместимость с Python 3.9 (macOS Intel) ---
