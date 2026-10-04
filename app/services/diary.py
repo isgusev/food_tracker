@@ -120,20 +120,26 @@ class DiaryService:
         await self._diary.flush()
         return await self._to_response(log)
 
-    # --- «СЪЕДЕНО» ---
+    # --- «СЪЕДЕНО» (идемпотентно: кнопка не должна срабатывать повторно) ---
     async def mark_eaten(self, log: DiaryLog, new_weight: Decimal) -> DiaryLogResponse:
-        """План → факт (или правка веса уже съеденного); списывает вес из кастрюли."""
+        """План → факт (или правка веса уже съеденного); списывает вес из кастрюли.
+
+        Повторный вызов для уже «съеденной» записи НЕ списывает вес повторно —
+        только обновляет вес (это лечит баг двойного нажатия кнопки в UI).
+        """
+        already_fact = log.status == STATUS_FACT
+
         # Если запись висела без кастрюли — привязываем активную по её рецепту.
         # Иначе (даже для template_plan!) считаем КБЖУ по шаблону рецепта:
-        # «съел» можно и то, что готовил без записи в холодильник.
-        if log.cooking_log_id is None and log.recipe_id is not None:
+        # «съел» можно и то, что готовил без записи в холодильнике.
+        if not already_fact and log.cooking_log_id is None and log.recipe_id is not None:
             pot = await self._cooking_logs.find_active_pot(log.user_id, log.recipe_id)
             if pot is not None:
                 log.cooking_log_id = pot.id
                 if log.status == STATUS_TEMPLATE_PLAN:
                     log.status = STATUS_COOKED_PLAN
 
-        was_fact = log.status == STATUS_FACT
+        was_fact = already_fact
         if log.cooking_log_id is not None:
             pot = await self._cooking_logs.get(log.cooking_log_id)
             if pot is not None:
@@ -152,7 +158,20 @@ class DiaryService:
         log.weight_g = new_weight
         log.status = STATUS_FACT
         await self._diary.flush()
-        return log
+        return await self._to_response(log)
+
+    # --- «БЫЛО БЕЗ ХОЛОДИЛЬНИКА»: отвязать факт от кастрюли ---
+    async def detach_from_fridge(self, log: DiaryLog) -> DiaryLogResponse:
+        """Факт остаётся в дневнике, но перестаёт быть связанным с холодильником.
+
+        Обязательность учёта в холодильнике снимается; вес обратно в кастрюлю
+        НЕ возвращается (еда реально съедена).
+        """
+        if log.status != STATUS_FACT:
+            raise ValidationError("Отвязать от холодильника можно только съеденное")
+        log.cooking_log_id = None
+        await self._diary.flush()
+        return await self._to_response(log)
 
     # --- УДАЛЕНИЕ ---
     async def delete(self, log: DiaryLog) -> None:

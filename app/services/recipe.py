@@ -8,11 +8,15 @@ from sqlalchemy import select
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
+    MEAL_TYPES,
+    STATUS_COOKED_PLAN,
+    STATUS_FACT,
     ZERO,
     Nutrients,
     per_100g_from_totals,
     quantize,
 )
+from app.models.diary import DiaryLog
 from app.models.recipe import (
     Recipe,
     RecipeActualIngredient,
@@ -31,10 +35,18 @@ from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
     IngredientLine,
+    PotArchiveItem,
     RecipeCookingLogCreate,
     RecipeCreate,
     RecipeUpdate,
 )
+
+MEAL_RU = {
+    "breakfast": "завтрак",
+    "lunch": "обед",
+    "dinner": "ужин",
+    "snack": "перекус",
+}
 
 
 async def _sum_ingredients(
@@ -261,6 +273,52 @@ class RecipeService:
         await self._diary.detach_plans_from_pot(pot.id)
         await self._cooking_logs.delete(pot)
 
+    async def pot_diary_usage(
+        self, pot: RecipeCookingLog, today_iso: str
+    ) -> dict[str, list[str]]:
+        """Даты упоминания кастрюли в дневнике: past / current_future."""
+        logs = await self._diary.logs_using_pot(pot.id)
+        past = sorted({log.date_day for log in logs if log.date_day < today_iso})
+        future = sorted({log.date_day for log in logs if log.date_day >= today_iso})
+        return {"past": past, "current_future": future}
+
+    async def delete_pot_safe(
+        self, pot: RecipeCookingLog, remove_from_diary: bool, today_iso: str
+    ) -> None:
+        """Удаление кастрюли с учётом её использования в дневнике.
+
+        - Есть факты/планы в ПРОШЛЫХ датах → удаление запрещено (409), чтобы
+          не ломать уже учтённое питание.
+        - Упоминания только в текущем/будущем → при remove_from_diary=True
+          удаляем эти записи дневника; иначе кастрюля отвязывается:
+          * планы остаются «надо приготовить» (template_plan по шаблону →
+            попадают в план покупок);
+          * съеденное остаётся в дневнике без привязки к холодильнику.
+        """
+        usage = await self.pot_diary_usage(pot, today_iso)
+        if usage["past"]:
+            raise ConflictError(
+                "Кастрюлю нельзя удалить: она учтена в дневнике питания за даты: "
+                + ", ".join(usage["past"])
+            )
+        linked = await self._diary.logs_using_pot(pot.id)
+        if remove_from_diary:
+            for log in linked:
+                await self._diary.delete(log)
+        else:
+            # планы, отвязанные от кастрюли, должны остаться «планами по шаблону»
+            # (иначе попадут в план покупок с нулевым весом); факты не трогаем
+            for log in linked:
+                if log.status == STATUS_COOKED_PLAN and log.recipe_id is None:
+                    raise ValidationError(
+                        "Некоторые планы не связаны с шаблоном рецепта — "
+                        "удалите их вручную или подтвердите удаление из дневника."
+                    )
+            await self._diary.unattach_pot_keep_recipe(pot.id)
+            await self._diary.detach_plans_from_pot(pot.id)
+        await self._cooking_logs.delete(pot)
+        await self._cooking_logs.flush()
+
     async def update_pot_remainder(self, pot: RecipeCookingLog, data: CookingLogUpdate) -> RecipeCookingLog:
         remainder = data.current_remaining_weight
         if remainder > pot.total_cooked_weight:
@@ -269,6 +327,87 @@ class RecipeService:
         pot.is_finished = remainder <= ZERO
         await self._cooking_logs.flush()
         return pot
+
+    # --- АРХИВ ХОЛОДИЛЬНИКА ---
+    async def list_pot_archive(
+        self, user_id: int, include_deleted: bool, limit: int = 200, offset: int = 0
+    ) -> list[PotArchiveItem]:
+        """Закончившиеся кастрюли (пустые или удалённые) с логом съедания/списания.
+
+        Удалённые физически в архиве отсутствуют; помеченные is_discarded —
+        показываются с флагом «удалена», если include_deleted=True.
+        """
+        pots = await self._cooking_logs.list_finished(user_id, limit=limit, offset=offset)
+        items: list[PotArchiveItem] = []
+        for pot in pots:
+            if pot.is_discarded and not include_deleted:
+                continue
+            recipe_name = None
+            if pot.recipe_id is not None:
+                recipe = await self._recipes.get_by_id(pot.recipe_id, user_id=user_id)
+                recipe_name = recipe.name if recipe else None
+            items.append(
+                PotArchiveItem(
+                    id=pot.id,
+                    recipe_id=pot.recipe_id,
+                    recipe_name=recipe_name,
+                    cooked_at=pot.cooked_at,
+                    total_cooked_weight=pot.total_cooked_weight,
+                    calories_per_100g=pot.calories_per_100g,
+                    events=await self._pot_events(pot),
+                    is_discarded=bool(pot.is_discarded),
+                )
+            )
+        return items
+
+    async def _pot_events(self, pot: RecipeCookingLog) -> list[str]:
+        """Человекочитаемый лог жизни кастрюли: съедено по приёмам пищи + списания."""
+        logs = await self._diary.logs_using_pot(pot.id)
+        eaten_by_day: dict[str, Decimal] = {}
+        events: list[str] = []
+        for log in sorted(logs, key=lambda l: (l.date_day, l.id)):
+            if log.status == STATUS_FACT:
+                day = eaten_by_day.setdefault(log.date_day, ZERO)
+                eaten_by_day[log.date_day] = day + Decimal(str(log.weight_g))
+        for day, grams in sorted(eaten_by_day.items()):
+            events.append(f"{day}: съедено {quantize(grams)} г")
+        consumed = sum(eaten_by_day.values(), start=ZERO)
+        discarded_g = Decimal(str(pot.total_cooked_weight)) - consumed - Decimal(
+            str(pot.current_remaining_weight)
+        )
+        if discarded_g > ZERO:
+            events.append(f"списано {quantize(discarded_g)} г (гости/испортилось)")
+        if pot.is_discarded:
+            events.append("удалена из холодильника (остаток выброшен)")
+        elif pot.is_finished:
+            events.append("блюдо доедено")
+        return events
+
+    async def detach_fact_from_pot(self, log: DiaryLog) -> None:
+        """«Считаем, что было без холодильника»: отвязываем факт от кастрюли.
+
+        Вес остаётся учтённым в дневнике, но перестаёт быть связанным с
+        холодильником (обязательность учёта в нём снимается).
+        """
+        log.cooking_log_id = None
+        await self._diary.flush()
+
+    async def mark_pot_discarded(self, pot: RecipeCookingLog) -> RecipeCookingLog:
+        """Пометить кастрюлю удалённой: остаток выбрасывается, запись уходит в архив.
+
+        Физическое удаление не меняется (DELETE остаётся); здесь — мягкое
+        удаление для случаев «пришли гости/испортилось», чтобы история
+        сохранилась в архиве холодильника.
+        """
+        pot.is_discarded = True
+        pot.is_finished = True
+        pot.current_remaining_weight = ZERO
+        # отвязываем оставшиеся планы (останутся «надо приготовить» по шаблону)
+        await self._diary.detach_plans_from_pot(pot.id)
+        await self._cooking_logs.flush()
+        full = await self._cooking_logs.get_full(pot.id)
+        assert full is not None
+        return full
 
     async def replace_pot_ingredients(
         self, pot: RecipeCookingLog, data: CookingLogUpdateIngredients
