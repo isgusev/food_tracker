@@ -140,6 +140,19 @@ class CookingLogUpdate(BaseModel):
     current_remaining_weight: Decimal = Field(ge=0, le=Decimal("9999.9"))
 
 
+class PotArchiveItem(BaseModel):
+    """Строка архива холодильника: закончившаяся кастрюля + лог событий."""
+
+    id: int
+    recipe_id: Optional[int] = None
+    recipe_name: Optional[str] = None
+    cooked_at: Optional[datetime] = None
+    total_cooked_weight: Decimal
+    calories_per_100g: Decimal
+    events: list[str] = []  # человекочитаемый лог: съедено/списано/удалено
+    is_discarded: bool = False  # True — помечена как удалённая (не доедена и выброшена)
+
+
 class PotUsageResponse(BaseModel):
     """Использование кастрюли в дневнике: разделённое по датам."""
 

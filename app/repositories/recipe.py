@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models.product import Product, ProductManufacturer, ProductVariant
@@ -111,3 +111,22 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             .limit(1)
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list_finished(
+        self, user_id: int, limit: int = 200, offset: int = 0
+    ) -> list[RecipeCookingLog]:
+        """Архив: закончившиеся кастрюли (пустые или помеченные удалёнными)."""
+        stmt = (
+            self.full_query()
+            .where(
+                RecipeCookingLog.user_id == user_id,
+                or_(
+                    RecipeCookingLog.is_finished.is_(True),
+                    RecipeCookingLog.is_discarded.is_(True),
+                ),
+            )
+            .order_by(RecipeCookingLog.cooked_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())

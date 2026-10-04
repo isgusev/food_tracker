@@ -9,6 +9,7 @@ from app.api.deps import CurrentUserDep, RecipeServiceDep
 from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
+    PotArchiveItem,
     PotUsageResponse,
     RecipeCategoryCreate,
     RecipeCategoryResponse,
@@ -116,6 +117,36 @@ async def delete_cooking_log(
     """
     pot = await service.get_owned_pot(log_id, current_user.id)
     await service.delete_pot_safe(pot, remove_from_diary, dt.date.today().isoformat())
+
+
+@router.get("/cooking-logs/archive", response_model=list[PotArchiveItem])
+async def get_pot_archive(
+    service: RecipeServiceDep,
+    current_user: CurrentUserDep,
+    include_deleted: bool = Query(
+        default=True,
+        description="Показывать ли в архиве кастрюли, помеченные удалёнными (is_discarded).",
+    ),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """Архив холодильника: закончившиеся блюда с логом съедания/списания."""
+    return await service.list_pot_archive(
+        current_user.id, include_deleted=include_deleted, limit=limit, offset=offset
+    )
+
+
+@router.post("/cooking-logs/{log_id}/discard", response_model=RecipeCookingLogResponse)
+async def discard_cooking_log(
+    log_id: int, service: RecipeServiceDep, current_user: CurrentUserDep
+):
+    """Пометить кастрюлю удалённой: остаток выбрасывается, запись уходит в архив.
+
+    Физическое удаление не производится — история сохраняется; связанные планы
+    дневника отвязываются и остаются «надо приготовить».
+    """
+    pot = await service.get_owned_pot(log_id, current_user.id)
+    return await service.mark_pot_discarded(pot)
 
 
 @router.patch("/cooking-logs/{log_id}", response_model=RecipeCookingLogResponse)

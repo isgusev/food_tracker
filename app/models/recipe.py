@@ -101,6 +101,8 @@ class RecipeCookingLog(Base):
     # Храним остаток еды в кастрюле
     current_remaining_weight = Column(Numeric(6, 1), nullable=False)
     is_finished = Column(Boolean, default=False, nullable=False)  # Кастрюля пуста?
+    # Признак «выбросили/испортилось» (в архиве холодильника помечается как удалённая)
+    is_discarded = Column(Boolean, default=False, nullable=False, server_default="false")
 
     calories_per_100g = Column(Numeric(5, 1), nullable=False)
     proteins_per_100g = Column(Numeric(4, 1), nullable=False)
