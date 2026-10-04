@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 
-from sqlalchemy import select
+from decimal import Decimal
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from app.domain import STATUS_COOKED_PLAN, STATUS_TEMPLATE_PLAN
@@ -37,6 +39,20 @@ class DiaryRepository(BaseRepository[DiaryLog]):
             .order_by(DiaryLog.meal_type, DiaryLog.id)
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def planned_weight_by_pot(self, user_id: int) -> dict[int, Decimal]:
+        """Сумма весов планов дневника по каждой кастрюле пользователя (один запрос)."""
+        stmt = (
+            select(DiaryLog.cooking_log_id, func.sum(DiaryLog.weight_g))
+            .where(
+                DiaryLog.user_id == user_id,
+                DiaryLog.cooking_log_id.isnot(None),
+                DiaryLog.status.in_([STATUS_TEMPLATE_PLAN, STATUS_COOKED_PLAN]),
+            )
+            .group_by(DiaryLog.cooking_log_id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {int(pot_id): Decimal(total or 0) for pot_id, total in rows if pot_id}
 
     async def list_planned_in_range(
         self, user_id: int, start_date: str, end_date: str

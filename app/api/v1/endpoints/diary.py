@@ -68,6 +68,17 @@ async def delete_log(
     await service.delete(log)
 
 
+@router.get("/pot-status/{recipe_id}", response_model=PotSourceStatus)
+async def get_pot_status(
+    recipe_id: int,
+    service: DiaryServiceDep,
+    current_user: CurrentUserDep,
+    portion_g: Decimal | None = Query(default=None, gt=0, le=Decimal("999.9")),
+):
+    """Есть ли активная кастрюля по рецепту и сколько в ней свободно (для формы планирования)."""
+    return await service.pot_status_for_recipe(current_user.id, recipe_id, portion_g)
+
+
 @router.get("/shopping-list", response_model=ShoppingListResponse)
 async def get_shopping_list(
     service: DiaryServiceDep,

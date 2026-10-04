@@ -22,7 +22,14 @@ class DiaryLogCreate(BaseModel):
     meal_type: str
     recipe_id: int
     weight_g: Decimal = Field(gt=0, le=Decimal("999.9"))
-    servings_multiplier: int = Field(default=1, ge=-100, le=100)
+    servings_multiplier: int = Field(default=1, ge=1, le=10)
+
+    @field_validator("servings_multiplier")
+    @classmethod
+    def _valid_people(cls, v: int) -> int:
+        if not 1 <= v <= 10:
+            raise ValueError("Количество человек должно быть от 1 до 10")
+        return v
 
     @field_validator("date_day")
     @classmethod
@@ -69,6 +76,23 @@ class DiaryLogResponse(ORMModel):
     proteins: Decimal = Decimal("0.0")
     fats: Decimal = Decimal("0.0")
     carbs: Decimal = Decimal("0.0")
+
+    # Инфостатус источника блюда (наполняет сервис; см. compute_source_status)
+    source_status: Optional[str] = None       # "fridge" | "not_cooked" | "detached"
+    fridge_pot_id: Optional[int] = None       # активная кастрюля этого рецепта
+    fridge_available_g: Optional[Decimal] = None   # остаток в кастрюле
+    fridge_planned_g: Optional[Decimal] = None     # уже зарезервировано планами
+    fridge_enough: Optional[bool] = None      # хватает ли остатка на ЭТУ порцию
+
+
+class PotSourceStatus(BaseModel):
+    """Ответ эндпоинта /diary/pot-status/{recipe_id} — статус холодильника при планировании."""
+
+    has_active_pot: bool = False
+    pot_id: Optional[int] = None
+    available_g: Decimal = Decimal("0")
+    planned_g: Decimal = Decimal("0")
+    enough_for_portion: Optional[bool] = None
 
 
 class ShoppingListItem(BaseModel):

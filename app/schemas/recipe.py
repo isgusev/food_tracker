@@ -127,17 +127,26 @@ class RecipeCookingLogResponse(ORMModel):
     total_cooked_weight: Decimal
     current_remaining_weight: Decimal
     is_finished: bool
+    is_discarded: bool = False  # True — кастрюля помечена удалённой (архив)
     calories_per_100g: Decimal
     proteins_per_100g: Decimal
     fats_per_100g: Decimal
     carbs_per_100g: Decimal
     actual_ingredients: list[RecipeActualIngredientResponse] = []
+    planned_g: Decimal = Decimal("0")  # суммарный вес планов дневника по кастрюле
 
 
 class CookingLogUpdate(BaseModel):
     """Ручная корректировка остатка в кастрюле (замена «сырого» dict-payload)."""
 
     current_remaining_weight: Decimal = Field(ge=0, le=Decimal("9999.9"))
+
+
+class PotPlanStats(BaseModel):
+    """Статус планов дневника по кастрюле (для UI холодильника)."""
+
+    planned_g: Decimal = Decimal("0")  # суммарный вес планов (template/cooked plan)
+    plans_count: int = 0
 
 
 class PotArchiveItem(BaseModel):

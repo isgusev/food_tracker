@@ -258,8 +258,20 @@ class RecipeService:
         assert full is not None
         return full
 
-    async def list_pots(self, user_id: int, limit: int = 200, offset: int = 0) -> list[RecipeCookingLog]:
-        return await self._cooking_logs.list_full(user_id, limit=limit, offset=offset)
+    async def list_pots(
+        self,
+        user_id: int,
+        limit: int = 200,
+        offset: int = 0,
+        include_finished: bool = False,
+    ) -> list[RecipeCookingLog]:
+        return await self._cooking_logs.list_full(
+            user_id, limit=limit, offset=offset, include_finished=include_finished
+        )
+
+    async def pot_plan_stats(self, user_id: int) -> dict[int, Decimal]:
+        """Сумма весов планов дневника по кастрюлям (для колонки «Запланировано»)."""
+        return await self._diary.planned_weight_by_pot(user_id)
 
     async def get_owned_pot(self, log_id: int, user_id: int) -> RecipeCookingLog:
         """Кастрюля только для её владельца; чужая = 404 (без утечки информации)."""

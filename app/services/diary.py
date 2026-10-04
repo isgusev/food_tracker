@@ -22,6 +22,7 @@ from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.diary import (
     DiaryLogCreate,
     DiaryLogResponse,
+    PotSourceStatus,
     ShoppingListItem,
 )
 
@@ -51,6 +52,65 @@ class DiaryService:
             raise NotFoundError("Запись в дневнике не найдена")
         return log
 
+    # --- ИНФОСТАТУС ИСТОЧНИКА БЛЮДА (холодильник) ---
+    async def _fill_source_status(
+        self, log: DiaryLog, res: DiaryLogResponse
+    ) -> None:
+        """Наполняет поля source_status/fridge_* для отображения в UI.
+
+        - cooked_plan / fact с кастрюлей → источник «из холодильника» (статус
+          уже задан привязкой; показываем остаток и резерв этой кастрюли);
+        - template_plan → активная кастрюля по рецепту, если есть («хватает ли»
+          на эту порцию с учётом уже зарезервированных планов), иначе
+          «Не приготовлено»;
+        - fact без кастрюли → «detached» (было съедено без холодильника).
+        """
+        if log.status == STATUS_FACT and log.cooking_log_id is None:
+            res.source_status = "detached"
+            return
+        if log.cooking_log_id is not None:
+            pot = log.cooking_log
+            if pot is None:
+                pot = await self._cooking_logs.get(log.cooking_log_id)
+            if pot is not None and not pot.is_discarded:
+                res.source_status = "fridge"
+                res.fridge_pot_id = pot.id
+                res.fridge_available_g = Decimal(str(pot.current_remaining_weight))
+                planned = await self._diary.planned_weight_by_pot(log.user_id)
+                res.fridge_planned_g = planned.get(pot.id, Decimal("0"))
+                res.fridge_enough = res.fridge_available_g >= log.weight_g
+                return
+        if log.recipe_id is not None:
+            pot = await self._cooking_logs.find_active_pot(log.user_id, log.recipe_id)
+            if pot is not None:
+                res.source_status = "not_cooked"  # есть кастрюля, но план не привязан
+                res.fridge_pot_id = pot.id
+                res.fridge_available_g = Decimal(str(pot.current_remaining_weight))
+                planned = await self._diary.planned_weight_by_pot(log.user_id)
+                res.fridge_planned_g = planned.get(pot.id, Decimal("0"))
+                res.fridge_enough = res.fridge_available_g >= log.weight_g
+            else:
+                res.source_status = "not_cooked"
+
+    async def pot_status_for_recipe(
+        self, user_id: int, recipe_id: int, portion_g: Decimal | None = None
+    ) -> PotSourceStatus:
+        """Активная кастрюля рецепта + сколько в ней свободно (для формы планирования)."""
+        pot = await self._cooking_logs.find_active_pot(user_id, recipe_id)
+        if pot is None:
+            return PotSourceStatus(has_active_pot=False)
+        planned = await self._diary.planned_weight_by_pot(user_id)
+        reserved = planned.get(pot.id, Decimal("0"))
+        available = Decimal(str(pot.current_remaining_weight))
+        enough = (available >= portion_g) if portion_g is not None else None
+        return PotSourceStatus(
+            has_active_pot=True,
+            pot_id=pot.id,
+            available_g=available,
+            planned_g=reserved,
+            enough_for_portion=enough,
+        )
+
     async def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
         res = DiaryLogResponse.model_validate(log)
         if res.recipe_name is None and log.recipe_id is not None:
@@ -58,6 +118,10 @@ class DiaryService:
             # eager load) — подтягиваем название напрямую.
             recipe = await self._recipes.get_full(log.recipe_id)
             res.recipe_name = recipe.name if recipe else "Удаленный рецепт"
+
+        # Инфостатус источника блюда для UI («откуда берём», хватает ли в холодильнике)
+        await self._fill_source_status(log, res)
+
         # Источник КБЖУ: точный инстанс (кастрюля) или шаблон рецепта
         source = None
         if log.status in (STATUS_COOKED_PLAN, STATUS_FACT) and log.cooking_log_id:
@@ -97,7 +161,7 @@ class DiaryService:
             recipe_id=data.recipe_id,
             weight_g=data.weight_g,
             servings_multiplier=data.servings_multiplier,
-            scale_all_proportions=data.servings_multiplier < 0,
+            scale_all_proportions=False,
         )
         self._diary.add(log)
         await self._diary.flush()

@@ -90,11 +90,18 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
     async def list_full(
-        self, user_id: int | None = None, limit: int = 200, offset: int = 0
+        self,
+        user_id: int | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        include_finished: bool = False,
     ) -> list[RecipeCookingLog]:
         stmt = self.full_query()
         if user_id is not None:
             stmt = stmt.where(RecipeCookingLog.user_id == user_id)
+        if not include_finished:
+            # по умолчанию — только активные кастрюли («Холодильник»)
+            stmt = stmt.where(RecipeCookingLog.is_finished.is_(False))
         stmt = stmt.order_by(RecipeCookingLog.cooked_at.desc()).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
