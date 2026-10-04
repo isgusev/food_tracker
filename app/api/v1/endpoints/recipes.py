@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
 from fastapi import APIRouter, Query
 
@@ -44,11 +45,28 @@ async def create_recipe_template(
 async def get_all_cooking_logs(
     service: RecipeServiceDep,
     current_user: CurrentUserDep,
+    include_finished: bool = Query(
+        default=False,
+        description="True — включить в список закончившиеся кастрюли (для архива).",
+    ),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    """Кастрюли (факты готовки) текущего пользователя — «Холодильник»."""
-    return await service.list_pots(current_user.id, limit=limit, offset=offset)
+    """Кастрюли (факты готовки) текущего пользователя — «Холодильник».
+
+    Каждой кастрюле добавляется поле planned_g — суммарный вес планов дневника,
+    привязанных к ней (сколько уже зарезервировано на приёмы пищи).
+    """
+    pots = await service.list_pots(
+        current_user.id, limit=limit, offset=offset, include_finished=include_finished
+    )
+    planned = await service.pot_plan_stats(current_user.id)
+    result = []
+    for pot in pots:
+        resp = RecipeCookingLogResponse.model_validate(pot)
+        resp.planned_g = planned.get(pot.id, Decimal("0"))
+        result.append(resp)
+    return result
 
 
 @router.get("/", response_model=list[RecipeResponse])
