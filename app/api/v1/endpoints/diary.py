@@ -6,6 +6,8 @@ user_id всегда берётся из JWT (CurrentUserDep) — клиент �
 from __future__ import annotations
 
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUserDep, DiaryServiceDep
@@ -13,6 +15,7 @@ from app.schemas.diary import (
     DiaryLogCreate,
     DiaryLogResponse,
     DiaryLogUpdateWeight,
+    PotSourceStatus,
     ShoppingListResponse,
 )
 
