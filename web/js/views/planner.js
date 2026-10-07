@@ -1,7 +1,7 @@
 // План семьи на неделю и детальный день (личные КБЖУ выбранного члена семьи).
 import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Macros, MacroMeters } from "../components.js";
+import { Macros, MacroMeters, Modal } from "../components.js";
 import {
   state, ensureCatalog, toast, toastError, activeMembers, members, viewMember, setViewMember,
   targetsForMeters, hasTargets,
@@ -31,8 +31,63 @@ const MemberSwitch = {
     </div>`,
 };
 
+// Шаблоны недель: сохранить текущую неделю и применить сохранённую
+const TemplatesModal = {
+  components: { Modal },
+  props: { weekStart: String },
+  emits: ["close", "applied"],
+  setup(props, { emit }) {
+    const list = ref([]);
+    const name = ref("");
+    const busy = ref(false);
+    const load = () => api.get("/plan/templates").then((r) => { list.value = r; }).catch(toastError);
+    onMounted(load);
+    async function save() {
+      if (!name.value.trim()) return;
+      busy.value = true;
+      try {
+        await api.post("/plan/templates", { name: name.value.trim(), week_start: props.weekStart });
+        name.value = "";
+        toast("Неделя сохранена как шаблон");
+        await load();
+      } catch (e) { toastError(e); } finally { busy.value = false; }
+    }
+    async function apply(t) {
+      busy.value = true;
+      try {
+        const r = await api.post(`/plan/templates/${t.id}/apply`, { week_start: props.weekStart });
+        toast(`Добавлено блюд: ${r.created}` + (r.skipped ? `, пропущено ${r.skipped} (рецепт удалён или едок скрыт)` : ""));
+        emit("applied");
+      } catch (e) { toastError(e); } finally { busy.value = false; }
+    }
+    async function remove(t) {
+      if (!confirm(`Удалить шаблон «${t.name}»?`)) return;
+      try { await api.del(`/plan/templates/${t.id}`); await load(); } catch (e) { toastError(e); }
+    }
+    const days = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+    return { list, name, busy, save, apply, remove, days, fmtDayMonth };
+  },
+  template: `
+    <Modal title="Шаблоны недель" @close="$emit('close')">
+      <div class="row">
+        <input v-model="name" placeholder="Название, например «Обычная неделя»" style="flex: 1; min-width: 180px" @keydown.enter="save">
+        <button class="primary sm" :disabled="busy || !name.trim()" @click="save">Сохранить эту неделю</button>
+      </div>
+      <div class="tiny muted">Сохраняются блюда и порции каждого. Применение добавляет блюда к неделе с {{ fmtDayMonth(weekStart) }} — то, что уже запланировано, остаётся.</div>
+      <div v-if="!list.length" class="empty">Шаблонов пока нет</div>
+      <div v-else class="card flush">
+        <div v-for="t in list" :key="t.id" class="list-item">
+          <div class="grow"><b>{{ t.name }}</b>
+            <div class="tiny muted">{{ t.items_count }} блюд · <span v-for="(d, i) in days" :key="i">{{ d }} {{ t.meals_per_day[i] || 0 }}{{ i < 6 ? ', ' : '' }}</span></div></div>
+          <button class="sm primary" :disabled="busy" @click="apply(t)">Применить</button>
+          <button class="sm ghost" @click="remove(t)" title="Удалить">✕</button>
+        </div>
+      </div>
+    </Modal>`,
+};
+
 export const PlannerView = {
-  components: { AddItemModal, ItemModal, Macros, MemberSwitch },
+  components: { AddItemModal, ItemModal, Macros, MemberSwitch, TemplatesModal },
   props: { query: Object },
   setup(props) {
     const weekStart = ref(startOfWeek(props.query?.week || local.get("ft.week", today())));
@@ -40,6 +95,21 @@ export const PlannerView = {
     const loading = ref(false);
     const adding = ref(null);
     const opened = ref(null);
+    const templates = ref(false);
+    // Перетаскивание блюда мышью на другой день / приём пищи
+    const dragId = ref(null);
+    const dropTarget = ref("");
+    async function dropTo(d, meal) {
+      const id = dragId.value;
+      dragId.value = null;
+      dropTarget.value = "";
+      const it = items.value.find((x) => x.id === id);
+      if (!it || (it.date_day === d && it.meal_type === meal)) return;
+      try {
+        await api.patch(`/plan/${id}`, { date_day: d, meal_type: meal });
+        await load();
+      } catch (e) { toastError(e); }
+    }
     const days = computed(() => range(weekStart.value, addDays(weekStart.value, 6)));
     const weekEnd = computed(() => addDays(weekStart.value, 6));
     const me = computed(() => viewMember.value);
@@ -106,6 +176,7 @@ export const PlannerView = {
 
     return {
       weekStart, weekEnd, days, dayInfo, weekStats, loading, adding, opened, me, targets, MEALS, state,
+      templates, dragId, dropTarget, dropTo, load,
       copyPrevWeek, shopHref, onChanged, itemIcon, itemBadge, portionOf, portionsSummary, allEaten,
       prev: () => (weekStart.value = addDays(weekStart.value, -7)),
       next: () => (weekStart.value = addDays(weekStart.value, 7)),
@@ -127,6 +198,7 @@ export const PlannerView = {
         </div>
         <div class="row">
           <button @click="copyPrevWeek" title="Повторить план прошлой недели">⧉ Копировать прошлую неделю</button>
+          <button @click="templates = true">Шаблоны</button>
           <a class="btn" :href="shopHref" style="background: var(--accent); color: #fff; border-color: var(--accent)">🛒 Покупки на неделю</a>
         </div>
       </div>
@@ -153,12 +225,15 @@ export const PlannerView = {
               <span v-if="dayInfo[d].eaten.calories"> · съедено {{ fmt(dayInfo[d].eaten.calories) }}</span>
             </div>
           </a>
-          <div v-for="m in MEALS" :key="m.key" class="meal">
+          <div v-for="m in MEALS" :key="m.key" class="meal" :class="{ 'drop-on': dropTarget === d + m.key }"
+               @dragover.prevent="dropTarget = d + m.key" @dragleave="dropTarget === d + m.key && (dropTarget = '')" @drop.prevent="dropTo(d, m.key)">
             <div class="meal-head">
               <span>{{ m.label }}</span>
               <button class="add-btn" @click="adding = { date: d, meal: m.key }" :aria-label="'Добавить: ' + m.label">+</button>
             </div>
-            <div v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry" :class="{ fact: allEaten(it) }" @click="opened = it">
+            <div v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry" :class="{ fact: allEaten(it), dragging: dragId === it.id }"
+                 draggable="true" @dragstart="dragId = it.id; $event.dataTransfer.effectAllowed = 'move'" @dragend="dragId = null; dropTarget = ''"
+                 @click="opened = it" title="Перетащите на другой день или приём пищи">
               <span class="ico">{{ itemIcon(it) }}</span>
               <div class="grow">
                 <div class="name">{{ it.name }}</div>
@@ -178,6 +253,7 @@ export const PlannerView = {
 
       <AddItemModal v-if="adding" :date="adding.date" :meal="adding.meal" :days="days" @close="adding = null" @saved="adding = null; onChanged()" />
       <ItemModal v-if="opened" :item="opened" @close="opened = null; onChanged()" @changed="onChanged" />
+      <TemplatesModal v-if="templates" :weekStart="weekStart" @close="templates = false" @applied="templates = false; load()" />
     </div>`,
 };
 

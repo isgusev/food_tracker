@@ -1,14 +1,14 @@
 // Холодильник → Продукты: запасы семьи по товарам (все бренды вместе).
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, Picker } from "../components.js";
+import { Modal, Picker, BarcodeScanner } from "../components.js";
 import { state, ensureCatalog, toast, toastError } from "../store.js";
 import { fmt, fmtDateTime, fmtDayMonth, fmtQty, matches, n, today, UNIT_LABEL } from "../util.js";
 
 const REASON = { purchase: "покупка", manual: "добавлено", inventory: "инвентаризация", cook: "готовка", eat: "съедено", write_off: "списано" };
 
 const AddLotModal = {
-  components: { Modal, Picker },
+  components: { Modal, Picker, BarcodeScanner },
   emits: ["close", "saved"],
   setup(_, { emit }) {
     const productId = ref(null);
@@ -16,6 +16,15 @@ const AddLotModal = {
     const price = ref("");
     const expires = ref("");
     const busy = ref(false);
+    const scanning = ref(false);
+    async function onCode(code) {
+      scanning.value = false;
+      try {
+        const r = await api.get(`/products/barcode/${code}`);
+        if (r.source === "local") { productId.value = r.product.id; toast(`Нашли: ${r.product.name}`); }
+        else toast("Этого штрихкода нет в справочнике — добавьте продукт в «Продукты» (там подтянутся КБЖУ)", "error", 6000);
+      } catch (e) { toastError(e); }
+    }
     const items = computed(() => state.products.map((p) => ({ id: p.id, label: p.name, sub: p.brand?.name, right: UNIT_LABEL[p.base_unit || "g"] })));
     const unit = computed(() => state.products.find((p) => p.id === productId.value)?.base_unit || "g");
     async function save() {
@@ -30,11 +39,14 @@ const AddLotModal = {
         emit("saved", res);
       } catch (e) { toastError(e); } finally { busy.value = false; }
     }
-    return { productId, qty, price, expires, busy, items, unit, save, UNIT_LABEL };
+    return { productId, qty, price, expires, busy, items, unit, save, UNIT_LABEL, scanning, onCode };
   },
   template: `
     <Modal title="Добавить в запасы" @close="$emit('close')">
-      <label class="field"><span>Продукт</span><Picker :items="items" v-model="productId" autofocus placeholder="Что добавить…" /></label>
+      <label class="field"><span>Продукт</span>
+        <div class="row" style="flex-wrap: nowrap"><div class="grow"><Picker :items="items" v-model="productId" autofocus placeholder="Что добавить…" /></div>
+          <button class="sm" @click="scanning = true" title="По штрихкоду">📷</button></div></label>
+      <BarcodeScanner v-if="scanning" @close="scanning = false" @code="onCode" />
       <div class="grid-2">
         <label class="field"><span>Количество, {{ UNIT_LABEL[unit] }}</span><input type="number" min="0.1" step="any" v-model="qty"></label>
         <label class="field"><span>Цена, ₽</span><input type="number" min="0" step="0.01" v-model="price" placeholder="необязательно"></label>

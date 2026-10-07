@@ -36,6 +36,7 @@ const App = {
   setup() {
     const route = ref(parseHash());
     const ready = ref(false);
+    const offline = ref(false);
     const onHash = () => { route.value = parseHash(); window.scrollTo(0, 0); };
     onMounted(() => window.addEventListener("hashchange", onHash));
     onBeforeUnmount(() => window.removeEventListener("hashchange", onHash));
@@ -45,7 +46,11 @@ const App = {
       try {
         state.user = await api.me();
         await loadHousehold();
-      } catch { auth.clear(); state.user = null; }
+      } catch (e) {
+        // разлогиниваем только при настоящем отказе; без сети — показываем «нет связи»
+        if (e.status === 401) { auth.clear(); state.user = null; }
+        else offline.value = true;
+      }
       ready.value = true;
     }
     auth.onUnauthorized(() => { state.user = null; });
@@ -58,10 +63,15 @@ const App = {
     // Ключ роутера: перерисовываем экран при смене маршрута (включая параметры)
     const viewKey = computed(() => route.value.name + "/" + (route.value.param || "") + "?" + new URLSearchParams(route.value.query));
     const active = (p) => route.value.name === p || (p === "plan" && route.value.name === "day");
-    return { route, ready, state, NAV, bootstrap, logout, viewKey, active };
+    const retry = () => { offline.value = false; ready.value = false; bootstrap(); };
+    return { route, ready, offline, retry, state, NAV, bootstrap, logout, viewKey, active };
   },
   template: `
     <div v-if="!ready" class="boot">Загрузка…</div>
+    <div v-else-if="offline && !state.user" class="login-wrap"><div class="card stack login-card">
+      <h2>Нет связи с сервером</h2>
+      <div class="small muted">Проверьте интернет или что сервер запущен. Список покупок, открытый раньше, доступен офлайн после первого входа.</div>
+      <button class="primary" @click="retry">Повторить</button></div></div>
     <LoginView v-else-if="!state.user" @done="bootstrap" />
     <div v-else class="layout">
       <nav class="sidebar">
@@ -90,3 +100,8 @@ const App = {
 };
 
 createApp(App).mount("#app");
+
+// Установка на телефон и работа без сети (sw.js рядом с index.html, scope /app/)
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => { /* http не на localhost — без офлайна */ });
+}

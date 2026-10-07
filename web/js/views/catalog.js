@@ -1,7 +1,7 @@
 // Справочник продуктов: КБЖУ с версиями по производителям.
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, Macros } from "../components.js";
+import { Modal, Macros, BarcodeScanner } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, toast, toastError } from "../store.js";
 import { fmt, matches, n } from "../util.js";
 
@@ -30,36 +30,74 @@ const KbjuInputs = {
 };
 
 const NewProductModal = {
-  components: { Modal, KbjuInputs },
+  components: { Modal, KbjuInputs, BarcodeScanner },
   emits: ["close", "saved"],
   setup(_, { emit }) {
     const f = ref({ name: "", category: "", brand: "", manufacturer: "", kbju: { calories: "", proteins: "", fats: "", carbs: "" } });
     const busy = ref(false);
     const error = ref("");
+    // Штрихкод: свой справочник → подсказка из Open Food Facts
+    const barcode = ref("");
+    const scanning = ref(false);
+    const hint = ref("");
+    const pkg = ref(null);   // упаковка из Open Food Facts: { unit, amount }
+    async function lookup(code) {
+      scanning.value = false;
+      barcode.value = code;
+      hint.value = "Ищем…";
+      try {
+        const r = await api.get(`/products/barcode/${code}`);
+        if (r.source === "local") { hint.value = `Уже есть в справочнике: «${r.product.name}» (${r.product.brand?.name || "без бренда"})`; return; }
+        if (r.source === "none") { hint.value = "В Open Food Facts не нашли — заполните вручную, код сохранится."; return; }
+        const s = r.suggestion;
+        Object.assign(f.value, { name: s.name || f.value.name, brand: s.brand || f.value.brand, manufacturer: s.brand || f.value.manufacturer });
+        f.value.kbju = { calories: s.calories ?? "", proteins: s.proteins ?? "", fats: s.fats ?? "", carbs: s.carbs ?? "" };
+        pkg.value = s.package_amount ? { unit: s.package_unit, amount: n(s.package_amount) } : null;
+        hint.value = "Заполнено из Open Food Facts — проверьте цифры с упаковки.";
+      } catch (e) { hint.value = e.message; }
+    }
     async function save() {
       error.value = "";
       const v = f.value;
       if (!v.name.trim() || !v.category.trim()) { error.value = "Укажите название и категорию"; return; }
       busy.value = true;
       try {
-        await api.post("/products/with-category", {
+        const created = await api.post("/products/with-category", {
           category_name: v.category.trim(),
           name: v.name.trim(),
           brand_name: v.brand.trim() || "Без бренда",
+          barcode: /^\d{8,14}$/.test(barcode.value) ? barcode.value : null,
           base_variant: {
             manufacturer_name: v.manufacturer.trim() || v.brand.trim() || null,
             calories: n(v.kbju.calories), proteins: n(v.kbju.proteins), fats: n(v.kbju.fats), carbs: n(v.kbju.carbs),
           },
         });
+        // упаковка с этикетки: граммы — сразу; мл — переводим товар в мл (если у него нет запасов)
+        if (pkg.value && (pkg.value.unit === "g" || pkg.value.unit === "ml")) {
+          try {
+            if (pkg.value.unit === "ml" && created.base_unit !== "ml") await api.put(`/products/${created.id}/unit`, { base_unit: "ml" });
+            await api.post(`/products/${created.id}/packages`, { amount: pkg.value.amount });
+          } catch { /* упаковку можно добавить вручную */ }
+        }
         await loadProducts();
         toast(`«${v.name}» добавлен`);
         emit("saved");
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    return { f, busy, error, save, state };
+    return { f, busy, error, save, state, barcode, scanning, hint, lookup, pkg };
   },
   template: `
     <Modal title="Новый продукт" @close="$emit('close')">
+      <label class="field"><span>Штрихкод (необязательно)</span>
+        <div class="row" style="flex-wrap: nowrap">
+          <input v-model="barcode" inputmode="numeric" placeholder="4600000000000" @keydown.enter="barcode && lookup(barcode)">
+          <button class="sm" @click="scanning = true" title="Сканировать камерой">📷</button>
+          <button class="sm" :disabled="!barcode" @click="lookup(barcode)">Найти</button>
+        </div>
+        <span v-if="hint" class="tiny">{{ hint }}</span>
+        <span v-if="pkg" class="tiny muted">Упаковка с этикетки: {{ pkg.amount }} {{ pkg.unit === 'ml' ? 'мл' : pkg.unit === 'pcs' ? 'шт' : 'г' }} — добавится к продукту.</span>
+      </label>
+      <BarcodeScanner v-if="scanning" @close="scanning = false" @code="lookup" />
       <label class="field"><span>Название</span><input v-model="f.name" placeholder="Йогурт греческий 2%"></label>
       <div class="grid-2">
         <label class="field"><span>Категория</span>

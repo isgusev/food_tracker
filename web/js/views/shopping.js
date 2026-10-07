@@ -4,7 +4,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from "../../vendor/vue.esm-
 import { api } from "../api.js";
 import { Modal, Picker } from "../components.js";
 import { state, ensureCatalog, toast, toastError } from "../store.js";
-import { addDays, fmt, fmtDayMonth, fmtQty, n, startOfWeek, today, UNIT_LABEL } from "../util.js";
+import { addDays, fmt, fmtDayMonth, fmtQty, local, n, startOfWeek, today, UNIT_LABEL } from "../util.js";
 
 const POLL_MS = 15000;
 
@@ -80,6 +80,7 @@ export const ShoppingView = {
     let timer = null;
 
     async function refresh(silent = true) {
+      await flushQueue();
       try {
         const res = await api.get("/shopping-lists/active");
         lst.value = res;
@@ -103,7 +104,11 @@ export const ShoppingView = {
       document.addEventListener("visibilitychange", onVisible);
       ensureCatalog().catch(() => {});
     });
-    onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); });
+    onBeforeUnmount(() => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    });
 
     const groups = computed(() => {
       const map = new Map();
@@ -121,8 +126,38 @@ export const ShoppingView = {
     async function act(fn) {
       try { lst.value = await fn(); } catch (e) { toastError(e); }
     }
-    const check = (l) => act(() => api.post(`/shopping-lists/lines/${l.id}/check`, {}));
-    const uncheck = (l) => act(() => api.post(`/shopping-lists/lines/${l.id}/uncheck`));
+
+    // Офлайн-очередь отметок: в магазине без сети отметка ставится сразу,
+    // а на сервер уходит, когда связь вернётся
+    const QKEY = "ft.shopQueue";
+    const queue = ref(local.get(QKEY, []));
+    const saveQueue = () => local.set(QKEY, queue.value);
+    async function toggle(l, kind) {
+      try {
+        lst.value = await api.post(`/shopping-lists/lines/${l.id}/${kind}`, {});
+      } catch (e) {
+        if (e.status !== 0) { toastError(e); return; }
+        queue.value = queue.value.filter((q) => q.id !== l.id).concat({ id: l.id, kind });
+        saveQueue();
+        l.is_checked = kind === "check";
+        toast("Нет сети — отметка отправится, когда связь вернётся");
+      }
+    }
+    async function flushQueue() {
+      if (!queue.value.length) return;
+      const rest = [];
+      for (const q of queue.value) {
+        try { await api.post(`/shopping-lists/lines/${q.id}/${q.kind}`, {}); }
+        catch (e) { if (e.status === 0) rest.push(q); /* иначе уже применено/неактуально */ }
+      }
+      queue.value = rest;
+      saveQueue();
+      if (!rest.length) toast("Отметки, сделанные без сети, отправлены");
+    }
+    const onOnline = () => flushQueue().then(() => refresh());
+    window.addEventListener("online", onOnline);
+    const check = (l) => toggle(l, "check");
+    const uncheck = (l) => toggle(l, "uncheck");
     const remove = (l) => act(() => api.del(`/shopping-lists/lines/${l.id}`));
     async function addExtra() {
       if (!extraProduct.value) return;
@@ -149,7 +184,7 @@ export const ShoppingView = {
     }
 
     return {
-      lst, loading, start, end, editing, estimate, estTotal, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
+      lst, loading, start, end, editing, estimate, estTotal, queue, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
       generate, check, uncheck, remove, addExtra, close, preset, copy, pkgText, fmt, fmtQty, fmtDayMonth, n,
       onSaved: (res) => { lst.value = res; editing.value = null; },
     };
@@ -184,7 +219,7 @@ export const ShoppingView = {
       <div v-if="!lst" class="card empty">Активного списка нет. Выберите период и нажмите «Сформировать список».</div>
       <template v-else>
         <div class="row between small muted" style="margin-bottom: 8px">
-          <span>{{ fmtDayMonth(lst.start_date) }} — {{ fmtDayMonth(lst.end_date) }} · осталось {{ lst.lines.length - bought.length }}, куплено {{ bought.length }}
+          <span><span v-if="queue.length" class="badge warn" style="margin-right: 6px">не отправлено: {{ queue.length }}</span>{{ fmtDayMonth(lst.start_date) }} — {{ fmtDayMonth(lst.end_date) }} · осталось {{ lst.lines.length - bought.length }}, куплено {{ bought.length }}
             <template v-if="estTotal.sum"> · ≈ {{ fmt(estTotal.sum) }} ₽<template v-if="estTotal.unknown"> + {{ estTotal.unknown }} без цены</template></template></span>
           <button class="sm ghost" @click="extraOpen = !extraOpen">+ Внеплановая покупка</button>
         </div>

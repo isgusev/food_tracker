@@ -209,3 +209,54 @@ export const IngredientsEditor = {
       <div class="small" v-if="per100"><span class="muted">На 100 г готового: </span><Macros :m="per100" :digits="1" /></div>
     </div>`,
 };
+
+// Сканер штрихкода: камера + BarcodeDetector (Chrome/Android, Chrome на Mac),
+// иначе — ручной ввод цифр. Камера доступна только на https или localhost.
+export const BarcodeScanner = {
+  components: { Modal },
+  emits: ["close", "code"],
+  setup(_, { emit }) {
+    const video = ref(null);
+    const manual = ref("");
+    const status = ref("");
+    const supported = "BarcodeDetector" in window && !!navigator.mediaDevices?.getUserMedia;
+    let stream = null;
+    let timer = null;
+    async function start() {
+      if (!supported) { status.value = "Этот браузер не умеет сканировать — введите цифры под штрихкодом."; return; }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.value.srcObject = stream;
+        await video.value.play();
+        const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+        status.value = "Наведите камеру на штрихкод";
+        timer = setInterval(async () => {
+          try {
+            const found = await detector.detect(video.value);
+            if (found.length) { stop(); emit("code", found[0].rawValue); }
+          } catch { /* кадр не готов */ }
+        }, 300);
+      } catch {
+        status.value = "Нет доступа к камере (нужен https или localhost) — введите цифры вручную.";
+      }
+    }
+    function stop() {
+      clearInterval(timer);
+      stream?.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+    onMounted(start);
+    onBeforeUnmount(stop);
+    const submit = () => { const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) { stop(); emit("code", c); } };
+    return { video, manual, status, supported, submit };
+  },
+  template: `
+    <Modal title="Штрихкод" @close="$emit('close')">
+      <video v-if="supported" ref="video" playsinline muted style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
+      <div class="small muted">{{ status }}</div>
+      <div class="row" style="flex-wrap: nowrap">
+        <input v-model="manual" inputmode="numeric" placeholder="4600000000000" @keydown.enter="submit">
+        <button class="primary" @click="submit">Найти</button>
+      </div>
+    </Modal>`,
+};
