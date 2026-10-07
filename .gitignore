@@ -1,2 +1,22 @@
-# Compressed and bundle files
+# Секреты и локальное окружение
+.env
+.venv/
+venv/
+
+# Python bytecode and cache
+__pycache__/
+*.pyc
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Git bundles / патчи для переноса
 *.bundle
+*.patch
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
