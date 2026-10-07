@@ -105,3 +105,16 @@ export const local = {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
   },
 };
+
+// Количество в единице товара: г/кг, мл/л, шт
+export const UNIT_LABEL = { g: "г", ml: "мл", pcs: "шт" };
+export function fmtQty(v, unit = "g") {
+  const x = n(v);
+  if (unit === "pcs") return `${fmt(x, x % 1 ? 1 : 0)} шт`;
+  if (unit === "ml") return x >= 1000 ? `${fmt(x / 1000, x % 1000 === 0 ? 0 : 2)} л` : `${fmt(x, x % 1 ? 1 : 0)} мл`;
+  return grams(x);
+}
+// Граммы (рецепт, порция) → единица товара
+export function gramsToBase(g, unit, pieceWeight) {
+  return unit === "pcs" && n(pieceWeight) > 0 ? n(g) / n(pieceWeight) : n(g);
+}

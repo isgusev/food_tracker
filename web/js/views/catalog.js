@@ -110,11 +110,48 @@ const ProductModal = {
       run(() => api.post(`/products/${p.value.id}/manufacturers/${m.id}/rollback`), "Откат выполнен");
     };
     const sortedVariants = (m) => [...m.variants].sort((a, b) => b.version - a.version);
-    return { p, adding, busy, error, startAdd, saveVariant, rollback, sortedVariants, categoryName, fmt };
+
+    // Единица товара и упаковки (для списка покупок и запасов)
+    const unit = ref(p.value.base_unit || "g");
+    const piece = ref(p.value.piece_weight_g != null ? Number(p.value.piece_weight_g) : "");
+    const pkgAmount = ref("");
+    const pkgName = ref("");
+    const saveUnit = () => run(() => api.put(`/products/${p.value.id}/unit`, {
+      base_unit: unit.value, piece_weight_g: unit.value === "pcs" ? n(piece.value) || null : null,
+    }), "Единица сохранена — для всех брендов этого товара");
+    const addPkg = () => n(pkgAmount.value) > 0 && run(() => api.post(`/products/${p.value.id}/packages`, { amount: n(pkgAmount.value), name: pkgName.value || null }), "Упаковка добавлена")
+      .then(() => { pkgAmount.value = ""; pkgName.value = ""; });
+    const delPkg = (pk) => run(() => api.del(`/products/packages/${pk.id}`), "Упаковка удалена");
+    const unitLabel = { g: "г", ml: "мл", pcs: "шт" };
+    return { p, adding, busy, error, startAdd, saveVariant, rollback, sortedVariants, categoryName, fmt, unit, piece, pkgAmount, pkgName, saveUnit, addPkg, delPkg, unitLabel };
   },
   template: `
     <Modal :title="p.name" wide @close="$emit('close')">
       <div class="row small muted"><span class="badge">{{ categoryName[p.category_id] }}</span><span>Бренд: {{ p.brand?.name }}</span></div>
+      <div class="card stack">
+        <h3>Покупка и учёт запасов</h3>
+        <div class="row">
+          <div class="segmented">
+            <button :class="{ on: unit === 'g' }" @click="unit = 'g'">граммы</button>
+            <button :class="{ on: unit === 'ml' }" @click="unit = 'ml'">мл</button>
+            <button :class="{ on: unit === 'pcs' }" @click="unit = 'pcs'">штуки</button>
+          </div>
+          <template v-if="unit === 'pcs'"><span class="small muted">1 шт =</span><input type="number" min="1" step="any" v-model="piece" style="width: 80px"><span class="small muted">г</span></template>
+          <button class="sm" :disabled="busy" @click="saveUnit">Сохранить</button>
+        </div>
+        <div class="tiny muted">Единица общая для всех брендов этого товара. Рецепты и КБЖУ — всегда в граммах; штуки пересчитываются по весу одной.</div>
+        <div class="row">
+          <span class="small">Упаковки:</span>
+          <span v-for="pk in p.packages" :key="pk.id" class="badge">{{ fmt(pk.amount, pk.amount % 1 ? 1 : 0) }} {{ unitLabel[p.base_unit || 'g'] }}<template v-if="pk.name"> · {{ pk.name }}</template>
+            <button class="ghost" style="padding: 0 0 0 4px; border: none" @click="delPkg(pk)" title="Удалить">✕</button></span>
+          <span v-if="!p.packages?.length" class="small muted">нет</span>
+        </div>
+        <div class="row">
+          <input type="number" min="0.1" step="any" v-model="pkgAmount" placeholder="Сколько в упаковке" style="width: 160px">
+          <input v-model="pkgName" placeholder="Название (пачка…)" style="width: 160px">
+          <button class="sm" :disabled="busy || !pkgAmount" @click="addPkg">+ Упаковка</button>
+        </div>
+      </div>
       <div v-for="m in p.manufacturers" :key="m.id" class="card flush">
         <div class="row between" style="padding: 10px 14px; border-bottom: 1px solid var(--border)">
           <h3>{{ m.name || 'Без производителя' }}</h3>

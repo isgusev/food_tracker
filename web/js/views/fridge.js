@@ -2,8 +2,9 @@
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { Modal, Picker, IngredientsEditor, Macros } from "../components.js";
-import { state, ensureCatalog, recipeById, toast, toastError } from "../store.js";
-import { fmt, fmtDateTime, grams, n, today } from "../util.js";
+import { state, ensureCatalog, recipeById, toast, toastError, variantIndex } from "../store.js";
+import { fmt, fmtDateTime, fmtQty, grams, gramsToBase, n, today } from "../util.js";
+import { StockTab } from "./stock.js";
 
 export const CookModal = {
   components: { Modal, Picker, IngredientsEditor },
@@ -16,6 +17,30 @@ export const CookModal = {
     const busy = ref(false);
     const error = ref("");
     const recipeItems = computed(() => [...state.recipes].sort((a, b) => a.name.localeCompare(b.name, "ru")).map((r) => ({ id: r.id, label: r.name })));
+    // Запасы: чего не хватит для этой готовки (списание всё равно пройдёт — с пометкой)
+    const stock = ref(null);
+    api.get("/stock").then((r) => { stock.value = Object.fromEntries(r.map((i) => [i.item_key, i])); }).catch(() => {});
+    const shortages = computed(() => {
+      if (!stock.value) return [];
+      const need = new Map();
+      for (const i of ingredients.value) {
+        const v = variantIndex.value[i.variant_id];
+        if (!v || !(n(i.weight_g) > 0)) continue;
+        const key = v.product.name.toLowerCase();
+        const unit = v.product.base_unit || "g";
+        const prev = need.get(key) || { name: v.name, unit, qty: 0 };
+        prev.qty += gramsToBase(i.weight_g, unit, v.product.piece_weight_g);
+        need.set(key, prev);
+      }
+      const out = [];
+      for (const [key, x] of need) {
+        const s = stock.value[key];
+        if (s?.is_staple) continue;
+        const have = n(s?.remaining);
+        if (have < x.qty) out.push({ ...x, have });
+      }
+      return out;
+    });
     function fill(id) {
       const r = recipeById.value[id];
       if (!r) return;
@@ -38,7 +63,7 @@ export const CookModal = {
         emit("saved");
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    return { rid, ingredients, cooked, busy, error, recipeItems, fill, save };
+    return { rid, ingredients, cooked, busy, error, recipeItems, fill, save, shortages, fmtQty };
   },
   template: `
     <Modal title="Приготовить блюдо" wide @close="$emit('close')">
@@ -48,6 +73,10 @@ export const CookModal = {
       <template v-if="rid">
         <div class="small muted">Состав подставлен из рецепта — поправьте под то, что реально положили. КБЖУ кастрюли посчитается по факту.</div>
         <IngredientsEditor v-model="ingredients" :cookedWeight="cooked" />
+        <div v-if="shortages.length" class="alert warn small">
+          В запасах не хватает: <span v-for="(x, i) in shortages" :key="x.name">{{ i ? '; ' : '' }}{{ x.name }} — есть {{ fmtQty(x.have, x.unit) }}, нужно {{ fmtQty(x.qty, x.unit) }}</span>.
+          Готовить можно — товар пометится «уточнить остаток».
+        </div>
         <label class="field" style="max-width: 260px"><span>Вес готового блюда, г</span>
           <input type="number" min="1" step="any" v-model="cooked">
           <span class="tiny">Взвесьте кастрюлю за вычетом её веса</span>
@@ -157,7 +186,7 @@ const PotModal = {
 };
 
 export const FridgeView = {
-  components: { CookModal, PotModal },
+  components: { CookModal, PotModal, StockTab },
   setup() {
     const tab = ref("active");
     const pots = ref([]);
@@ -181,8 +210,10 @@ export const FridgeView = {
       const planned = Math.min(n(p.planned_g), rem);
       return { rem: (rem / total) * 100, planned: (planned / total) * 100, plannedLeft: ((rem - planned) / total) * 100, free: rem - n(p.planned_g) };
     }
-    function onSaved() { cooking.value = false; opened.value = null; load(); }
-    return { tab, pots, archive, cooking, opened, potName, bar, onSaved, grams, fmt, fmtDateTime };
+    // после готовки/правки кастрюли запасы изменились — перерисовываем вкладку «Продукты»
+    const stockKey = ref(0);
+    function onSaved() { cooking.value = false; opened.value = null; stockKey.value++; load(); }
+    return { tab, pots, archive, cooking, opened, potName, bar, onSaved, stockKey, grams, fmt, fmtDateTime };
   },
   template: `
     <div>
@@ -190,7 +221,8 @@ export const FridgeView = {
         <div class="row">
           <h1>Холодильник</h1>
           <div class="segmented">
-            <button :class="{ on: tab === 'active' }" @click="tab = 'active'">Сейчас ({{ pots.length }})</button>
+            <button :class="{ on: tab === 'active' }" @click="tab = 'active'">Готовое ({{ pots.length }})</button>
+            <button :class="{ on: tab === 'stock' }" @click="tab = 'stock'">Продукты</button>
             <button :class="{ on: tab === 'archive' }" @click="tab = 'archive'">Архив</button>
           </div>
         </div>
@@ -219,6 +251,8 @@ export const FridgeView = {
           </div>
         </div>
       </template>
+
+      <StockTab v-else-if="tab === 'stock'" :key="stockKey" />
 
       <template v-else>
         <div v-if="!archive.length" class="card empty">Архив пуст.</div>
