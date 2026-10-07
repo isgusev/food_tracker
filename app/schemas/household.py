@@ -63,6 +63,7 @@ class HouseholdResponse(ORMModel):
     id: int
     name: str
     invite_code: str
+    monthly_budget: Optional[Decimal] = None
     me_member_id: int
     members: list[MemberResponse]
 

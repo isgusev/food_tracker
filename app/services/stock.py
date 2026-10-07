@@ -640,6 +640,7 @@ class StockService:
             lot = line.lot
             lines.append(ShoppingLineResponse(
                 id=line.id,
+                item_key=p.search_name if p else None,
                 product_id=line.product_id,
                 variant_id=line.variant_id,
                 product_name=p.name if p else f"Продукт #{line.product_id}",

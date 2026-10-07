@@ -130,6 +130,7 @@ class LineUpdate(BaseModel):
 
 class ShoppingLineResponse(BaseModel):
     id: int
+    item_key: Optional[str] = None
     product_id: int
     variant_id: Optional[int] = None
     product_name: str

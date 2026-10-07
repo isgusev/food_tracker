@@ -19,6 +19,16 @@ from app.db.session import SessionDep, init_db, set_session_factory
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
+class WebFiles(StaticFiles):
+    """Статика интерфейса с ревалидацией: браузер всегда сверяет ETag и после
+    обновления сразу получает новые JS/CSS, а не старые из кэша."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -71,7 +81,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "reachable"}
 
     if WEB_DIR.is_dir():
-        app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="web")
+        app.mount("/app", WebFiles(directory=WEB_DIR, html=True), name="web")
 
     return app
 

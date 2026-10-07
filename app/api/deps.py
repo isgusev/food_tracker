@@ -32,6 +32,7 @@ from app.repositories.user import UserRepository
 from app.services.auth import AuthService
 from app.services.household import HouseholdService
 from app.services.plan import PlanService
+from app.services.finance import FinanceService
 from app.services.stock import StockService
 from app.services.product import ProductService
 from app.services.recipe import RecipeService
@@ -160,5 +161,15 @@ def get_plan_service(session: SessionDep) -> PlanService:
 
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
+def get_finance_service(session: SessionDep) -> FinanceService:
+    return FinanceService(
+        session=session,
+        stock_repo=StockRepository(session),
+        recipes=RecipeRepository(session),
+        stock=get_stock_service(session),
+    )
+
+
 PlanServiceDep = Annotated[PlanService, Depends(get_plan_service)]
+FinanceServiceDep = Annotated[FinanceService, Depends(get_finance_service)]
 StockServiceDep = Annotated[StockService, Depends(get_stock_service)]

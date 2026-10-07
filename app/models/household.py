@@ -18,6 +18,8 @@ class Household(Base):
     name = Column(String(100), nullable=False)
     # Код приглашения: второй взрослый вводит его и попадает в эту семью
     invite_code = Column(String(16), unique=True, nullable=False)
+    # Бюджет на продукты в месяц, ₽ (необязательно)
+    monthly_budget = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     members = relationship(

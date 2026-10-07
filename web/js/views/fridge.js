@@ -212,8 +212,11 @@ export const FridgeView = {
     }
     // после готовки/правки кастрюли запасы изменились — перерисовываем вкладку «Продукты»
     const stockKey = ref(0);
-    function onSaved() { cooking.value = false; opened.value = null; stockKey.value++; load(); }
-    return { tab, pots, archive, cooking, opened, potName, bar, onSaved, stockKey, grams, fmt, fmtDateTime };
+    const potCosts = ref({});
+    const loadCosts = () => api.get("/finance/pot-costs").then((r) => { potCosts.value = Object.fromEntries(r.map((c) => [c.pot_id, c])); }).catch(() => {});
+    onMounted(loadCosts);
+    function onSaved() { cooking.value = false; opened.value = null; stockKey.value++; load(); loadCosts(); }
+    return { tab, pots, archive, cooking, opened, potName, bar, onSaved, stockKey, potCosts, grams, fmt, fmtDateTime };
   },
   template: `
     <div>
@@ -243,7 +246,7 @@ export const FridgeView = {
                 <b :style="{ left: bar(p).plannedLeft + '%', width: bar(p).planned + '%' }"></b>
               </div>
               <div class="row between small muted">
-                <span>{{ fmtDateTime(p.cooked_at) }} · {{ fmt(p.calories_per_100g) }} ккал/100 г</span>
+                <span>{{ fmtDateTime(p.cooked_at) }} · {{ fmt(p.calories_per_100g) }} ккал/100 г<template v-if="potCosts[p.id]?.cost"> · {{ fmt(potCosts[p.id].cost) }} ₽{{ potCosts[p.id].complete ? '' : '+' }}</template></span>
                 <span v-if="bar(p).free >= 0">Свободно {{ grams(bar(p).free) }} · в планах {{ grams(p.planned_g) }}</span>
                 <span v-else style="color: var(--warn)">В планах на {{ grams(-bar(p).free) }} больше, чем осталось</span>
               </div>

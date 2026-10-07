@@ -71,6 +71,7 @@ class HouseholdService:
             id=household.id,
             name=household.name,
             invite_code=household.invite_code,
+            monthly_budget=household.monthly_budget,
             me_member_id=me.id,
             members=[self.member_response(m, me) for m in household.members],
         )

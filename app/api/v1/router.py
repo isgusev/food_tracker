@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
-from app.api.v1.endpoints import auth, household, plan, products, recipes, shopping, stock
+from app.api.v1.endpoints import auth, finance, household, plan, products, recipes, shopping, stock
 
 # Публичный срез: аутентификация
 public_router = APIRouter(prefix="/api/v1")
@@ -19,3 +19,4 @@ api_router.include_router(household.router)
 api_router.include_router(plan.router)
 api_router.include_router(shopping.router)
 api_router.include_router(stock.router)
+api_router.include_router(finance.router)

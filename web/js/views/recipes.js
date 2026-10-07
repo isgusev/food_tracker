@@ -141,14 +141,18 @@ export const RecipesView = {
     const opened = ref(null);
     const creating = ref(false);
     const cookId = ref(null);
-    onMounted(() => ensureCatalog().catch(toastError));
+    const costs = ref({});
+    onMounted(() => {
+      ensureCatalog().catch(toastError);
+      api.get("/finance/recipe-costs").then((r) => { costs.value = Object.fromEntries(r.map((c) => [c.recipe_id, c])); }).catch(() => {});
+    });
     const list = computed(() => state.recipes
       .filter((r) => (!cat.value || r.recipe_category_id === cat.value) && matches(r.name, q.value))
       .sort((a, b) => a.name.localeCompare(b.name, "ru")));
     function onSaved() { opened.value = null; creating.value = false; }
     function onCook(id) { opened.value = null; cookId.value = id; }
     function cooked() { cookId.value = null; location.hash = "#/fridge"; }
-    return { q, cat, list, opened, creating, cookId, onSaved, onCook, cooked, state, recipeCategoryName, fmt, grams, n };
+    return { q, cat, list, opened, creating, cookId, onSaved, onCook, cooked, state, recipeCategoryName, fmt, grams, n, costs };
   },
   template: `
     <div>
@@ -166,7 +170,7 @@ export const RecipesView = {
       <div v-if="!state.recipes.length" class="card empty">Рецептов пока нет. Начните с того, что готовите чаще всего.</div>
       <div v-else class="card flush table-wrap">
         <table class="tbl">
-          <thead><tr><th>Блюдо</th><th>Категория</th><th class="r">Выход</th><th class="r">ккал</th><th class="r">Б</th><th class="r">Ж</th><th class="r">У</th><th></th></tr></thead>
+          <thead><tr><th>Блюдо</th><th>Категория</th><th class="r">Выход</th><th class="r">ккал</th><th class="r">Б</th><th class="r">Ж</th><th class="r">У</th><th class="r" title="Оценка по последним ценам покупок">₽/порц.</th><th></th></tr></thead>
           <tbody>
             <tr v-for="r in list" :key="r.id" style="cursor: pointer" @click="opened = r">
               <td><b>{{ r.name }}</b><div class="tiny muted">{{ r.template_ingredients.length }} ингр. · {{ r.default_servings }} порц.</div></td>
@@ -176,11 +180,14 @@ export const RecipesView = {
               <td class="r num">{{ fmt(r.proteins_per_100g, 1) }}</td>
               <td class="r num">{{ fmt(r.fats_per_100g, 1) }}</td>
               <td class="r num">{{ fmt(r.carbs_per_100g, 1) }}</td>
+              <td class="r num" :title="costs[r.id] && n(costs[r.id].priced_share) < 1 ? 'Цена известна не для всех ингредиентов' : ''">
+                <template v-if="costs[r.id]?.per_portion">{{ fmt(costs[r.id].per_portion) }}<span v-if="n(costs[r.id].priced_share) < 1" class="muted">+</span></template>
+                <span v-else class="muted">—</span></td>
               <td class="r"><button class="sm" @click.stop="cookId = r.id">🍳</button></td>
             </tr>
           </tbody>
         </table>
-        <div class="tiny muted" style="padding: 8px 12px">КБЖУ — на 100 г готового блюда</div>
+        <div class="tiny muted" style="padding: 8px 12px">КБЖУ — на 100 г готового блюда. ₽/порц. — оценка по последним ценам покупок; «+» — цена известна не для всех ингредиентов.</div>
       </div>
       <RecipeModal v-if="opened || creating" :recipe="opened" @close="opened = null; creating = false" @saved="onSaved" @cook="onCook" />
       <CookModal v-if="cookId" :recipeId="cookId" @close="cookId = null" @saved="cooked" />

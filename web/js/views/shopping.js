@@ -57,6 +57,20 @@ export const ShoppingView = {
   setup(props) {
     const lst = ref(null);
     const loading = ref(false);
+    // Оценка суммы — по последней цене товара из прошлых покупок
+    const prices = ref({});
+    api.get("/finance/prices").then((r) => { prices.value = Object.fromEntries(r.map((p) => [p.item_key, n(p.unit_price)])); }).catch(() => {});
+    const lineQty = (l) => (l.package_amount && l.package_count ? n(l.package_amount) * l.package_count : n(l.needed));
+    const estimate = (l) => (prices.value[l.item_key] != null && lineQty(l) > 0 ? prices.value[l.item_key] * lineQty(l) : null);
+    const estTotal = computed(() => {
+      let sum = 0, unknown = 0;
+      for (const l of lst.value?.lines || []) {
+        if (l.is_checked) continue;
+        const e = estimate(l);
+        if (e == null) unknown++; else sum += e;
+      }
+      return { sum, unknown };
+    });
     const start = ref(props.query?.start || today());
     const end = ref(props.query?.end || addDays(startOfWeek(today()), 6));
     const editing = ref(null);
@@ -135,7 +149,7 @@ export const ShoppingView = {
     }
 
     return {
-      lst, loading, start, end, editing, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
+      lst, loading, start, end, editing, estimate, estTotal, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
       generate, check, uncheck, remove, addExtra, close, preset, copy, pkgText, fmt, fmtQty, fmtDayMonth, n,
       onSaved: (res) => { lst.value = res; editing.value = null; },
     };
@@ -170,7 +184,8 @@ export const ShoppingView = {
       <div v-if="!lst" class="card empty">Активного списка нет. Выберите период и нажмите «Сформировать список».</div>
       <template v-else>
         <div class="row between small muted" style="margin-bottom: 8px">
-          <span>{{ fmtDayMonth(lst.start_date) }} — {{ fmtDayMonth(lst.end_date) }} · осталось {{ lst.lines.length - bought.length }}, куплено {{ bought.length }}</span>
+          <span>{{ fmtDayMonth(lst.start_date) }} — {{ fmtDayMonth(lst.end_date) }} · осталось {{ lst.lines.length - bought.length }}, куплено {{ bought.length }}
+            <template v-if="estTotal.sum"> · ≈ {{ fmt(estTotal.sum) }} ₽<template v-if="estTotal.unknown"> + {{ estTotal.unknown }} без цены</template></template></span>
           <button class="sm ghost" @click="extraOpen = !extraOpen">+ Внеплановая покупка</button>
         </div>
         <div v-if="extraOpen" class="card row" style="margin-bottom: 10px">
@@ -189,7 +204,8 @@ export const ShoppingView = {
                 <span v-if="l.is_staple" class="badge warn">заканчивается</span>
                 <span v-if="l.is_extra" class="badge">вне плана</span>
                 <span v-if="l.brand" class="tiny muted"> · {{ l.brand }}</span></span>
-              <b class="num nowrap">{{ pkgText(l) }}</b>
+              <span class="nowrap" style="text-align: right"><b class="num">{{ pkgText(l) }}</b>
+                <div v-if="estimate(l) != null" class="tiny muted num">≈ {{ fmt(estimate(l)) }} ₽</div></span>
               <button class="ghost icon sm" @click="remove(l)" title="Убрать из списка">✕</button>
             </div>
           </template>

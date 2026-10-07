@@ -9,6 +9,7 @@ import { FridgeView } from "./views/fridge.js";
 import { RecipesView } from "./views/recipes.js";
 import { CatalogView } from "./views/catalog.js";
 import { LoginView, FamilyView } from "./views/misc.js";
+import { MoneyView } from "./views/money.js";
 
 const theme = local.get("ft.theme", "auto");
 if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
@@ -16,9 +17,10 @@ if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme)
 const NAV = [
   { path: "plan", label: "План", icon: "📅" },
   { path: "shopping", label: "Покупки", icon: "🛒" },
-  { path: "fridge", label: "Холодильник", icon: "🧊" },
+  { path: "fridge", label: "Холодильник", short: "Холод.", icon: "🧊" },
   { path: "recipes", label: "Рецепты", icon: "🍲" },
   { path: "catalog", label: "Продукты", icon: "📦" },
+  { path: "money", label: "Деньги", icon: "💰" },
   { path: "family", label: "Семья", icon: "👪" },
 ];
 
@@ -30,7 +32,7 @@ function parseHash() {
 }
 
 const App = {
-  components: { PlannerView, DayView, ShoppingView, FridgeView, RecipesView, CatalogView, LoginView, FamilyView },
+  components: { PlannerView, DayView, ShoppingView, FridgeView, RecipesView, CatalogView, LoginView, FamilyView, MoneyView },
   setup() {
     const route = ref(parseHash());
     const ready = ref(false);
@@ -75,12 +77,13 @@ const App = {
         <FridgeView v-else-if="route.name === 'fridge'" />
         <RecipesView v-else-if="route.name === 'recipes'" />
         <CatalogView v-else-if="route.name === 'catalog'" />
+        <MoneyView v-else-if="route.name === 'money'" />
         <FamilyView v-else-if="route.name === 'family' || route.name === 'profile'" @logout="logout" />
         <div v-else class="empty">Страница не найдена. <a href="#/plan">К плану</a></div>
       </main>
       <nav class="tabbar">
         <a v-for="n in NAV" :key="n.path" :href="'#/' + n.path" :class="{ active: active(n.path) }">
-          <span class="nav-icon">{{ n.icon }}</span>{{ n.label }}</a>
+          <span class="nav-icon">{{ n.icon }}</span>{{ n.short || n.label }}</a>
       </nav>
     </div>
     <div class="toasts"><div v-for="t in state.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div></div>`,
