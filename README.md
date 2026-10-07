@@ -1,7 +1,11 @@
 # Food Tracker
 
 Трекер питания: справочник продуктов (с версиями КБЖУ), рецепты/готовки, дневник питания.
-Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Streamlit (`ui/`).
+Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, без сборки),
+раздаётся самим API на http://localhost:8000/app/. Старый Streamlit-UI (`ui/`) пока оставлен.
+
+Разбор возможностей и план развития — [docs/REVIEW.md](docs/REVIEW.md).
+Доступ на push в GitHub — [docs/GITHUB_ACCESS.md](docs/GITHUB_ACCESS.md).
 
 ## Структура
 
@@ -16,7 +20,8 @@ app/
   api/           # deps (DI), error_handlers, v1/endpoints — тонкие роутеры
 tests/           # pytest: доменные тесты + фикстуры для интеграционных (in-memory БД)
 alembic/         # миграции схемы (versions/ — сгенерированные ревизии)
-ui/              # Streamlit-приложение
+web/             # веб-интерфейс: index.html, styles.css, js/ (Vue 3 ESM, vendor/ — сама библиотека)
+ui/              # старое Streamlit-приложение (legacy)
 ```
 
 ## Локальный запуск
@@ -38,8 +43,10 @@ ui/              # Streamlit-приложение
    ```
 5. Демо-данные (при запущенном API): `python -m scripts.seed`
    (доступ: `demo / demo-pass-123`)
-6. Запуск API: `uvicorn app.main:app --reload` (docs: http://localhost:8000/docs)
-7. UI: `streamlit run ui_app.py` (откроется на http://localhost:8501)
+6. Запуск: `uvicorn app.main:app --reload`
+   - интерфейс: http://localhost:8000/app/ (корень `/` перенаправляет туда)
+   - API docs: http://localhost:8000/docs
+7. (legacy) Streamlit: `streamlit run ui_app.py` → http://localhost:8501
 
 ## Тесты
 
@@ -56,3 +63,18 @@ pytest            # testpaths=tests указан в pytest.ini
 
 Команды выполняются из корня проекта (рядом с `alembic.ini`). URL БД берётся
 из приложения (`app.core.config`), а не из `alembic.ini` — настраивать `.env` достаточно.
+
+## Веб-интерфейс (`web/`)
+
+Vue 3 подключён как ES-модуль из `web/vendor/` — без Node, npm и сборки: правите файл,
+обновляете страницу. Структура:
+
+```
+web/js/api.js          # fetch + JWT (localStorage), разбор ошибок FastAPI
+web/js/store.js        # общие справочники (продукты, рецепты), индексы, тосты
+web/js/components.js   # Modal, Picker (поиск-выбор), Macros, IngredientsEditor
+web/js/views/*.js      # экраны: planner (неделя/день), shopping, fridge, recipes, catalog, misc
+```
+
+Обновить Vue: скачать `https://cdn.jsdelivr.net/npm/vue@<версия>/dist/vue.esm-browser.prod.js`
+в `web/vendor/`.
