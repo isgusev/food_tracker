@@ -63,10 +63,11 @@ async def create_product(product: ProductCreate, service: ProductServiceDep):
 @router.get("/", response_model=list[ProductResponse])
 async def get_products(
     service: ProductServiceDep,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None, max_length=100, description="Поиск по названию или бренду"),
 ):
-    return await service.list_products(limit=limit, offset=offset)
+    return await service.list_products(limit=limit, offset=offset, q=q)
 
 
 @router.post(

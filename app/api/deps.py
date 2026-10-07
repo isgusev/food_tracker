@@ -97,6 +97,7 @@ def get_product_service(session: SessionDep) -> ProductService:
         brands=BrandRepository(session),
         manufacturers=ManufacturerRepository(session),
         variants=VariantRepository(session),
+        recipes=RecipeRepository(session),
     )
 
 

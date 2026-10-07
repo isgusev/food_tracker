@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
 from app.models.product import Brand, Product, ProductCategory, ProductManufacturer, ProductVariant
@@ -39,8 +39,18 @@ class ProductRepository(BaseRepository[Product]):
         stmt = self.full_query().where(Product.id == product_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
-    async def list_full(self, limit: int = 100, offset: int = 0) -> list[Product]:
-        stmt = self.full_query().limit(limit).offset(offset)
+    async def list_full(
+        self, limit: int = 100, offset: int = 0, q: str | None = None
+    ) -> list[Product]:
+        stmt = self.full_query()
+        if q and q.strip():
+            # search_name/brand.search_name хранятся в нижнем регистре (Python .lower()),
+            # поэтому сравниваем без SQL LOWER() — он не работает с кириллицей в SQLite
+            needle = f"%{q.strip().lower()}%"
+            stmt = stmt.join(Brand, Product.brand_id == Brand.id).where(
+                or_(Product.search_name.like(needle), Brand.search_name.like(needle))
+            )
+        stmt = stmt.order_by(Product.name, Product.id).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def find_duplicate(self, brand_id: int, search_name: str) -> Product | None:

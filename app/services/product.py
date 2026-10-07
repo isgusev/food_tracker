@@ -19,7 +19,9 @@ from app.repositories.product import (
     ProductRepository,
     VariantRepository,
 )
+from app.repositories.recipe import RecipeRepository
 from app.schemas.product import ProductCreate, ProductVariantCreate
+from app.services.recipe import retarget_recipes_to_variant
 
 
 class ProductService:
@@ -30,12 +32,14 @@ class ProductService:
         brands: BrandRepository,
         manufacturers: ManufacturerRepository,
         variants: VariantRepository,
+        recipes: RecipeRepository | None = None,
     ) -> None:
         self._products = products
         self._categories = categories
         self._brands = brands
         self._manufacturers = manufacturers
         self._variants = variants
+        self._recipes = recipes
 
     # --- КАТЕГОРИИ ---
     async def create_category(self, name: str):
@@ -116,8 +120,10 @@ class ProductService:
         await self._brands.flush()
         return brand.id
 
-    async def list_products(self, limit: int = 100, offset: int = 0) -> list[Product]:
-        return await self._products.list_full(limit=limit, offset=offset)
+    async def list_products(
+        self, limit: int = 100, offset: int = 0, q: str | None = None
+    ) -> list[Product]:
+        return await self._products.list_full(limit=limit, offset=offset, q=q)
 
     async def get_product(self, product_id: int) -> Product:
         product = await self._products.get_full(product_id)
@@ -173,7 +179,16 @@ class ProductService:
         )
         self._variants.add(variant)
         await self._variants.flush()
+        if current_active is not None:
+            await self._retarget(current_active.id, variant.id)
         return variant
+
+    async def _retarget(self, old_variant_id: int, new_variant_id: int) -> None:
+        """Шаблоны рецептов следуют за активной версией КБЖУ (кастрюли — нет)."""
+        if self._recipes is not None:
+            await retarget_recipes_to_variant(
+                self._recipes, self._variants, old_variant_id, new_variant_id
+            )
 
     @staticmethod
     def _same(variant: ProductVariant, data: ProductVariantCreate) -> bool:
@@ -206,4 +221,5 @@ class ProductService:
         current_active.is_active = False
         previous.is_active = True
         await self._variants.flush()
+        await self._retarget(current_active.id, previous.id)
         return previous

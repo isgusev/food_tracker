@@ -60,6 +60,13 @@ class RecipeRepository(BaseRepository[Recipe]):
         stmt = stmt.order_by(Recipe.id).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
+    async def list_using_variant(self, variant_id: int) -> list[Recipe]:
+        """Все шаблоны (любых пользователей), где в составе есть эта версия продукта."""
+        stmt = self.full_query().where(
+            Recipe.template_ingredients.any(RecipeTemplateIngredient.variant_id == variant_id)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
     async def name_exists(self, user_id: int, name: str) -> bool:
         """Есть ли у пользователя рецепт с таким названием (без учёта регистра).
 
