@@ -7,7 +7,13 @@ import secrets
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.household import Household, HouseholdMember
 from app.models.user import User
+from datetime import datetime, timedelta, timezone
+
+from app.core.config import get_settings
+from app.models.user import RegistrationInvite
 from app.repositories.household import HouseholdRepository, MemberRepository
+from app.repositories.user import InviteRepository
+from app.schemas.auth import InviteResponse
 from app.schemas.household import (
     HouseholdResponse,
     MemberCreate,
@@ -41,9 +47,15 @@ def _apply_targets(member: HouseholdMember, t: Targets) -> None:
 
 
 class HouseholdService:
-    def __init__(self, households: HouseholdRepository, members: MemberRepository) -> None:
+    def __init__(
+        self,
+        households: HouseholdRepository,
+        members: MemberRepository,
+        invites: InviteRepository | None = None,
+    ) -> None:
         self._households = households
         self._members = members
+        self._invites = invites
 
     async def ensure_member(self, user: User) -> HouseholdMember:
         """Член семьи текущего пользователя; при первом входе создаёт ему семью."""
@@ -150,3 +162,49 @@ class HouseholdService:
         await self._households.delete_by_id(source.id)
         me = await self._members.get_by_user(me.user_id)
         return await self.get(me)
+
+
+    # --- ПРИГЛАШЕНИЯ НА РЕГИСТРАЦИЮ ---
+    async def create_invite(self, me: HouseholdMember, into_household: bool) -> InviteResponse:
+        """Одноразовый код регистрации (живёт invite_ttl_days дней)."""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        while True:
+            code = new_invite_code(10)
+            if await self._invites.by_code(code) is None:
+                break
+        invite = RegistrationInvite(
+            code=code,
+            household_id=me.household_id if into_household else None,
+            created_by_user_id=me.user_id,
+            expires_at=now + timedelta(days=get_settings().invite_ttl_days),
+        )
+        self._invites.add(invite)
+        await self._invites.flush()
+        return self._invite_out(invite, None)
+
+    async def list_invites(self, me: HouseholdMember) -> list[InviteResponse]:
+        own = await self._invites.for_household(me.household_id) + await self._invites.created_by(me.user_id)
+        out = []
+        for inv in own:
+            used_by = None
+            if inv.used_by_user_id:
+                m = await self._members.get_by_user(inv.used_by_user_id)
+                used_by = m.name if m else "пользователь"
+            out.append(self._invite_out(inv, used_by))
+        return out
+
+    async def revoke_invite(self, me: HouseholdMember, invite_id: int) -> None:
+        inv = await self._invites.get(invite_id)
+        if inv is None or (inv.household_id != me.household_id and inv.created_by_user_id != me.user_id):
+            raise NotFoundError("Приглашение не найдено")
+        if inv.used_by_user_id:
+            raise ValidationError("Приглашение уже использовано")
+        await self._invites.delete(inv)
+
+    @staticmethod
+    def _invite_out(inv: RegistrationInvite, used_by: str | None) -> InviteResponse:
+        return InviteResponse(
+            id=inv.id, code=inv.code, into_household=inv.household_id is not None,
+            created_at=inv.created_at, expires_at=inv.expires_at,
+            used=inv.used_by_user_id is not None, used_by=used_by,
+        )

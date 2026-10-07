@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.deps import CurrentMemberDep, HouseholdServiceDep
+from app.schemas.auth import InviteCreate, InviteResponse
 from app.schemas.household import (
     HouseholdResponse,
     HouseholdUpdate,
@@ -51,3 +52,19 @@ async def regenerate_invite_code(me: CurrentMemberDep, service: HouseholdService
 async def join_household(payload: JoinRequest, me: CurrentMemberDep, service: HouseholdServiceDep):
     """Вступить в семью по коду; ваши рецепты, холодильник и план переезжают туда."""
     return await service.join(me, payload.invite_code)
+
+
+@router.post("/registration-invites", response_model=InviteResponse, status_code=201)
+async def create_registration_invite(payload: InviteCreate, me: CurrentMemberDep, service: HouseholdServiceDep):
+    """Одноразовый код регистрации в приложении (по умолчанию — сразу в вашу семью)."""
+    return await service.create_invite(me, payload.into_household)
+
+
+@router.get("/registration-invites", response_model=list[InviteResponse])
+async def list_registration_invites(me: CurrentMemberDep, service: HouseholdServiceDep):
+    return await service.list_invites(me)
+
+
+@router.delete("/registration-invites/{invite_id}", status_code=204)
+async def revoke_registration_invite(invite_id: int, me: CurrentMemberDep, service: HouseholdServiceDep):
+    await service.revoke_invite(me, invite_id)

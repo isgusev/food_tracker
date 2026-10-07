@@ -31,7 +31,7 @@ from app.models.stock import (
     StockLot,
     StockMovement,
 )
-from app.models.user import AuthGroup, User, UserGroup
+from app.models.user import AuthGroup, RegistrationInvite, User, UserGroup
 
 __all__ = [
     "Base",
@@ -53,6 +53,7 @@ __all__ = [
     "RecipeCookingLog",
     "RecipeTemplateIngredient",
     "User",
+    "RegistrationInvite",
     "HouseholdProduct",
     "ShoppingLine",
     "ShoppingList",

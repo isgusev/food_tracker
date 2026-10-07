@@ -45,3 +45,29 @@ class UserGroup(Base):
         Integer, ForeignKey("auth_groups.id", ondelete="CASCADE"), primary_key=True
     )
     granted_at = Column(DateTime, server_default=func.now())
+
+
+class RegistrationInvite(Base):
+    """Одноразовое приглашение на регистрацию.
+
+    Регистрация в приложении — только по коду; после регистрации код гаснет.
+    Если приглашение выдано из семьи (household_id), новый пользователь сразу
+    попадает в эту семью.
+    """
+
+    __tablename__ = "registration_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(16), unique=True, nullable=False)
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)
+    used_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    used_at = Column(DateTime, nullable=True)

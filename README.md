@@ -10,6 +10,7 @@ Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, бе�
 
 Разбор возможностей и план развития — [docs/REVIEW.md](docs/REVIEW.md).
 Доступ на push в GitHub — [docs/GITHUB_ACCESS.md](docs/GITHUB_ACCESS.md).
+Развёртывание на Amvera (тестовый и боевой стенды) — [docs/DEPLOY_AMVERA.md](docs/DEPLOY_AMVERA.md).
 
 ## Структура
 

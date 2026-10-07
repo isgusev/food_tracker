@@ -28,7 +28,7 @@ from app.repositories.recipe import (
     RecipeCategoryRepository,
     RecipeRepository,
 )
-from app.repositories.user import UserRepository
+from app.repositories.user import InviteRepository, UserRepository
 from app.services.auth import AuthService
 from app.services.household import HouseholdService
 from app.services.plan import PlanService
@@ -46,7 +46,11 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def get_auth_service(session: SessionDep) -> AuthService:
-    return AuthService(users=UserRepository(session))
+    return AuthService(
+        users=UserRepository(session),
+        invites=InviteRepository(session),
+        members=MemberRepository(session),
+    )
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
@@ -98,7 +102,9 @@ AdminUserDep = Annotated[User, Depends(require_admin)]
 # --- СЕМЬЯ ---
 def get_household_service(session: SessionDep) -> HouseholdService:
     return HouseholdService(
-        households=HouseholdRepository(session), members=MemberRepository(session)
+        households=HouseholdRepository(session),
+        members=MemberRepository(session),
+        invites=InviteRepository(session),
     )
 
 

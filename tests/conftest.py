@@ -13,6 +13,9 @@ import os
 os.environ["ENVIRONMENT"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["POSTGRES_DB"] = "test_db"
+# Большинство тестов регистрирует пользователей свободно; режим приглашений
+# проверяется отдельно (tests/test_deploy.py) подменой настроек
+os.environ["REGISTRATION_MODE"] = "open"
 
 import pytest
 import pytest_asyncio
@@ -50,6 +53,16 @@ async def session_factory(engine):
     set_session_factory(factory)
     yield factory
     set_session_factory(None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_limiter():
+    """Ограничитель попыток живёт в памяти процесса — сбрасываем между тестами."""
+    from app.core.ratelimit import limiter
+
+    limiter._fails.clear()
+    yield
+    limiter._fails.clear()
 
 
 @pytest_asyncio.fixture()

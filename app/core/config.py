@@ -49,8 +49,25 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # --- Регистрация ---
+    # "invite" — только по одноразовому коду приглашения (для хостинга);
+    # "open" — свободная регистрация (локальная разработка, тесты)
+    registration_mode: str = "invite"
+    # Код для самой первой регистрации на пустой базе (пока нет ни одного
+    # пользователя) — задаётся секретом на хостинге, дальше не работает
+    first_invite_code: str | None = None
+    invite_ttl_days: int = 7
+
+    # --- Защита входа: не больше N неудачных попыток за окно (минуты) ---
+    login_max_failures: int = 10
+    login_window_minutes: int = 15
+
     def validate_runtime(self) -> None:
         """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""
+        if self.registration_mode not in ("invite", "open"):
+            raise RuntimeError("REGISTRATION_MODE должен быть invite или open")
+        if self.is_production and self.registration_mode != "invite":
+            raise RuntimeError("В production регистрация только по приглашениям (REGISTRATION_MODE=invite)")
         if self.is_production and self.secret_key == "CHANGE_ME_IN_PRODUCTION":
             raise RuntimeError(
                 "SECRET_KEY не задан: сгенерируйте его командой "

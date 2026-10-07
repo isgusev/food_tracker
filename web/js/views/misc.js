@@ -1,5 +1,5 @@
 // Вход/регистрация и страница «Семья» (члены семьи, цели КБЖУ, приглашение, тема).
-import { ref, reactive, watch } from "../../vendor/vue.esm-browser.prod.js";
+import { ref, reactive, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { state, loadHousehold, loadRecipes, toast } from "../store.js";
 import { fmt, local, n } from "../util.js";
@@ -7,19 +7,24 @@ import { fmt, local, n } from "../util.js";
 export const LoginView = {
   emits: ["done"],
   setup(_, { emit }) {
-    const mode = ref("login");
-    const f = ref({ identifier: "", username: "", email: "", password: "" });
+    // Ссылка-приглашение: …/app/#/register?code=XXXX — сразу открываем регистрацию с кодом
+    const fromLink = new URLSearchParams(location.hash.split("?")[1] || "").get("code") || "";
+    const mode = ref(fromLink ? "register" : "login");
+    const f = ref({ identifier: "", username: "", email: "", password: "", code: fromLink });
+    const cfg = ref({ registration_mode: "open", needs_first_user: false });
+    onMounted(() => api.get("/auth/config").then((c) => { cfg.value = c; }).catch(() => {}));
     const busy = ref(false);
     const error = ref("");
     async function submit() {
       error.value = ""; busy.value = true;
       try {
         if (mode.value === "login") await api.login(f.value.identifier, f.value.password);
-        else await api.register(f.value.username, f.value.email, f.value.password);
+        else await api.register(f.value.username, f.value.email, f.value.password, f.value.code.trim());
+        if (fromLink) history.replaceState(null, "", "#/plan");
         emit("done");
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    return { mode, f, busy, error, submit };
+    return { mode, f, cfg, busy, error, submit };
   },
   template: `
     <div class="login-wrap">
@@ -36,7 +41,12 @@ export const LoginView = {
         <template v-else>
           <label class="field"><span>Имя пользователя</span><input v-model="f.username" autocomplete="username"></label>
           <label class="field"><span>Email</span><input type="email" v-model="f.email" autocomplete="email"></label>
-          <div class="tiny muted">После регистрации вы попадёте в свою семью. Чтобы присоединиться к уже существующей — введите её код в разделе «Семья».</div>
+          <label class="field" v-if="cfg.registration_mode === 'invite'"><span>Код приглашения</span>
+            <input v-model="f.code" autocomplete="off" style="text-transform: uppercase; letter-spacing: .08em">
+            <span class="tiny" v-if="cfg.needs_first_user">Первая регистрация на сервере — код из переменной FIRST_INVITE_CODE.</span>
+            <span class="tiny" v-else>Регистрация только по приглашению: код выдаёт тот, кто уже пользуется приложением.</span>
+          </label>
+          <div class="tiny muted" v-else>После регистрации вы попадёте в свою семью. Чтобы присоединиться к уже существующей — введите её код в разделе «Семья».</div>
         </template>
         <label class="field"><span>Пароль</span>
           <input type="password" v-model="f.password" :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"></label>
@@ -125,6 +135,27 @@ export const FamilyView = {
     const theme = ref(local.get("ft.theme", "auto"));
     watch(() => state.household?.name, (v) => { hhName.value = v || ""; });
 
+    // Приглашения на регистрацию в приложении (одноразовые коды)
+    const invites = ref([]);
+    const intoFamily = ref(true);
+    const loadInvites = () => api.get("/household/registration-invites").then((r) => { invites.value = r; }).catch(() => {});
+    onMounted(loadInvites);
+    const inviteLink = (code) => `${location.origin}${location.pathname}#/register?code=${code}`;
+    async function createInvite() {
+      try {
+        const inv = await api.post("/household/registration-invites", { into_household: intoFamily.value });
+        await loadInvites();
+        try { await navigator.clipboard.writeText(inviteLink(inv.code)); toast("Ссылка-приглашение скопирована"); }
+        catch { toast("Приглашение создано"); }
+      } catch (e) { toast(e.message, "error"); }
+    }
+    async function revokeInvite(inv) {
+      try { await api.del(`/household/registration-invites/${inv.id}`); await loadInvites(); } catch (e) { toast(e.message, "error"); }
+    }
+    async function copyLink(inv) {
+      try { await navigator.clipboard.writeText(inviteLink(inv.code)); toast("Ссылка скопирована"); } catch { toast(inv.code); }
+    }
+
     async function run(fn, msg) {
       busy.value = true;
       try { state.household = await fn(); if (msg) toast(msg); }
@@ -161,7 +192,8 @@ export const FamilyView = {
       if (v === "auto") document.documentElement.removeAttribute("data-theme");
       else document.documentElement.setAttribute("data-theme", v);
     }
-    return { state, hhName, newMember, joinCode, busy, theme, rename, newCode, copyCode, addMember, join, setTheme, fmt };
+    return { state, hhName, newMember, joinCode, busy, theme, rename, newCode, copyCode, addMember, join, setTheme, fmt,
+      invites, intoFamily, createInvite, revokeInvite, copyLink, inviteLink };
   },
   template: `
     <div class="stack" style="max-width: 760px" v-if="state.household">
@@ -196,6 +228,31 @@ export const FamilyView = {
           <button class="primary sm" :disabled="busy || !newMember.name.trim()" @click="addMember">Добавить</button>
         </div>
         <div class="tiny muted">Ребёнок, бабушка — все, кому планируете порции. Остальные цели задайте в карточке после добавления.</div>
+      </div>
+
+      <div class="card stack">
+        <h3>Пригласить в приложение</h3>
+        <div class="row">
+          <label class="row small" style="gap: 6px; cursor: pointer"><input type="checkbox" v-model="intoFamily"> сразу в нашу семью</label>
+          <button class="sm primary" @click="createInvite">Создать приглашение</button>
+        </div>
+        <div class="tiny muted">Регистрация только по приглашению. Код одноразовый, действует 7 дней; ссылка копируется сразу — отправьте её в мессенджер.</div>
+        <div v-if="invites.length" class="card flush">
+          <div v-for="inv in invites" :key="inv.id" class="list-item">
+            <div class="grow">
+              <b class="num" style="letter-spacing: .08em">{{ inv.code }}</b>
+              <span class="badge" style="margin-left: 6px">{{ inv.into_household ? 'в семью' : 'своя семья' }}</span>
+              <div class="tiny muted">
+                <template v-if="inv.used">использовано: {{ inv.used_by }}</template>
+                <template v-else>действует до {{ new Date(inv.expires_at).toLocaleDateString('ru-RU') }}</template>
+              </div>
+            </div>
+            <template v-if="!inv.used">
+              <button class="sm" @click="copyLink(inv)">Ссылка</button>
+              <button class="sm ghost" @click="revokeInvite(inv)" title="Отозвать">✕</button>
+            </template>
+          </div>
+        </div>
       </div>
 
       <div class="card stack">

@@ -96,8 +96,8 @@ export const api = {
     const r = await request("POST", "/auth/login", { form: { identifier, password } });
     auth.set(r.access_token);
   },
-  async register(username, email, password) {
-    await request("POST", "/auth/register", { json: { username, email, password } });
+  async register(username, email, password, invite_code) {
+    await request("POST", "/auth/register", { json: { username, email, password, invite_code: invite_code || null } });
     await api.login(username, password);
   },
   me: () => request("GET", "/auth/me"),

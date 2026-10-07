@@ -1,0 +1,21 @@
+# Образ для хостинга (Amvera или любой Docker): API + веб-интерфейс одним процессом.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY alembic.ini .
+COPY alembic ./alembic
+COPY app ./app
+COPY web ./web
+COPY scripts ./scripts
+
+# Переменные окружения (БД, SECRET_KEY…) задаются на хостинге, при сборке их нет
+EXPOSE 8000
+CMD ["sh", "scripts/start.sh"]

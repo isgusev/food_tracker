@@ -1,0 +1,13 @@
+# Конфигурация Amvera: сборка по Dockerfile, приложение слушает порт 8000.
+# Переменные и секреты (POSTGRES_*, SECRET_KEY, FIRST_INVITE_CODE…) задаются
+# в разделе «Переменные» проекта — см. docs/DEPLOY_AMVERA.md
+meta:
+  environment: docker
+  toolchain:
+    name: docker
+
+build:
+  dockerfile: Dockerfile
+
+run:
+  containerPort: 8000

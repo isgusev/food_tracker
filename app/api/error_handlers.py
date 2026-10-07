@@ -10,6 +10,7 @@ from app.core.exceptions import (
     DomainError,
     ForbiddenError,
     NotFoundError,
+    TooManyRequestsError,
     UnauthorizedError,
     ValidationError,
 )
@@ -39,6 +40,14 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ValidationError)
     async def _validation(request: Request, exc: ValidationError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(TooManyRequestsError)
+    async def _too_many(request: Request, exc: TooManyRequestsError) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": str(exc)},
+            headers={"Retry-After": str(exc.retry_after)},
+        )
 
     @app.exception_handler(DomainError)
     async def _domain(request: Request, exc: DomainError) -> JSONResponse:
