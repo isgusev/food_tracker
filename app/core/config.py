@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
 
     # --- CORS ---
-    cors_origins: list[str] = ["http://localhost:8501", "http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
     def validate_runtime(self) -> None:
         """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""

@@ -2,7 +2,7 @@
 
 Трекер питания: справочник продуктов (с версиями КБЖУ), рецепты/готовки, дневник питания.
 Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, без сборки),
-раздаётся самим API на http://localhost:8000/app/. Старый Streamlit-UI (`ui/`) пока оставлен.
+раздаётся самим API на http://localhost:8000/app/.
 
 Разбор возможностей и план развития — [docs/REVIEW.md](docs/REVIEW.md).
 Доступ на push в GitHub — [docs/GITHUB_ACCESS.md](docs/GITHUB_ACCESS.md).
@@ -21,15 +21,13 @@ app/
 tests/           # pytest: доменные тесты + фикстуры для интеграционных (in-memory БД)
 alembic/         # миграции схемы (versions/ — сгенерированные ревизии)
 web/             # веб-интерфейс: index.html, styles.css, js/ (Vue 3 ESM, vendor/ — сама библиотека)
-ui/              # старое Streamlit-приложение (legacy)
 ```
 
 ## Локальный запуск
 
 1. Зависимости:
-   > ⚠️ Требуется **Python 3.12 или 3.13**. Python 3.9 не поддерживается (streamlit>=1.36),
-> а Python 3.14 пока не имеет готовых бинарных пакетов pydantic-core/sqlalchemy —
-> установка завершится ошибкой сборки из исходников.
+   > ⚠️ Требуется **Python 3.12 или 3.13** (так же проверяет CI). Python 3.14 пока не имеет
+> готовых бинарных пакетов pydantic-core/sqlalchemy — установка завершится ошибкой сборки.
 
 ```bash
    python3.12 -m venv .venv && source .venv/bin/activate
@@ -46,7 +44,6 @@ ui/              # старое Streamlit-приложение (legacy)
 6. Запуск: `uvicorn app.main:app --reload`
    - интерфейс: http://localhost:8000/app/ (корень `/` перенаправляет туда)
    - API docs: http://localhost:8000/docs
-7. (legacy) Streamlit: `streamlit run ui_app.py` → http://localhost:8501
 
 ## Тесты
 
