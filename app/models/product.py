@@ -50,11 +50,22 @@ class Product(Base):
     name = Column(String(255), nullable=False)
     search_name = Column(String(255), nullable=False)
     is_verified = Column(Boolean, default=False)
+    # Единица учёта запасов и покупок: "g" | "ml" | "pcs". КБЖУ и рецепты — всегда
+    # в граммах; для штучного товара граммы переводятся через вес одной штуки,
+    # для жидкостей считаем 1 мл ≈ 1 г.
+    base_unit = Column(String(4), nullable=False, default="g", server_default="g")
+    piece_weight_g = Column(Numeric(7, 1), nullable=True)
 
     category = relationship("ProductCategory", back_populates="products")
     brand = relationship("Brand", back_populates="products")
     manufacturers = relationship(
         "ProductManufacturer", back_populates="product", cascade="all, delete-orphan"
+    )
+    packages = relationship(
+        "ProductPackage",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductPackage.amount",
     )
 
     __table_args__ = (
@@ -107,4 +118,23 @@ class ProductVariant(Base):
 
     __table_args__ = (
         UniqueConstraint("manufacturer_id", "version", name="_manufacturer_version_uc"),
+    )
+
+
+class ProductPackage(Base):
+    """Типичная упаковка продукта: «творог 300 г», «яйца 10 шт» (в базовой единице)."""
+
+    __tablename__ = "product_packages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(
+        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    amount = Column(Numeric(9, 1), nullable=False)
+    name = Column(String(50), nullable=True)
+
+    product = relationship("Product", back_populates="packages")
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "amount", name="_product_package_amount_uc"),
     )

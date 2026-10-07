@@ -3,9 +3,16 @@ from __future__ import annotations
 
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
-from app.models.product import Brand, Product, ProductCategory, ProductManufacturer, ProductVariant
+from app.models.product import (
+    Brand,
+    Product,
+    ProductCategory,
+    ProductManufacturer,
+    ProductPackage,
+    ProductVariant,
+)
 from app.repositories.base import BaseRepository
 
 
@@ -13,8 +20,13 @@ class ProductCategoryRepository(BaseRepository[ProductCategory]):
     model = ProductCategory
 
     async def get_by_name_ilike(self, name: str) -> ProductCategory | None:
-        stmt = select(ProductCategory).where(ProductCategory.name.ilike(name))
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        """Без учёта регистра — сравнением в Python: SQL LOWER/ILIKE не понимает
+        кириллицу в SQLite, а collation PostgreSQL может отличаться от .lower()."""
+        target = name.strip().lower()
+        for category in (await self._session.execute(select(ProductCategory))).scalars().all():
+            if category.name.strip().lower() == target:
+                return category
+        return None
 
 
 class BrandRepository(BaseRepository[Brand]):
@@ -33,10 +45,19 @@ class ProductRepository(BaseRepository[Product]):
         return select(Product).options(
             joinedload(Product.brand),
             joinedload(Product.manufacturers).joinedload(ProductManufacturer.variants),
+            selectinload(Product.packages),
         )
 
+    async def same_item(self, search_name: str) -> list[Product]:
+        """Все продукты одного товара (одно название, разные бренды)."""
+        stmt = select(Product).where(Product.search_name == search_name)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def get_package(self, package_id: int) -> ProductPackage | None:
+        return await self._session.get(ProductPackage, package_id)
+
     async def get_full(self, product_id: int) -> Product | None:
-        stmt = self.full_query().where(Product.id == product_id)
+        stmt = self.full_query().where(Product.id == product_id).execution_options(populate_existing=True)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
     async def list_full(

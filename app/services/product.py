@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import Nutrients, nutrients_are_inconsistent
-from app.models.product import Brand, Product, ProductManufacturer, ProductVariant
+from app.models.product import Brand, Product, ProductManufacturer, ProductPackage, ProductVariant
 from app.repositories.product import (
     BrandRepository,
     ManufacturerRepository,
@@ -20,7 +20,7 @@ from app.repositories.product import (
     VariantRepository,
 )
 from app.repositories.recipe import RecipeRepository
-from app.schemas.product import ProductCreate, ProductVariantCreate
+from app.schemas.product import PackageCreate, ProductCreate, ProductVariantCreate, UnitUpdate
 from app.services.recipe import retarget_recipes_to_variant
 
 
@@ -130,6 +130,36 @@ class ProductService:
         if product is None:
             raise NotFoundError("Продукт не найден")
         return product
+
+    # --- ЕДИНИЦЫ И УПАКОВКИ ---
+    async def set_unit(self, product_id: int, data: UnitUpdate) -> Product:
+        """Единица — свойство товара: меняется у всех брендов с тем же названием,
+        иначе остатки разных брендов одного товара нельзя было бы сложить."""
+        product = await self.get_product(product_id)
+        if data.base_unit == "pcs" and not data.piece_weight_g:
+            raise ValidationError("Для штучного товара укажите вес одной штуки, г")
+        for p in await self._products.same_item(product.search_name):
+            p.base_unit = data.base_unit
+            p.piece_weight_g = data.piece_weight_g if data.base_unit == "pcs" else None
+        await self._products.flush()
+        return await self.get_product(product_id)
+
+    async def add_package(self, product_id: int, data: PackageCreate) -> Product:
+        product = await self.get_product(product_id)
+        if any(Decimal(str(p.amount)) == data.amount for p in product.packages):
+            raise ConflictError("Такая упаковка уже есть")
+        product.packages.append(ProductPackage(amount=data.amount, name=data.name))
+        await self._products.flush()
+        return await self.get_product(product_id)
+
+    async def delete_package(self, package_id: int) -> Product:
+        package = await self._products.get_package(package_id)
+        if package is None:
+            raise NotFoundError("Упаковка не найдена")
+        product_id = package.product_id
+        await self._products.delete(package)
+        await self._products.flush()
+        return await self.get_product(product_id)
 
     # --- ВЕРСИИ КБЖУ ---
     async def get_or_create_manufacturer(

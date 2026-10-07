@@ -54,7 +54,7 @@ async def get_item(client, h, item_id, date_day=TODAY) -> dict:
 async def shopping(client, h, start=TODAY, end=None) -> dict[int, float]:
     r = await client.get("/api/v1/shopping-list", params={"start_date": start, "end_date": end or start}, headers=h)
     assert r.status_code == 200, r.text
-    return {i["variant_id"]: float(i["weight_g"]) for i in r.json()["items"]}
+    return {i["variant_id"]: float(i["to_buy"]) for i in r.json()["items"]}
 
 
 async def pot_remaining(client, h, pot_id) -> float:

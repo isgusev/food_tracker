@@ -65,3 +65,20 @@ def test_nutrients_are_inconsistent(cal, p, f, c, expected):
     n = Nutrients(calories=cal, proteins=p, fats=f, carbs=c)
     assert nutrients_are_inconsistent(n) is expected
 
+
+
+def test_units_and_packages():
+    from app.domain import base_to_grams, grams_to_base, pick_packages
+
+    # штучное: 3 яйца по 55 г
+    assert grams_to_base(Decimal("165"), "pcs", Decimal("55")) == Decimal("3")
+    assert base_to_grams(Decimal("2"), "pcs", Decimal("55")) == Decimal("110")
+    # без веса штуки — остаёмся в граммах
+    assert grams_to_base(Decimal("165"), "pcs", None) == Decimal("165")
+    # 540 г творога: 2×300 (излишек 60) лучше, чем 3×200 (излишек 60, но больше пачек)
+    assert pick_packages(Decimal("540"), [Decimal("200"), Decimal("300")], "g") == (Decimal("300"), 2)
+    # 350 г: 1×400 (50) лучше 2×200 (50, больше пачек)? равный излишек → меньше упаковок
+    assert pick_packages(Decimal("350"), [Decimal("200"), Decimal("400")], "g") == (Decimal("400"), 1)
+    # штучное без упаковок — до целых штук
+    assert pick_packages(Decimal("2.3"), [], "pcs") == (Decimal("1"), 3)
+    assert pick_packages(Decimal("120"), [], "g") == (None, None)

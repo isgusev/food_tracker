@@ -119,16 +119,3 @@ class PotSourceStatus(BaseModel):
     available_g: Decimal = Decimal("0")
     planned_g: Decimal = Decimal("0")
     enough_for_portion: Optional[bool] = None
-
-
-class ShoppingListItem(BaseModel):
-    variant_id: int
-    product_name: str
-    category_name: Optional[str] = None
-    weight_g: Decimal
-
-
-class ShoppingListResponse(BaseModel):
-    start_date: date_type
-    end_date: date_type
-    items: list[ShoppingListItem]

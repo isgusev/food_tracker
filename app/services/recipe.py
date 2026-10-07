@@ -22,6 +22,7 @@ from app.models.recipe import (
     RecipeTemplateIngredient,
 )
 from app.repositories.plan import PlanRepository
+from app.services.stock import StockService
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import (
     CookingLogRepository,
@@ -106,6 +107,13 @@ async def retarget_recipes_to_variant(
     return len(affected)
 
 
+def _grams_by_variant(lines) -> dict[int, Decimal]:
+    out: dict[int, Decimal] = {}
+    for line in lines:
+        out[line.variant_id] = out.get(line.variant_id, ZERO) + Decimal(str(line.weight_g))
+    return out
+
+
 class RecipeService:
     def __init__(
         self,
@@ -114,12 +122,14 @@ class RecipeService:
         cooking_logs: CookingLogRepository,
         variants: VariantRepository,
         plan: PlanRepository,
+        stock: StockService,
     ) -> None:
         self._recipes = recipes
         self._categories = categories
         self._cooking_logs = cooking_logs
         self._variants = variants
         self._plan = plan
+        self._stock = stock
 
     # --- КАТЕГОРИИ РЕЦЕПТОВ ---
     async def create_category(self, name: str) -> RecipeCategory:
@@ -287,6 +297,8 @@ class RecipeService:
 
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
+        # фактический состав уходит из запасов
+        await self._stock.consume_pot(full, user_id, today)
         return full
 
     async def list_pots(
@@ -356,6 +368,8 @@ class RecipeService:
                     )
             # несъеденное — снова «надо приготовить», съеденное остаётся без холодильника
             await self._plan.detach_from_pot(pot.id, keep_eaten_link=False)
+        # кастрюлю удаляют как ошибочную — продукты возвращаются в запасы
+        await self._stock.revert(pot_id=pot.id)
         await self._cooking_logs.flush()
         await self._cooking_logs.delete(pot)
         await self._cooking_logs.flush()
@@ -453,6 +467,8 @@ class RecipeService:
         Остаток в кастрюле остаётся прежним (вес еды мы не меняем), но его
         пищевая ценность пересчитывается по новому составу.
         """
+        # запасы: спишем/вернём только разницу между старым и новым составом
+        old_grams = _grams_by_variant(pot.actual_ingredients)
         total_raw, totals = await _sum_ingredients(data.ingredients, self._variants)
         per_100 = per_100g_from_totals(totals, pot.total_cooked_weight)
 
@@ -469,4 +485,7 @@ class RecipeService:
         await self._cooking_logs.flush()
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
+        await self._stock.adjust_pot(
+            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, date.today()
+        )
         return full

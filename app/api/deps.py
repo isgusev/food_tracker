@@ -15,6 +15,7 @@ from app.models.household import HouseholdMember
 from app.models.user import User
 from app.repositories.household import HouseholdRepository, MemberRepository
 from app.repositories.plan import PlanRepository
+from app.repositories.stock import ShoppingListRepository, StockRepository
 from app.repositories.product import (
     BrandRepository,
     ManufacturerRepository,
@@ -31,6 +32,7 @@ from app.repositories.user import UserRepository
 from app.services.auth import AuthService
 from app.services.household import HouseholdService
 from app.services.plan import PlanService
+from app.services.stock import StockService
 from app.services.product import ProductService
 from app.services.recipe import RecipeService
 
@@ -125,6 +127,15 @@ def get_product_service(session: SessionDep) -> ProductService:
     )
 
 
+def get_stock_service(session: SessionDep) -> StockService:
+    return StockService(
+        stock=StockRepository(session),
+        lists=ShoppingListRepository(session),
+        plan=PlanRepository(session),
+        recipes=RecipeRepository(session),
+    )
+
+
 def get_recipe_service(session: SessionDep) -> RecipeService:
     return RecipeService(
         recipes=RecipeRepository(session),
@@ -132,6 +143,7 @@ def get_recipe_service(session: SessionDep) -> RecipeService:
         cooking_logs=CookingLogRepository(session),
         variants=VariantRepository(session),
         plan=PlanRepository(session),
+        stock=get_stock_service(session),
     )
 
 
@@ -142,9 +154,11 @@ def get_plan_service(session: SessionDep) -> PlanService:
         cooking_logs=CookingLogRepository(session),
         variants=VariantRepository(session),
         members=MemberRepository(session),
+        stock=get_stock_service(session),
     )
 
 
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
 PlanServiceDep = Annotated[PlanService, Depends(get_plan_service)]
+StockServiceDep = Annotated[StockService, Depends(get_stock_service)]

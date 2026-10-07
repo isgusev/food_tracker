@@ -5,8 +5,8 @@
 - личные КБЖУ = порции конкретного члена семьи (гости — без личного учёта);
 - кастрюля резервирует несъеденные порции привязанных блюд и списывается
   порциями при «съедено»;
-- список покупок = несъеденные порции блюд без кастрюли (рецепт раскладывается
-  на ингредиенты, готовый продукт покупается как есть).
+- «съел» готовый продукт списывает порцию из запасов (сырьё блюд списывается
+  при готовке — см. StockService); список покупок считает StockService.
 """
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ from app.schemas.plan import (
     PortionIn,
     PortionResponse,
     PotSourceStatus,
-    ShoppingListItem,
 )
+from app.services.stock import StockService
 
 ZERO = Decimal("0")
 
@@ -68,13 +68,6 @@ def display_name(variant, variant_id: int) -> str:
     return f"{product.name} ({brand_name} / {m_name})".replace("( / )", "").strip()
 
 
-def category_name(variant) -> str | None:
-    manufacturer = variant.manufacturer if variant is not None else None
-    product = manufacturer.product if manufacturer else None
-    category = product.category if product else None
-    return category.name if category else None
-
-
 class PlanService:
     def __init__(
         self,
@@ -83,12 +76,14 @@ class PlanService:
         cooking_logs: CookingLogRepository,
         variants: VariantRepository,
         members: MemberRepository,
+        stock: StockService,
     ) -> None:
         self._plan = plan
         self._recipes = recipes
         self._cooking_logs = cooking_logs
         self._variants = variants
         self._members = members
+        self._stock = stock
 
     # ------------------------------------------------------------------ чтение
     async def list_range(self, household_id: int, start: date, end: date) -> list[MealItemResponse]:
@@ -244,6 +239,7 @@ class PlanService:
         """Удалить блюдо: съеденное из кастрюли возвращается в неё."""
         for p in item.portions:
             await self._return_to_pot(p)
+            await self._stock.revert(portion_id=p.id)
         await self._plan.delete(item)
         await self._plan.flush()
 
@@ -272,6 +268,9 @@ class PlanService:
                 self._set_remaining(pot, remainder)
         portion.weight_g = weight
         await self._plan.flush()
+        if portion.is_eaten and item.variant_id is not None:
+            await self._stock.revert(portion_id=portion.id)
+            await self._stock.consume_portion(item, portion, date.today())
         await self._release(portion.eaten_from_pot_id)
         await self._release(item.cooking_log_id)
         return await self.response(item.id)
@@ -282,6 +281,7 @@ class PlanService:
             await self.delete_item(item)
             return None
         await self._return_to_pot(portion)
+        await self._stock.revert(portion_id=portion.id)
         item.portions.remove(portion)
         await self._plan.flush()
         return await self.response(item.id)
@@ -327,6 +327,8 @@ class PlanService:
             portion.eaten_at = now
             portion.eaten_from_pot_id = pot.id if pot is not None else None
         await self._plan.flush()
+        for portion, _ in todo:
+            await self._stock.consume_portion(item, portion, date.today())
         if pot is not None:
             # съели больше плана — поздним блюдам может уже не хватить
             await self._release(pot.id)
@@ -336,6 +338,7 @@ class PlanService:
         if not portion.is_eaten:
             raise ValidationError("Порция ещё не отмечена как съеденная")
         await self._return_to_pot(portion)
+        await self._stock.revert(portion_id=portion.id)
         portion.is_eaten = False
         portion.eaten_at = None
         portion.eaten_from_pot_id = None
@@ -386,48 +389,3 @@ class PlanService:
             planned_g=booked,
             enough_for_portion=(available - booked >= portion_g) if portion_g is not None else None,
         )
-
-    # ---------------------------------------------------------------- покупки
-    async def shopping_list(self, household_id: int, start: date, end: date) -> list[ShoppingListItem]:
-        """Несъеденные порции блюд без кастрюли: рецепты → ингредиенты, продукты — как есть."""
-        if start > end:
-            raise ValidationError("Дата окончания не может быть раньше даты начала")
-        items = await self._plan.list_in_range(household_id, start, end, only_unbought=True)
-        cart: dict[int, dict] = {}
-
-        def put(variant_id: int, variant, grams: Decimal) -> None:
-            entry = cart.setdefault(
-                variant_id,
-                {"name": display_name(variant, variant_id), "category": category_name(variant), "weight": ZERO},
-            )
-            entry["weight"] += grams
-
-        recipes_cache: dict[int, object] = {}
-        for item in items:
-            need = remaining_weight(item)
-            if need <= 0:
-                continue
-            if item.variant_id is not None:
-                put(item.variant_id, item.variant, need)
-                continue
-            if item.recipe_id is None:
-                continue
-            if item.recipe_id not in recipes_cache:
-                recipes_cache[item.recipe_id] = await self._recipes.get_full(item.recipe_id)
-            recipe = recipes_cache[item.recipe_id]
-            if recipe is None or _d(recipe.estimated_cooked_weight) <= 0:
-                continue
-            # доля кастрюли: 600 г готового из выхода 1200 г → половина закладки
-            factor = need / _d(recipe.estimated_cooked_weight)
-            for ing in recipe.template_ingredients:
-                put(ing.variant_id, ing.variant, _d(ing.weight_g) * factor)
-
-        return [
-            ShoppingListItem(
-                variant_id=vid,
-                product_name=e["name"],
-                category_name=e["category"],
-                weight_g=quantize(e["weight"]),
-            )
-            for vid, e in sorted(cart.items(), key=lambda kv: (kv[1]["category"] or "", kv[1]["name"]))
-        ]

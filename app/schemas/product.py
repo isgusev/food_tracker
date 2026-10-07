@@ -88,13 +88,41 @@ class ProductCreate(ORMModel):
         return self
 
 
+class PackageResponse(ORMModel):
+    id: int
+    amount: Decimal
+    name: Optional[str] = None
+
+
 class ProductResponse(ORMModel):
     id: int
     category_id: int
     name: str
     brand: BrandResponse
     is_verified: bool
+    base_unit: str = "g"
+    piece_weight_g: Optional[Decimal] = None
+    packages: list[PackageResponse] = []
     manufacturers: list[ManufacturerResponse] = []
+
+
+class UnitUpdate(BaseModel):
+    """Единица товара (применяется ко всем брендам с тем же названием)."""
+
+    base_unit: str
+    piece_weight_g: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999.9"))
+
+    @field_validator("base_unit")
+    @classmethod
+    def _unit(cls, v: str) -> str:
+        if v not in ("g", "ml", "pcs"):
+            raise ValueError("base_unit: g, ml или pcs")
+        return v
+
+
+class PackageCreate(BaseModel):
+    amount: Decimal = Field(gt=0, le=Decimal("9999999.9"))
+    name: Optional[str] = Field(default=None, max_length=50)
 
 
 class CategoryCreate(ORMModel):

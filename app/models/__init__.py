@@ -14,6 +14,7 @@ from app.models.product import (
     Product,
     ProductCategory,
     ProductManufacturer,
+    ProductPackage,
     ProductVariant,
 )
 from app.models.recipe import (
@@ -22,6 +23,13 @@ from app.models.recipe import (
     RecipeCategory,
     RecipeCookingLog,
     RecipeTemplateIngredient,
+)
+from app.models.stock import (
+    HouseholdProduct,
+    ShoppingLine,
+    ShoppingList,
+    StockLot,
+    StockMovement,
 )
 from app.models.user import AuthGroup, User, UserGroup
 
@@ -36,6 +44,7 @@ __all__ = [
     "Product",
     "ProductCategory",
     "ProductManufacturer",
+    "ProductPackage",
     "ProductVariant",
     "Recipe",
     "RecipeActualIngredient",
@@ -43,5 +52,10 @@ __all__ = [
     "RecipeCookingLog",
     "RecipeTemplateIngredient",
     "User",
+    "HouseholdProduct",
+    "ShoppingLine",
+    "ShoppingList",
+    "StockLot",
+    "StockMovement",
     "UserGroup",
 ]

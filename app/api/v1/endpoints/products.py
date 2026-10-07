@@ -8,6 +8,8 @@ from app.api.deps import ProductServiceDep
 from app.schemas.product import (
     CategoryCreate,
     CategoryResponse,
+    PackageCreate,
+    UnitUpdate,
     ProductCreate,
     ProductResponse,
     ProductVariantCreate,
@@ -89,3 +91,20 @@ async def rollback_to_previous_version(
     product_id: int, manufacturer_id: int, service: ProductServiceDep
 ):
     return await service.rollback_version(product_id, manufacturer_id)
+
+
+@router.put("/{product_id}/unit", response_model=ProductResponse)
+async def set_unit(product_id: int, payload: UnitUpdate, service: ProductServiceDep):
+    """Единица учёта (г / мл / шт + вес штуки) — для всех брендов этого товара."""
+    return await service.set_unit(product_id, payload)
+
+
+@router.post("/{product_id}/packages", response_model=ProductResponse, status_code=201)
+async def add_package(product_id: int, payload: PackageCreate, service: ProductServiceDep):
+    """Типичная упаковка (в единице товара): 300 г, 930 мл, 10 шт."""
+    return await service.add_package(product_id, payload)
+
+
+@router.delete("/packages/{package_id}", response_model=ProductResponse)
+async def delete_package(package_id: int, service: ProductServiceDep):
+    return await service.delete_package(package_id)
