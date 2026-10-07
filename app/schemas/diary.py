@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 
-import re
 from datetime import date as date_type
 from decimal import Decimal
 from typing import Optional
@@ -12,13 +11,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.domain import MEAL_TYPES
 from app.schemas.common import ORMModel
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
 class DiaryLogCreate(BaseModel):
     # user_id берётся из JWT (endpoints внедряют текущего пользователя) —
     # клиент не может создать запись от чужого имени
-    date_day: str  # ISO-дата "YYYY-MM-DD" — формат согласован с фильтром в SQL
+    date_day: date_type  # ISO-дата "YYYY-MM-DD"
     meal_type: str
     # Ровно одно из двух: блюдо по рецепту ИЛИ готовый продукт (версия КБЖУ)
     recipe_id: Optional[int] = None
@@ -31,15 +27,6 @@ class DiaryLogCreate(BaseModel):
     def _valid_people(cls, v: int) -> int:
         if not 1 <= v <= 10:
             raise ValueError("Количество человек должно быть от 1 до 10")
-        return v
-
-    @field_validator("date_day")
-    @classmethod
-    def _valid_date(cls, v: str) -> str:
-        v = v.strip()
-        if not _DATE_RE.match(v):
-            raise ValueError("date_day должен быть в формате YYYY-MM-DD")
-        date_type.fromisoformat(v)  # проверка календарной валидности
         return v
 
     @field_validator("meal_type")
@@ -59,12 +46,14 @@ class DiaryLogCreate(BaseModel):
 
 class DiaryLogUpdateWeight(BaseModel):
     weight_g: Decimal = Field(gt=0, le=Decimal("999.9"))
+    # Необязательно: заодно поменять число едоков (None — оставить как было)
+    servings_multiplier: Optional[int] = Field(default=None, ge=1, le=10)
 
 
 class DiaryLogResponse(ORMModel):
     id: int
     user_id: int
-    date_day: str
+    date_day: date_type
     meal_type: str
     status: str
     recipe_id: Optional[int]

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-import re
+from datetime import date
 
 from fastapi import APIRouter, Query
 
@@ -16,15 +16,13 @@ from app.schemas.diary import ShoppingListResponse
 
 router = APIRouter(prefix="/shopping-list", tags=["Список покупок"])
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
 
 @router.get("", response_model=ShoppingListResponse)
 async def get_shopping_list(
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
-    start_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    end_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    start_date: date = Query(),
+    end_date: date = Query(),
 ):
     """Агрегированный список покупок по планам текущего пользователя."""
     if start_date > end_date:
@@ -42,7 +40,7 @@ async def get_shopping_list_legacy(
     path_user_id: int,
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
-    start_date: str = Query(pattern=_DATE_RE.pattern),
-    end_date: str = Query(pattern=_DATE_RE.pattern),
+    start_date: date = Query(),
+    end_date: date = Query(),
 ):
     return await get_shopping_list(service, current_user, start_date, end_date)

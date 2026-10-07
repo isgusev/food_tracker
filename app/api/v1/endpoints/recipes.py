@@ -105,7 +105,7 @@ async def cook_recipe_instance(
     service: RecipeServiceDep,
     current_user: CurrentUserDep,
 ):
-    return await service.cook(current_user.id, recipe_id, log_in)
+    return await service.cook(current_user.id, recipe_id, log_in, today=dt.date.today())
 
 
 @router.get("/cooking-logs/{log_id}/usage", response_model=PotUsageResponse)
@@ -114,7 +114,7 @@ async def get_cooking_log_usage(
 ):
     """Даты, в которых кастрюля учтена в дневнике (прошлые / текущий+будущие)."""
     pot = await service.get_owned_pot(log_id, current_user.id)
-    usage = await service.pot_diary_usage(pot, dt.date.today().isoformat())
+    usage = await service.pot_diary_usage(pot, dt.date.today())
     return PotUsageResponse(past_dates=usage["past"], current_future_dates=usage["current_future"])
 
 
@@ -134,7 +134,7 @@ async def delete_cooking_log(
     409, если блюдо учтено в дневнике за прошедшие даты (список дат в ответе).
     """
     pot = await service.get_owned_pot(log_id, current_user.id)
-    await service.delete_pot_safe(pot, remove_from_diary, dt.date.today().isoformat())
+    await service.delete_pot_safe(pot, remove_from_diary, dt.date.today())
 
 
 @router.get("/cooking-logs/archive", response_model=list[PotArchiveItem])

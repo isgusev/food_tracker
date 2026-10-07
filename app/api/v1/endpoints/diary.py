@@ -6,6 +6,7 @@ user_id всегда берётся из JWT (CurrentUserDep) — клиент �
 from __future__ import annotations
 
 
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Query
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/diary", tags=["Дневник питания"])
 
 @router.get("/day/{date_day}", response_model=list[DiaryLogResponse])
 async def get_day_logs(
-    date_day: str, service: DiaryServiceDep, current_user: CurrentUserDep
+    date_day: date, service: DiaryServiceDep, current_user: CurrentUserDep
 ):
     """Записи дневника текущего пользователя на указанную дату (YYYY-MM-DD)."""
     return await service.list_for_day(current_user.id, date_day)
@@ -35,8 +36,8 @@ async def get_day_logs(
 async def get_range_logs(
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
-    start_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    end_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    start_date: date = Query(),
+    end_date: date = Query(),
 ):
     """Все записи (планы и факты) за период — для недельного планировщика."""
     if start_date > end_date:
@@ -59,9 +60,9 @@ async def update_weight(
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
 ):
-    """Изменить вес порции (план или факт) без смены статуса."""
+    """Изменить вес порции и/или число едоков (план или факт) без смены статуса."""
     log = await service.get_owned(log_id, current_user.id)
-    return await service.update_weight(log, payload.weight_g)
+    return await service.update_weight(log, payload)
 
 
 @router.post("/{log_id}/eat", response_model=DiaryLogResponse)
@@ -99,9 +100,12 @@ async def get_pot_status(
     recipe_id: int,
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
-    portion_g: Decimal | None = Query(default=None, gt=0, le=Decimal("999.9")),
+    portion_g: Decimal | None = Query(default=None, gt=0, le=Decimal("99999.9")),
 ):
-    """Есть ли активная кастрюля по рецепту и сколько в ней свободно (для формы планирования)."""
+    """Есть ли активная кастрюля по рецепту и сколько в ней свободно (для формы планирования).
+
+    portion_g — сколько заберёт запись целиком (порция × число едоков).
+    """
     return await service.pot_status_for_recipe(current_user.id, recipe_id, portion_g)
 
 
@@ -109,8 +113,8 @@ async def get_pot_status(
 async def get_shopping_list(
     service: DiaryServiceDep,
     current_user: CurrentUserDep,
-    start_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    end_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    start_date: date = Query(),
+    end_date: date = Query(),
 ):
     """Агрегированный список покупок по планам на диапазон дат."""
     items = await service.shopping_list(current_user.id, start_date, end_date)

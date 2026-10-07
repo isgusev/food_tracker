@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from app.domain import (
     ZERO,
     Nutrients,
     per_100g_from_totals,
+    pot_share,
     quantize,
 )
 from app.models.diary import DiaryLog
@@ -68,6 +70,51 @@ async def _sum_ingredients(
             carbs=totals.carbs + Decimal(str(variant.carbs)) * factor,
         )
     return total_raw, totals
+
+
+def _lines(recipe: Recipe) -> list[IngredientLine]:
+    """Текущий состав шаблона как доменные строки (для пересчёта КБЖУ)."""
+    return [
+        IngredientLine(variant_id=i.variant_id, weight_g=Decimal(str(i.weight_g)))
+        for i in recipe.template_ingredients
+    ]
+
+
+def _apply_per_100(target, per_100: Nutrients) -> None:
+    target.calories_per_100g = quantize(per_100.calories)
+    target.proteins_per_100g = quantize(per_100.proteins)
+    target.fats_per_100g = quantize(per_100.fats)
+    target.carbs_per_100g = quantize(per_100.carbs)
+
+
+async def retarget_recipes_to_variant(
+    recipes: RecipeRepository,
+    variants: VariantRepository,
+    old_variant_id: int,
+    new_variant_id: int,
+) -> int:
+    """Новая активная версия КБЖУ продукта → шаблоны рецептов переходят на неё.
+
+    Шаблон описывает «что я обычно готовлю» и должен считаться по актуальной
+    этикетке. Кастрюли (фактические готовки) НЕ трогаем: в них зафиксирована
+    версия, по которой блюдо реально было приготовлено и съедено.
+    """
+    new_variant = await variants.get(new_variant_id)
+    if new_variant is None:
+        return 0
+    affected = await recipes.list_using_variant(old_variant_id)
+    for recipe in affected:
+        for ing in recipe.template_ingredients:
+            if ing.variant_id == old_variant_id:
+                ing.variant = new_variant
+        await recipes.flush()
+        total_raw, totals = await _sum_ingredients(_lines(recipe), variants)
+        recipe.total_raw_weight = quantize(total_raw)
+        _apply_per_100(
+            recipe, per_100g_from_totals(totals, Decimal(str(recipe.estimated_cooked_weight)))
+        )
+    await recipes.flush()
+    return len(affected)
 
 
 class RecipeService:
@@ -189,27 +236,11 @@ class RecipeService:
             ]
         else:
             # Состав не меняли — суммируем существующие строки для пересчёта на новый вес
-            total_raw = sum((i.weight_g for i in recipe.template_ingredients), ZERO)
-            totals = Nutrients(ZERO, ZERO, ZERO, ZERO)
-            for ing in recipe.template_ingredients:
-                variant = await self._variants.get(ing.variant_id)
-                if variant is None:
-                    raise NotFoundError(f"Версия продукта с ID {ing.variant_id} не найдена")
-                factor = ing.weight_g / Decimal("100.0")
-                totals = Nutrients(
-                    calories=totals.calories + Decimal(str(variant.calories)) * factor,
-                    proteins=totals.proteins + Decimal(str(variant.proteins)) * factor,
-                    fats=totals.fats + Decimal(str(variant.fats)) * factor,
-                    carbs=totals.carbs + Decimal(str(variant.carbs)) * factor,
-                )
+            total_raw, totals = await _sum_ingredients(_lines(recipe), self._variants)
 
         # КБЖУ на 100 г всегда пересчитываем (мог измениться состав или вес готового)
-        per_100 = per_100g_from_totals(totals, new_weight)
         recipe.estimated_cooked_weight = new_weight
-        recipe.calories_per_100g = quantize(per_100.calories)
-        recipe.proteins_per_100g = quantize(per_100.proteins)
-        recipe.fats_per_100g = quantize(per_100.fats)
-        recipe.carbs_per_100g = quantize(per_100.carbs)
+        _apply_per_100(recipe, per_100g_from_totals(totals, new_weight))
 
         await self._recipes.flush()
         return await self.get_recipe(recipe.id, user_id)
@@ -224,7 +255,9 @@ class RecipeService:
         await self._recipes.flush()
 
     # --- ХОЛОДИЛЬНИК ---
-    async def cook(self, user_id: int, recipe_id: int, data: RecipeCookingLogCreate) -> RecipeCookingLog:
+    async def cook(
+        self, user_id: int, recipe_id: int, data: RecipeCookingLogCreate, today: date
+    ) -> RecipeCookingLog:
         template = await self._recipes.get_by_id(recipe_id, user_id=user_id)
         if template is None:
             raise NotFoundError("Шаблон рецепта не найден")
@@ -251,8 +284,11 @@ class RecipeService:
         self._cooking_logs.add(pot)
         await self._cooking_logs.flush()
 
-        # Автоуточнение планов: template_plan по этому рецепту → cooked_plan на свежую кастрюлю
-        await self._diary.reattach_template_plans(user_id, recipe_id, pot.id)
+        # Автоуточнение планов: template_plan по этому рецепту → cooked_plan на свежую
+        # кастрюлю, начиная с сегодняшнего дня и только сколько влезает в выход блюда
+        await self._diary.reattach_template_plans(
+            user_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight
+        )
 
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
@@ -286,16 +322,19 @@ class RecipeService:
         await self._cooking_logs.delete(pot)
 
     async def pot_diary_usage(
-        self, pot: RecipeCookingLog, today_iso: str
+        self, pot: RecipeCookingLog, today: date
     ) -> dict[str, list[str]]:
-        """Даты упоминания кастрюли в дневнике: past / current_future."""
+        """Даты упоминания кастрюли в дневнике: past / current_future (ISO-строки)."""
         logs = await self._diary.logs_using_pot(pot.id)
-        past = sorted({log.date_day for log in logs if log.date_day < today_iso})
-        future = sorted({log.date_day for log in logs if log.date_day >= today_iso})
-        return {"past": past, "current_future": future}
+        past = sorted({log.date_day for log in logs if log.date_day < today})
+        future = sorted({log.date_day for log in logs if log.date_day >= today})
+        return {
+            "past": [d.isoformat() for d in past],
+            "current_future": [d.isoformat() for d in future],
+        }
 
     async def delete_pot_safe(
-        self, pot: RecipeCookingLog, remove_from_diary: bool, today_iso: str
+        self, pot: RecipeCookingLog, remove_from_diary: bool, today: date
     ) -> None:
         """Удаление кастрюли с учётом её использования в дневнике.
 
@@ -307,7 +346,7 @@ class RecipeService:
             попадают в план покупок);
           * съеденное остаётся в дневнике без привязки к холодильнику.
         """
-        usage = await self.pot_diary_usage(pot, today_iso)
+        usage = await self.pot_diary_usage(pot, today)
         if usage["past"]:
             raise ConflictError(
                 "Кастрюлю нельзя удалить: она учтена в дневнике питания за даты: "
@@ -338,6 +377,8 @@ class RecipeService:
         pot.current_remaining_weight = remainder
         pot.is_finished = remainder <= ZERO
         await self._cooking_logs.flush()
+        # остатка стало меньше — поздние планы, которым не хватает, снова «надо приготовить»
+        await self._diary.release_overbooked(pot.id, remainder)
         return pot
 
     # --- АРХИВ ХОЛОДИЛЬНИКА ---
@@ -380,7 +421,7 @@ class RecipeService:
         for log in sorted(logs, key=lambda l: (l.date_day, l.id)):
             if log.status == STATUS_FACT:
                 day = eaten_by_day.setdefault(log.date_day, ZERO)
-                eaten_by_day[log.date_day] = day + Decimal(str(log.weight_g))
+                eaten_by_day[log.date_day] = day + pot_share(log.weight_g, log.servings_multiplier)
         for day, grams in sorted(eaten_by_day.items()):
             events.append(f"{day}: съедено {quantize(grams)} г")
         consumed = sum(eaten_by_day.values(), start=ZERO)

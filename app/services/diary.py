@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 
+from datetime import date
 from decimal import Decimal
 
 from app.core.exceptions import NotFoundError, ValidationError
@@ -13,6 +14,7 @@ from app.domain import (
     STATUS_FACT,
     STATUS_TEMPLATE_PLAN,
     Nutrients,
+    pot_share,
     quantize,
     scale_nutrients,
 )
@@ -23,6 +25,7 @@ from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.diary import (
     DiaryLogCreate,
     DiaryLogResponse,
+    DiaryLogUpdateWeight,
     PotSourceStatus,
     ShoppingListItem,
 )
@@ -44,15 +47,20 @@ class DiaryService:
         self._variants = variants
 
     # --- ЧТЕНИЕ ---
-    async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLogResponse]:
+    async def list_for_day(self, user_id: int, date_day: date) -> list[DiaryLogResponse]:
         logs = await self._diary.list_for_day(user_id, date_day)
-        return [await self._to_response(log) for log in logs]
+        return await self._to_responses(user_id, logs)
 
     async def list_for_range(
-        self, user_id: int, start_date: str, end_date: str
+        self, user_id: int, start_date: date, end_date: date
     ) -> list[DiaryLogResponse]:
         logs = await self._diary.list_in_range(user_id, start_date, end_date)
-        return [await self._to_response(log) for log in logs]
+        return await self._to_responses(user_id, logs)
+
+    async def _to_responses(self, user_id: int, logs: list[DiaryLog]) -> list[DiaryLogResponse]:
+        # резерв по кастрюлям считаем один раз на весь список, а не на каждую запись
+        planned = await self._diary.planned_weight_by_pot(user_id) if logs else {}
+        return [await self._to_response(log, planned) for log in logs]
 
     async def get_owned(self, log_id: int, user_id: int) -> DiaryLog:
         """Возвращает запись только её владельцу; чужая запись = 404 (без утечки)."""
@@ -63,7 +71,7 @@ class DiaryService:
 
     # --- ИНФОСТАТУС ИСТОЧНИКА БЛЮДА (холодильник) ---
     async def _fill_source_status(
-        self, log: DiaryLog, res: DiaryLogResponse
+        self, log: DiaryLog, res: DiaryLogResponse, planned: dict[int, Decimal]
     ) -> None:
         """Наполняет поля source_status/fridge_* для отображения в UI.
 
@@ -81,6 +89,7 @@ class DiaryService:
         if log.status == STATUS_FACT and log.cooking_log_id is None:
             res.source_status = "detached"
             return
+        share = pot_share(log.weight_g, log.servings_multiplier)
         if log.cooking_log_id is not None:
             pot = log.cooking_log
             if pot is None:
@@ -89,21 +98,18 @@ class DiaryService:
                 res.source_status = "fridge"
                 res.fridge_pot_id = pot.id
                 res.fridge_available_g = Decimal(str(pot.current_remaining_weight))
-                planned = await self._diary.planned_weight_by_pot(log.user_id)
                 res.fridge_planned_g = planned.get(pot.id, Decimal("0"))
-                res.fridge_enough = res.fridge_available_g >= log.weight_g
+                res.fridge_enough = res.fridge_available_g >= share
                 return
         if log.recipe_id is not None:
+            res.source_status = "not_cooked"
             pot = await self._cooking_logs.find_active_pot(log.user_id, log.recipe_id)
             if pot is not None:
-                res.source_status = "not_cooked"  # есть кастрюля, но план не привязан
+                # кастрюля есть, но план к ней не привязан (не влез или готовили раньше)
                 res.fridge_pot_id = pot.id
                 res.fridge_available_g = Decimal(str(pot.current_remaining_weight))
-                planned = await self._diary.planned_weight_by_pot(log.user_id)
                 res.fridge_planned_g = planned.get(pot.id, Decimal("0"))
-                res.fridge_enough = res.fridge_available_g >= log.weight_g
-            else:
-                res.source_status = "not_cooked"
+                res.fridge_enough = res.fridge_available_g - res.fridge_planned_g >= share
 
     async def pot_status_for_recipe(
         self, user_id: int, recipe_id: int, portion_g: Decimal | None = None
@@ -124,7 +130,9 @@ class DiaryService:
             enough_for_portion=enough,
         )
 
-    async def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
+    async def _to_response(
+        self, log: DiaryLog, planned: dict[int, Decimal] | None = None
+    ) -> DiaryLogResponse:
         res = DiaryLogResponse.model_validate(log)
         if log.variant_id is not None:
             return await self._product_response(log, res)
@@ -135,7 +143,9 @@ class DiaryService:
             res.recipe_name = recipe.name if recipe else "Удаленный рецепт"
 
         # Инфостатус источника блюда для UI («откуда берём», хватает ли в холодильнике)
-        await self._fill_source_status(log, res)
+        if planned is None:
+            planned = await self._diary.planned_weight_by_pot(log.user_id)
+        await self._fill_source_status(log, res, planned)
 
         # Источник КБЖУ: точный инстанс (кастрюля) или шаблон рецепта
         source = None
@@ -207,25 +217,52 @@ class DiaryService:
             servings_multiplier=data.servings_multiplier,
             scale_all_proportions=False,
         )
+        # Блюдо уже есть в холодильнике и свободного хватает — сразу резервируем
+        # из кастрюли: иначе план ушёл бы в список покупок как «надо приготовить»
+        if data.recipe_id is not None:
+            pot = await self._cooking_logs.find_active_pot(user_id, data.recipe_id)
+            if pot is not None:
+                planned = await self._diary.planned_weight_by_pot(user_id)
+                free = Decimal(str(pot.current_remaining_weight)) - planned.get(pot.id, Decimal("0"))
+                if free >= pot_share(data.weight_g, data.servings_multiplier):
+                    log.cooking_log_id = pot.id
+                    log.status = STATUS_COOKED_PLAN
+
         self._diary.add(log)
         await self._diary.flush()
         return await self._to_response(log)
 
-    # --- ОБНОВЛЕНИЕ ВЕСА ---
+    # --- ОБНОВЛЕНИЕ ВЕСА / ЧИСЛА ЕДОКОВ ---
     async def update_weight(
-        self, log: DiaryLog, new_weight: Decimal
+        self, log: DiaryLog, data: DiaryLogUpdateWeight
     ) -> DiaryLogResponse:
-        """Меняет вес порции, не переключая статус; для факта синхронизирует кастрюлю."""
-        if log.status == STATUS_FACT and log.cooking_log_id:
-            pot = await self._cooking_logs.get(log.cooking_log_id)
-            if pot is not None:
-                # Возвращаем старый вес в кастрюлю и вычитаем новый
-                remainder = pot.current_remaining_weight + log.weight_g - new_weight
-                pot.current_remaining_weight = max(remainder, Decimal("0"))
-                pot.is_finished = pot.current_remaining_weight <= Decimal("0")
+        """Меняет порцию (и число едоков), не переключая статус.
 
-        log.weight_g = new_weight
+        Для съеденного из кастрюли синхронизирует остаток: возвращает прежнюю
+        долю и списывает новую. Если еды не хватает — ошибка (как в mark_eaten),
+        а не молчаливое обнуление остатка.
+        """
+        people = data.servings_multiplier or log.servings_multiplier
+        new_share = pot_share(data.weight_g, people)
+        pot = None
+        if log.cooking_log_id is not None:
+            pot = await self._cooking_logs.get(log.cooking_log_id)
+        if pot is not None and log.status == STATUS_FACT:
+            old_share = pot_share(log.weight_g, log.servings_multiplier)
+            remainder = Decimal(str(pot.current_remaining_weight)) + old_share - new_share
+            if remainder < Decimal("0"):
+                raise ValidationError(
+                    f"Недостаточно еды в холодильнике: осталось {pot.current_remaining_weight} г, "
+                    f"дополнительно требуется {new_share - old_share} г"
+                )
+            pot.current_remaining_weight = remainder
+            pot.is_finished = remainder <= Decimal("0")
+
+        log.weight_g = data.weight_g
+        log.servings_multiplier = people
         await self._diary.flush()
+        if pot is not None:
+            await self._diary.release_overbooked(pot.id, Decimal(str(pot.current_remaining_weight)))
         return await self._to_response(log)
 
     # --- «СЪЕДЕНО» (идемпотентно: кнопка не должна срабатывать повторно) ---
@@ -247,25 +284,31 @@ class DiaryService:
                 if log.status == STATUS_TEMPLATE_PLAN:
                     log.status = STATUS_COOKED_PLAN
 
-        was_fact = already_fact
+        # Из кастрюли уходит порция на всех едоков записи
+        new_share = pot_share(new_weight, log.servings_multiplier)
+        pot = None
         if log.cooking_log_id is not None:
             pot = await self._cooking_logs.get(log.cooking_log_id)
-            if pot is not None:
-                remainder = pot.current_remaining_weight
-                if was_fact:
-                    remainder += log.weight_g  # откат предыдущего фактического веса
-                remainder -= new_weight
-                if remainder < Decimal("0"):
-                    raise ValidationError(
-                        f"Недостаточно еды в холодильнике: осталось {pot.current_remaining_weight} г, "
-                        f"требуется {new_weight} г"
-                    )
-                pot.current_remaining_weight = remainder
-                pot.is_finished = remainder <= Decimal("0")
+        if pot is not None:
+            remainder = Decimal(str(pot.current_remaining_weight))
+            if already_fact:
+                # откат предыдущего фактического списания
+                remainder += pot_share(log.weight_g, log.servings_multiplier)
+            remainder -= new_share
+            if remainder < Decimal("0"):
+                raise ValidationError(
+                    f"Недостаточно еды в холодильнике: осталось {pot.current_remaining_weight} г, "
+                    f"требуется {new_share} г"
+                )
+            pot.current_remaining_weight = remainder
+            pot.is_finished = remainder <= Decimal("0")
 
         log.weight_g = new_weight
         log.status = STATUS_FACT
         await self._diary.flush()
+        if pot is not None:
+            # съели больше, чем планировали, — поздним планам может уже не хватить
+            await self._diary.release_overbooked(pot.id, Decimal(str(pot.current_remaining_weight)))
         return await self._to_response(log)
 
     # --- «БЫЛО БЕЗ ХОЛОДИЛЬНИКА»: отвязать факт от кастрюли ---
@@ -287,13 +330,15 @@ class DiaryService:
         if log.status == STATUS_FACT and log.cooking_log_id is not None:
             pot = await self._cooking_logs.get(log.cooking_log_id)
             if pot is not None:
-                pot.current_remaining_weight += log.weight_g
+                pot.current_remaining_weight = Decimal(
+                    str(pot.current_remaining_weight)
+                ) + pot_share(log.weight_g, log.servings_multiplier)
                 pot.is_finished = False
         await self._diary.delete(log)
 
     # --- СПИСОК ПОКУПОК ---
     async def shopping_list(
-        self, user_id: int, start_date: str, end_date: str
+        self, user_id: int, start_date: date, end_date: date
     ) -> list[ShoppingListItem]:
         """Агрегированная закупка по планам (template_plan) за диапазон дат."""
         plans = await self._diary.list_planned_in_range(user_id, start_date, end_date)
@@ -311,44 +356,30 @@ class DiaryService:
             )
             entry["weight"] += grams
 
+        recipes_cache: dict[int, object] = {}
         for meal in plans:
-            # Готовый продукт: покупаем «как есть» — порция × количество человек
+            # Сколько граммов готового нужно на всех едоков записи
+            share = pot_share(meal.weight_g, meal.servings_multiplier)
+
+            # Готовый продукт покупаем «как есть»
             if meal.variant_id is not None:
-                people = Decimal(abs(int(meal.servings_multiplier or 1))) or Decimal(1)
-                put(meal.variant_id, meal.variant, Decimal(str(meal.weight_g)) * people)
+                put(meal.variant_id, meal.variant, share)
                 continue
 
-            recipe = meal.recipe
-            if recipe is None:
+            if meal.recipe_id is None:
                 continue
-            # Рецепт с ингредиентами подгружаем явно (в full_query их нет)
-            recipe_full = await self._recipes.get_full(recipe.id)
+            # Рецепт с ингредиентами подгружаем явно (в full_query их нет), один раз
+            if meal.recipe_id not in recipes_cache:
+                recipes_cache[meal.recipe_id] = await self._recipes.get_full(meal.recipe_id)
+            recipe_full = recipes_cache[meal.recipe_id]
             if recipe_full is None:
                 continue
-
-            base_servings = Decimal(recipe_full.default_servings or 1)
             estimated_weight = Decimal(str(recipe_full.estimated_cooked_weight))
             if estimated_weight <= 0:
                 continue
-            single_portion_weight = estimated_weight / base_servings
 
-            # Восстанавливаем долю пользователя (например, 120г / 100г = 1.2)
-            user_ratio = Decimal(str(meal.weight_g)) / single_portion_weight
-
-            raw_multiplier = int(meal.servings_multiplier or 1)
-            scale_all = raw_multiplier < 0 or bool(meal.scale_all_proportions)
-            total_people = Decimal(abs(raw_multiplier)) or Decimal(1)
-
-            if total_people > 1:
-                if scale_all:
-                    family_portions = user_ratio * total_people
-                else:
-                    family_portions = user_ratio + (total_people - Decimal(1))
-            else:
-                family_portions = user_ratio
-
-            scale_factor = family_portions / base_servings
-
+            # Доля кастрюли: 600 г готового из выхода 1200 г → половина закладки
+            scale_factor = share / estimated_weight
             for ing in recipe_full.template_ingredients:
                 put(ing.variant_id, ing.variant, Decimal(str(ing.weight_g)) * scale_factor)
 

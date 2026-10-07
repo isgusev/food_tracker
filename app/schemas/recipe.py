@@ -32,7 +32,7 @@ class IngredientLine(BaseModel):
     """Строка ингредиентов (общая для шаблона и фактической закладки)."""
 
     variant_id: int
-    weight_g: Decimal = Field(gt=0, le=Decimal("9999.9"))
+    weight_g: Decimal = Field(gt=0, le=Decimal("99999.9"))
 
 
 class RecipeTemplateIngredientResponse(ORMModel):
@@ -48,7 +48,7 @@ class RecipeCreate(BaseModel):
     instructions: Optional[str] = None
     created_by_user: str = "system"
     default_servings: int = Field(default=1, ge=1, le=100)
-    estimated_cooked_weight: Decimal = Field(gt=0, le=Decimal("9999.9"))
+    estimated_cooked_weight: Decimal = Field(gt=0, le=Decimal("99999.9"))
     ingredients: list[IngredientLine] = Field(min_length=1)
 
     @field_validator("name", "created_by_user")
@@ -68,7 +68,7 @@ class RecipeUpdate(BaseModel):
     cooking_time_minutes: Optional[int] = Field(default=None, ge=0)
     instructions: Optional[str] = None
     default_servings: Optional[int] = Field(default=None, ge=1, le=100)
-    estimated_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("9999.9"))
+    estimated_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999.9"))
     ingredients: Optional[list[IngredientLine]] = Field(default=None, min_length=1)
 
     @field_validator("name")
@@ -114,7 +114,7 @@ class RecipeActualIngredientResponse(ORMModel):
 
 class RecipeCookingLogCreate(BaseModel):
     # user_id берётся из JWT — см. endpoints/recipes.py
-    total_cooked_weight: Decimal = Field(gt=0, le=Decimal("9999.9"))
+    total_cooked_weight: Decimal = Field(gt=0, le=Decimal("99999.9"))
     ingredients: list[IngredientLine] = Field(min_length=1)
 
 
@@ -139,7 +139,7 @@ class RecipeCookingLogResponse(ORMModel):
 class CookingLogUpdate(BaseModel):
     """Ручная корректировка остатка в кастрюле (замена «сырого» dict-payload)."""
 
-    current_remaining_weight: Decimal = Field(ge=0, le=Decimal("9999.9"))
+    current_remaining_weight: Decimal = Field(ge=0, le=Decimal("99999.9"))
 
 
 class PotPlanStats(BaseModel):

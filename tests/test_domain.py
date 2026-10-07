@@ -49,10 +49,14 @@ def test_per_100g_zero_weight_raises():
 @pytest.mark.parametrize(
     "cal,p,f,c,expected",
     [
-        # Атвотер: 4*10 + 9*5 + 4*7.5 = 115 vs 100 → расхождение 15 > допуск 5
-        (Decimal("100"), Decimal("10"), Decimal("5"), Decimal("7.5"), True),
-        # согласованные значения: расхождение в пределах допуска
+        # согласованные значения
         (Decimal("115"), Decimal("10"), Decimal("5"), Decimal("7.5"), False),
+        # честная этикетка гречки: 310 ккал против 345.8 по формуле (−10 %, клетчатка)
+        (Decimal("310"), Decimal("12.6"), Decimal("2.6"), Decimal("68"), False),
+        # маленькое абсолютное расхождение у малокалорийного продукта (<10 ккал)
+        (Decimal("20"), Decimal("1"), Decimal("0"), Decimal("6"), False),
+        # опечатка: 100 вместо 350
+        (Decimal("100"), Decimal("12"), Decimal("2"), Decimal("70"), True),
         # явное грубое расхождение
         (Decimal("100"), Decimal("10"), Decimal("5"), Decimal("50"), True),
     ],
@@ -60,3 +64,11 @@ def test_per_100g_zero_weight_raises():
 def test_nutrients_are_inconsistent(cal, p, f, c, expected):
     n = Nutrients(calories=cal, proteins=p, fats=f, carbs=c)
     assert nutrients_are_inconsistent(n) is expected
+
+
+def test_pot_share_multiplies_by_people():
+    from app.domain import pot_share
+
+    assert pot_share(Decimal("150"), 3) == Decimal("450")
+    assert pot_share(Decimal("150"), None) == Decimal("150")
+    assert pot_share(Decimal("150"), 0) == Decimal("150")

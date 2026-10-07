@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -30,8 +31,8 @@ class DiaryLog(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    # На какую дату запись (например, "2026-06-04")
-    date_day = Column(String(10), nullable=False, index=True)
+    # На какую дату запись
+    date_day = Column(Date, nullable=False, index=True)
 
     # Прием пищи: "breakfast", "lunch", "dinner", "snack"
     meal_type = Column(String(20), nullable=False)
@@ -62,10 +63,13 @@ class DiaryLog(Base):
     variant = relationship("ProductVariant")
     user = relationship("User")
 
-    # НОВАЯ_ЕСЛИ ЧТО УДАЛИМ
+    # Устарело: семейное масштабирование теперь всегда «порция × едоки»
+    # (app.domain.pot_share). Колонка оставлена для совместимости данных.
     scale_all_proportions = Column(Boolean, default=False, nullable=True)
 
     # --- ЗАДЕЛ НА БУДУЩЕЕ ---
     cooking_log = relationship("RecipeCookingLog", back_populates="diary_entries")
     household_id = Column(String, index=True, nullable=True)  # Чтобы видеть планы друг друга
-    servings_multiplier = Column(Integer, default=1)  # Множитель порций
+    # Сколько человек едят эту запись (все — одинаковую порцию weight_g);
+    # влияет на кастрюлю и список покупок, личные КБЖУ считаются по одной порции
+    servings_multiplier = Column(Integer, default=1)

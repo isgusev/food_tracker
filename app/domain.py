@@ -20,15 +20,20 @@ DIARY_STATUSES: frozenset[str] = frozenset(
     {STATUS_TEMPLATE_PLAN, STATUS_COOKED_PLAN, STATUS_FACT}
 )
 
-# Типы приемов пищи
-MEAL_TYPES: frozenset[str] = frozenset({"breakfast", "lunch", "dinner", "snack"})
+# Типы приемов пищи (порядок — как в течение дня; используется для сортировки)
+MEAL_ORDER: tuple[str, ...] = ("breakfast", "lunch", "dinner", "snack")
+MEAL_TYPES: frozenset[str] = frozenset(MEAL_ORDER)
 
 # Коэффициенты Атвотера для проверки согласованности КБЖУ
 KCAL_PER_PROTEIN = Decimal("4")
 KCAL_PER_FAT = Decimal("9")
 KCAL_PER_CARBS = Decimal("4")
-# Допустимое расхождение между указанными и расчетными ккал (на 100 г)
-NUTRIENTS_TOLERANCE = Decimal("5")
+# Допустимое расхождение между указанными и расчетными ккал (на 100 г).
+# Реальные этикетки расходятся с формулой Атвотера на 5–15 % (клетчатка ~2 ккал/г,
+# округления, полиолы), поэтому ошибкой считаем только расхождение больше
+# абсолютного И относительного порога — это ловит опечатки, а не честные данные.
+NUTRIENTS_TOLERANCE_ABS = Decimal("10")
+NUTRIENTS_TOLERANCE_REL = Decimal("0.15")
 
 ZERO = Decimal("0.0")
 
@@ -44,13 +49,29 @@ class Nutrients:
 
 
 def nutrients_are_inconsistent(n: Nutrients) -> bool:
-    """True, если указанные калории расходятся с расчетными более чем на допуск."""
+    """True, если указанные калории расходятся с расчетными сильнее допуска."""
     calculated = (
         KCAL_PER_PROTEIN * n.proteins
         + KCAL_PER_FAT * n.fats
         + KCAL_PER_CARBS * n.carbs
     )
-    return abs(n.calories - calculated) > NUTRIENTS_TOLERANCE
+    diff = abs(n.calories - calculated)
+    return diff > NUTRIENTS_TOLERANCE_ABS and diff > NUTRIENTS_TOLERANCE_REL * calculated
+
+
+def people_count(servings_multiplier: int | None) -> Decimal:
+    """Сколько человек едят запись плана (минимум 1)."""
+    return Decimal(max(1, abs(int(servings_multiplier or 1))))
+
+
+def pot_share(weight_g, servings_multiplier: int | None) -> Decimal:
+    """Сколько граммов запись забирает из кастрюли/покупок: порция × число едоков.
+
+    «Сколько человек едят» означает, что все едят одинаковую порцию одного блюда.
+    Личные КБЖУ считаются по одной порции (weight_g), а кастрюля и список
+    покупок — по всей семье.
+    """
+    return Decimal(str(weight_g)) * people_count(servings_multiplier)
 
 
 def scale_nutrients(per_100g: Nutrients, weight_g: Decimal) -> Nutrients:
