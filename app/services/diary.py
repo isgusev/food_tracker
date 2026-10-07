@@ -18,6 +18,7 @@ from app.domain import (
 )
 from app.models.diary import DiaryLog
 from app.repositories.diary import DiaryRepository
+from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.diary import (
     DiaryLogCreate,
@@ -35,14 +36,22 @@ class DiaryService:
         diary: DiaryRepository,
         recipes: RecipeRepository,
         cooking_logs: CookingLogRepository,
+        variants: VariantRepository,
     ) -> None:
         self._diary = diary
         self._recipes = recipes
         self._cooking_logs = cooking_logs
+        self._variants = variants
 
     # --- ЧТЕНИЕ ---
     async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLogResponse]:
         logs = await self._diary.list_for_day(user_id, date_day)
+        return [await self._to_response(log) for log in logs]
+
+    async def list_for_range(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[DiaryLogResponse]:
+        logs = await self._diary.list_in_range(user_id, start_date, end_date)
         return [await self._to_response(log) for log in logs]
 
     async def get_owned(self, log_id: int, user_id: int) -> DiaryLog:
@@ -63,8 +72,12 @@ class DiaryService:
         - template_plan → активная кастрюля по рецепту, если есть («хватает ли»
           на эту порцию с учётом уже зарезервированных планов), иначе
           «Не приготовлено»;
-        - fact без кастрюли → «detached» (было съедено без холодильника).
+        - fact без кастрюли → «detached» (было съедено без холодильника);
+        - готовый продукт → «product» (холодильник блюд не участвует).
         """
+        if log.variant_id is not None:
+            res.source_status = "product"
+            return
         if log.status == STATUS_FACT and log.cooking_log_id is None:
             res.source_status = "detached"
             return
@@ -113,6 +126,8 @@ class DiaryService:
 
     async def _to_response(self, log: DiaryLog) -> DiaryLogResponse:
         res = DiaryLogResponse.model_validate(log)
+        if log.variant_id is not None:
+            return await self._product_response(log, res)
         if res.recipe_name is None and log.recipe_id is not None:
             # Связь с рецептом не загружена (объект после flush/создания без
             # eager load) — подтягиваем название напрямую.
@@ -147,11 +162,39 @@ class DiaryService:
             res.carbs = quantize(scaled.carbs)
         return res
 
+    async def _product_response(
+        self, log: DiaryLog, res: DiaryLogResponse
+    ) -> DiaryLogResponse:
+        """Запись «готовый продукт»: КБЖУ из версии продукта, без холодильника."""
+        res.kind = "product"
+        res.source_status = "product"
+        variant = await self._diary.get_variant_full(log.variant_id)
+        if variant is None:
+            res.product_name = f"Продукт #{log.variant_id}"
+            return res
+        res.product_name = self._display_name(variant, log.variant_id)
+        per_100 = Nutrients(
+            calories=Decimal(str(variant.calories)),
+            proteins=Decimal(str(variant.proteins)),
+            fats=Decimal(str(variant.fats)),
+            carbs=Decimal(str(variant.carbs)),
+        )
+        scaled = scale_nutrients(per_100, Decimal(str(log.weight_g)))
+        res.calories = quantize(scaled.calories)
+        res.proteins = quantize(scaled.proteins)
+        res.fats = quantize(scaled.fats)
+        res.carbs = quantize(scaled.carbs)
+        return res
+
     # --- СОЗДАНИЕ ПЛАНА ---
     async def add_plan(self, user_id: int, data: DiaryLogCreate) -> DiaryLogResponse:
-        recipe = await self._recipes.get_by_id(data.recipe_id, user_id=user_id)
-        if recipe is None:
-            raise NotFoundError("Рецепт не найден")
+        if data.variant_id is not None:
+            if await self._variants.get(data.variant_id) is None:
+                raise NotFoundError("Продукт (версия КБЖУ) не найден")
+        else:
+            recipe = await self._recipes.get_by_id(data.recipe_id, user_id=user_id)
+            if recipe is None:
+                raise NotFoundError("Рецепт не найден")
 
         log = DiaryLog(
             user_id=user_id,
@@ -159,6 +202,7 @@ class DiaryService:
             meal_type=data.meal_type,
             status=STATUS_TEMPLATE_PLAN,
             recipe_id=data.recipe_id,
+            variant_id=data.variant_id,
             weight_g=data.weight_g,
             servings_multiplier=data.servings_multiplier,
             scale_all_proportions=False,
@@ -255,7 +299,25 @@ class DiaryService:
         plans = await self._diary.list_planned_in_range(user_id, start_date, end_date)
 
         cart: dict[int, dict] = {}
+
+        def put(variant_id: int, variant, grams: Decimal) -> None:
+            entry = cart.setdefault(
+                variant_id,
+                {
+                    "name": self._display_name(variant, variant_id),
+                    "category": self._category_name(variant),
+                    "weight": Decimal("0"),
+                },
+            )
+            entry["weight"] += grams
+
         for meal in plans:
+            # Готовый продукт: покупаем «как есть» — порция × количество человек
+            if meal.variant_id is not None:
+                people = Decimal(abs(int(meal.servings_multiplier or 1))) or Decimal(1)
+                put(meal.variant_id, meal.variant, Decimal(str(meal.weight_g)) * people)
+                continue
+
             recipe = meal.recipe
             if recipe is None:
                 continue
@@ -288,20 +350,26 @@ class DiaryService:
             scale_factor = family_portions / base_servings
 
             for ing in recipe_full.template_ingredients:
-                needed = Decimal(str(ing.weight_g)) * scale_factor
-                variant = ing.variant
-                name = self._display_name(variant, ing.variant_id)
-                entry = cart.setdefault(ing.variant_id, {"name": name, "weight": Decimal("0")})
-                entry["weight"] += needed
+                put(ing.variant_id, ing.variant, Decimal(str(ing.weight_g)) * scale_factor)
 
         return [
             ShoppingListItem(
                 variant_id=vid,
                 product_name=item["name"],
+                category_name=item["category"],
                 weight_g=quantize(item["weight"]),
             )
-            for vid, item in sorted(cart.items())
+            for vid, item in sorted(
+                cart.items(), key=lambda kv: (kv[1]["category"] or "", kv[1]["name"])
+            )
         ]
+
+    @staticmethod
+    def _category_name(variant) -> str | None:
+        manufacturer = variant.manufacturer if variant is not None else None
+        product = manufacturer.product if manufacturer else None
+        category = product.category if product else None
+        return category.name if category else None
 
     @staticmethod
     def _display_name(variant, variant_id: int) -> str:

@@ -11,6 +11,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUserDep, DiaryServiceDep
+from app.core.exceptions import ValidationError
 from app.schemas.diary import (
     DiaryLogCreate,
     DiaryLogResponse,
@@ -30,11 +31,24 @@ async def get_day_logs(
     return await service.list_for_day(current_user.id, date_day)
 
 
+@router.get("/range", response_model=list[DiaryLogResponse])
+async def get_range_logs(
+    service: DiaryServiceDep,
+    current_user: CurrentUserDep,
+    start_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+):
+    """Все записи (планы и факты) за период — для недельного планировщика."""
+    if start_date > end_date:
+        raise ValidationError("Дата окончания не может быть раньше даты начала")
+    return await service.list_for_range(current_user.id, start_date, end_date)
+
+
 @router.post("/", response_model=DiaryLogResponse, status_code=201)
 async def add_plan(
     plan_in: DiaryLogCreate, service: DiaryServiceDep, current_user: CurrentUserDep
 ):
-    """Добавить план блюда в дневник."""
+    """Добавить в план блюдо (recipe_id) или готовый продукт (variant_id)."""
     return await service.add_plan(current_user.id, plan_in)
 
 
@@ -60,6 +74,15 @@ async def mark_eaten(
     """Отметить «съедено»: план → факт, списание веса из кастрюли."""
     log = await service.get_owned(log_id, current_user.id)
     return await service.mark_eaten(log, payload.weight_g)
+
+
+@router.post("/{log_id}/detach", response_model=DiaryLogResponse)
+async def detach_from_fridge(
+    log_id: int, service: DiaryServiceDep, current_user: CurrentUserDep
+):
+    """«Было без холодильника»: отвязать съеденное от кастрюли (вес в неё не возвращается)."""
+    log = await service.get_owned(log_id, current_user.id)
+    return await service.detach_from_fridge(log)
 
 
 @router.delete("/{log_id}", status_code=204)

@@ -398,3 +398,109 @@ async def test_pot_ingredients_replace(client):
         headers=guy,
     )
     assert r.status_code == 404
+
+
+# --- ГОТОВЫЕ ПРОДУКТЫ В ПЛАНЕ (йогурт из магазина и т.п.) ---
+
+
+async def create_ready_product(client, headers) -> int:
+    r = await client.post(
+        "/api/v1/products/with-category",
+        json={
+            "category_name": "Молочные продукты",
+            "name": "Йогурт греческий 2%",
+            "brand_name": "Теос",
+            "base_variant": {
+                "manufacturer_name": "Теос",
+                "calories": 66,
+                "proteins": 8.0,
+                "fats": 2.0,
+                "carbs": 4.0,
+            },
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["manufacturers"][0]["variants"][0]["id"]
+
+
+async def test_ready_product_plan_eat_and_shopping(client):
+    headers = await register_and_login(client, "yana", "yana@test.com")
+    oat_variant_id, recipe_id = await build_recipe_stack(client, headers)
+    yogurt_id = await create_ready_product(client, headers)
+
+    # План: йогурт 150 г на 2 человек + каша по рецепту
+    r = await client.post(
+        "/api/v1/diary/",
+        json={
+            "date_day": "2026-10-10",
+            "meal_type": "snack",
+            "variant_id": yogurt_id,
+            "weight_g": 150,
+            "servings_multiplier": 2,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    entry = r.json()
+    assert entry["kind"] == "product"
+    assert entry["source_status"] == "product"
+    assert "Йогурт" in entry["product_name"]
+    assert float(entry["calories"]) == 99.0  # 66 * 1.5
+    assert float(entry["proteins"]) == 12.0
+
+    r = await client.post(
+        "/api/v1/diary/",
+        json={"date_day": "2026-10-11", "meal_type": "breakfast", "recipe_id": recipe_id, "weight_g": 300},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+
+    # Список покупок: йогурт «как есть» (150 × 2), овсянка — из рецепта
+    r = await client.get(
+        "/api/v1/shopping-list",
+        params={"start_date": "2026-10-10", "end_date": "2026-10-11"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    items = {i["variant_id"]: i for i in r.json()["items"]}
+    assert float(items[yogurt_id]["weight_g"]) == 300.0
+    assert items[yogurt_id]["category_name"] == "Молочные продукты"
+    assert float(items[oat_variant_id]["weight_g"]) == 60.0
+
+    # Недельный диапазон отдаёт оба типа записей
+    r = await client.get(
+        "/api/v1/diary/range",
+        params={"start_date": "2026-10-10", "end_date": "2026-10-16"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert {e["kind"] for e in r.json()} == {"product", "recipe"}
+
+    # Съели йогурт — факт, в покупки больше не попадает
+    r = await client.post(f"/api/v1/diary/{entry['id']}/eat", json={"weight_g": 125}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "fact"
+    assert float(r.json()["calories"]) == 82.5
+    r = await client.get(
+        "/api/v1/shopping-list",
+        params={"start_date": "2026-10-10", "end_date": "2026-10-10"},
+        headers=headers,
+    )
+    assert r.json()["items"] == []
+
+
+async def test_diary_entry_requires_exactly_one_source(client):
+    headers = await register_and_login(client, "zoe", "zoe@test.com")
+    _, recipe_id = await build_recipe_stack(client, headers)
+    yogurt_id = await create_ready_product(client, headers)
+    base = {"date_day": "2026-10-10", "meal_type": "snack", "weight_g": 100}
+
+    r = await client.post("/api/v1/diary/", json=base, headers=headers)
+    assert r.status_code == 422
+    r = await client.post(
+        "/api/v1/diary/", json={**base, "recipe_id": recipe_id, "variant_id": yogurt_id}, headers=headers
+    )
+    assert r.status_code == 422
+    r = await client.post("/api/v1/diary/", json={**base, "variant_id": 99999}, headers=headers)
+    assert r.status_code == 404

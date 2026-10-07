@@ -33,7 +33,7 @@ class RecipeRepository(BaseRepository[Recipe]):
                 RecipeTemplateIngredient.variant
             ).joinedload(ProductVariant.manufacturer).joinedload(
                 ProductManufacturer.product
-            ).joinedload(Product.brand),
+            ).options(joinedload(Product.brand), joinedload(Product.category)),
         )
 
     async def get_by_id(self, pk: int, user_id: int | None = None) -> Recipe | None:

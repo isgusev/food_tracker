@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from app.domain import STATUS_COOKED_PLAN, STATUS_TEMPLATE_PLAN
 from app.models.diary import DiaryLog
+from app.models.product import Product, ProductManufacturer, ProductVariant
 from app.models.recipe import Recipe, RecipeCookingLog
 from app.repositories.base import BaseRepository
 
@@ -25,6 +26,11 @@ class DiaryRepository(BaseRepository[DiaryLog]):
                 joinedload(DiaryLog.cooking_log).joinedload(
                     RecipeCookingLog.actual_ingredients
                 ),
+                # готовый продукт: версия → производитель → продукт (+бренд, категория)
+                joinedload(DiaryLog.variant)
+                .joinedload(ProductVariant.manufacturer)
+                .joinedload(ProductManufacturer.product)
+                .options(joinedload(Product.brand), joinedload(Product.category)),
             )
         )
 
@@ -32,11 +38,39 @@ class DiaryRepository(BaseRepository[DiaryLog]):
         stmt = self.full_query().where(DiaryLog.id == log_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
+    async def get_variant_full(self, variant_id: int) -> ProductVariant | None:
+        """Версия продукта с деревом каталога (для названия и КБЖУ готового продукта)."""
+        stmt = (
+            select(ProductVariant)
+            .where(ProductVariant.id == variant_id)
+            .options(
+                joinedload(ProductVariant.manufacturer)
+                .joinedload(ProductManufacturer.product)
+                .options(joinedload(Product.brand), joinedload(Product.category))
+            )
+        )
+        return (await self._session.execute(stmt)).unique().scalar_one_or_none()
+
     async def list_for_day(self, user_id: int, date_day: str) -> list[DiaryLog]:
         stmt = (
             self.full_query()
             .where(DiaryLog.user_id == user_id, DiaryLog.date_day == date_day)
             .order_by(DiaryLog.meal_type, DiaryLog.id)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def list_in_range(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[DiaryLog]:
+        """Все записи (планы и факты) за диапазон дат — для недельного планировщика."""
+        stmt = (
+            self.full_query()
+            .where(
+                DiaryLog.user_id == user_id,
+                DiaryLog.date_day >= start_date,
+                DiaryLog.date_day <= end_date,
+            )
+            .order_by(DiaryLog.date_day, DiaryLog.id)
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
 

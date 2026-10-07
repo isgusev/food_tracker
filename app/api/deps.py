@@ -115,6 +115,7 @@ def get_diary_service(session: SessionDep) -> DiaryService:
         diary=DiaryRepository(session),
         recipes=RecipeRepository(session),
         cooking_logs=CookingLogRepository(session),
+        variants=VariantRepository(session),
     )
 
 

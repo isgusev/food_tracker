@@ -20,7 +20,9 @@ class DiaryLogCreate(BaseModel):
     # клиент не может создать запись от чужого имени
     date_day: str  # ISO-дата "YYYY-MM-DD" — формат согласован с фильтром в SQL
     meal_type: str
-    recipe_id: int
+    # Ровно одно из двух: блюдо по рецепту ИЛИ готовый продукт (версия КБЖУ)
+    recipe_id: Optional[int] = None
+    variant_id: Optional[int] = None
     weight_g: Decimal = Field(gt=0, le=Decimal("999.9"))
     servings_multiplier: int = Field(default=1, ge=1, le=10)
 
@@ -49,9 +51,9 @@ class DiaryLogCreate(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _negative_scale_requires_flag(self):
-        # Отрицательный множитель означает «масштабировать всем пропорционально»;
-        # флаг scale_all_proportions должен ставиться явно на уровне сервиса/UI.
+    def _exactly_one_source(self):
+        if (self.recipe_id is None) == (self.variant_id is None):
+            raise ValueError("Укажите либо recipe_id (блюдо), либо variant_id (готовый продукт)")
         return self
 
 
@@ -66,19 +68,22 @@ class DiaryLogResponse(ORMModel):
     meal_type: str
     status: str
     recipe_id: Optional[int]
+    variant_id: Optional[int] = None
     cooking_log_id: Optional[int]
     weight_g: Decimal
     servings_multiplier: Optional[int] = 1
 
     # Поля, наполняемые сервисом для UI (КБЖУ порции)
+    kind: str = "recipe"                      # "recipe" | "product"
     recipe_name: Optional[str] = None
+    product_name: Optional[str] = None
     calories: Decimal = Decimal("0.0")
     proteins: Decimal = Decimal("0.0")
     fats: Decimal = Decimal("0.0")
     carbs: Decimal = Decimal("0.0")
 
     # Инфостатус источника блюда (наполняет сервис; см. compute_source_status)
-    source_status: Optional[str] = None       # "fridge" | "not_cooked" | "detached"
+    source_status: Optional[str] = None       # "fridge" | "not_cooked" | "detached" | "product"
     fridge_pot_id: Optional[int] = None       # активная кастрюля этого рецепта
     fridge_available_g: Optional[Decimal] = None   # остаток в кастрюле
     fridge_planned_g: Optional[Decimal] = None     # уже зарезервировано планами
@@ -98,6 +103,7 @@ class PotSourceStatus(BaseModel):
 class ShoppingListItem(BaseModel):
     variant_id: int
     product_name: str
+    category_name: Optional[str] = None
     weight_g: Decimal
 
 

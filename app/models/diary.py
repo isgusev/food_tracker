@@ -39,9 +39,14 @@ class DiaryLog(Base):
     # ТРИ СТАТУСА: "template_plan", "cooked_plan", "fact" (см. app/domain.py)
     status = Column(String(20), default=STATUS_TEMPLATE_PLAN, nullable=False)
 
-    # Связи (Может ссылаться ИЛИ на шаблон рецепта, ИЛИ на конкретную готовку)
+    # Связи: блюдо (шаблон рецепта / конкретная готовка) ИЛИ готовый продукт
     recipe_id = Column(
         Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True
+    )
+    # Готовый продукт из магазина (йогурт, хлеб…): КБЖУ берутся из версии продукта,
+    # в список покупок он попадает «как есть», без разложения на ингредиенты
+    variant_id = Column(
+        Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=True
     )
     cooking_log_id = Column(
         Integer, ForeignKey("recipe_cooking_logs.id", ondelete="SET NULL"), nullable=True
@@ -54,6 +59,7 @@ class DiaryLog(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     recipe = relationship("Recipe")
+    variant = relationship("ProductVariant")
     user = relationship("User")
 
     # НОВАЯ_ЕСЛИ ЧТО УДАЛИМ

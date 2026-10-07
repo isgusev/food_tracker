@@ -3,15 +3,20 @@ from __future__ import annotations
 
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.error_handlers import register_error_handlers
 from app.api.v1.router import api_router, public_router
 from app.core.config import get_settings
 from app.db.session import SessionDep, init_db, set_session_factory
+
+# Веб-интерфейс (Vue 3 без сборки) раздаётся этим же процессом: один origin — без CORS
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
 @asynccontextmanager
@@ -48,12 +53,9 @@ def create_app() -> FastAPI:
     app.include_router(public_router)
     app.include_router(api_router)
 
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def read_root():
-        return JSONResponse(
-            content={"message": "Привет! Бэкенд запущен."},
-            media_type="application/json; charset=utf-8",
-        )
+        return RedirectResponse(url="/app/")
 
     @app.get("/health")
     async def health():
@@ -67,6 +69,9 @@ def create_app() -> FastAPI:
 
         await session.execute(text("SELECT 1"))
         return {"status": "ok", "database": "reachable"}
+
+    if WEB_DIR.is_dir():
+        app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
     return app
 
