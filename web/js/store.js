@@ -28,7 +28,7 @@ export function toastError(e) {
 
 export async function loadProducts() {
   const [products, cats] = await Promise.all([
-    api.get("/products/", { limit: 500 }),
+    api.get("/products/", { limit: 2000 }),
     api.get("/products/categories"),
   ]);
   state.products = products;

@@ -5,9 +5,11 @@ import { Modal, Macros } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, toast, toastError } from "../store.js";
 import { fmt, matches, n } from "../util.js";
 
+// То же правило, что на сервере (app/domain.py): ошибка — если расхождение > 10 ккал И > 15 %
 function atwater(k) {
   const calc = 4 * n(k.proteins) + 9 * n(k.fats) + 4 * n(k.carbs);
-  return { calc, off: Math.abs(n(k.calories) - calc) > 5 && n(k.calories) > 0 };
+  const diff = Math.abs(n(k.calories) - calc);
+  return { calc, off: n(k.calories) > 0 && diff > 10 && diff > 0.15 * calc };
 }
 
 const KbjuInputs = {
@@ -138,7 +140,7 @@ const ProductModal = {
         <label class="field" v-if="adding.isNew"><span>Производитель</span><input v-model="adding.manufacturer_name"></label>
         <KbjuInputs v-model="adding.kbju" />
         <div class="row"><button class="primary sm" :disabled="busy" @click="saveVariant">Сохранить</button><button class="sm" @click="adding = null">Отмена</button></div>
-        <div class="tiny muted">Старые версии сохраняются: уже созданные рецепты и приготовленные блюда не изменятся.</div>
+        <div class="tiny muted">Рецепты с этим продуктом пересчитаются по новой версии. Приготовленные блюда в холодильнике и съеденное останутся как были.</div>
       </div>
       <div v-if="error" class="alert error">{{ error }}</div>
       <template #foot><button v-if="!adding" @click="startAdd(null)">+ Другой производитель</button></template>

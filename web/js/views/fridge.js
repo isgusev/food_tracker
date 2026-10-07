@@ -79,7 +79,12 @@ const PotModal = {
       catch (e) { error.value = e.message; }
       finally { busy.value = false; }
     }
-    const saveRemaining = () => run(() => api.patch(`/recipes/cooking-logs/${props.pot.id}`, { current_remaining_weight: n(remaining.value) }), "Остаток обновлён");
+    const saveRemaining = () => run(
+      () => api.patch(`/recipes/cooking-logs/${props.pot.id}`, { current_remaining_weight: n(remaining.value) }),
+      n(remaining.value) < n(props.pot.planned_g)
+        ? "Остаток обновлён. Планам, которым не хватит, — снова «надо приготовить»"
+        : "Остаток обновлён"
+    );
     const saveIngredients = () => run(() => api.put(`/recipes/cooking-logs/${props.pot.id}/ingredients`, {
       ingredients: ingredients.value.filter((i) => i.variant_id && n(i.weight_g) > 0).map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })),
     }), "Состав пересчитан");

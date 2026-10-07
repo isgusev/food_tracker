@@ -19,7 +19,8 @@ export function sourceBadge(e) {
       ? { text: `В холодильнике · ост. ${grams(e.fridge_available_g)}`, cls: "ok" }
       : { text: `Мало в холодильнике · ост. ${grams(e.fridge_available_g)}`, cls: "warn" };
   }
-  if (e.fridge_pot_id) return { text: `Есть кастрюля · ост. ${grams(e.fridge_available_g)}`, cls: "info" };
+  if (e.fridge_pot_id && e.fridge_enough) return { text: `Есть кастрюля · свободно ${grams(n(e.fridge_available_g) - n(e.fridge_planned_g))}`, cls: "info" };
+  if (e.fridge_pot_id) return { text: "Надо приготовить · в кастрюле не хватит", cls: "warn" };
   return { text: "Надо приготовить", cls: "warn" };
 }
 
@@ -74,13 +75,15 @@ export const AddEntryModal = {
       if (id && portionHint.value) weight.value = Math.round(portionHint.value);
     });
     watch(variantId, (id) => { if (id) weight.value = 100; });
-    watch([recipeId, weight, kind], async () => {
+    watch([recipeId, weight, kind, people], async () => {
       potStatus.value = null;
       if (kind.value !== "recipe" || !recipeId.value || !(n(weight.value) > 0)) return;
       try {
-        potStatus.value = await api.get(`/diary/pot-status/${recipeId.value}`, { portion_g: Math.min(n(weight.value), 999.9) });
+        // из кастрюли запись заберёт порцию на всех едоков
+        potStatus.value = await api.get(`/diary/pot-status/${recipeId.value}`, { portion_g: n(weight.value) * (Number(people.value) || 1) });
       } catch { /* необязательная подсказка */ }
     });
+    const potFree = computed(() => potStatus.value ? n(potStatus.value.available_g) - n(potStatus.value.planned_g) : 0);
 
     function toggleDate(d) {
       const i = dates.value.indexOf(d);
@@ -118,7 +121,7 @@ export const AddEntryModal = {
 
     return {
       kind, recipeId, variantId, weight, people, meal, dates, potStatus, busy, error,
-      recipeItems, recipe, portionHint, portion, MEALS, toggleDate, save,
+      recipeItems, recipe, portionHint, portion, potFree, MEALS, toggleDate, save,
       fmt, grams, fmtWeekday, fmtDayMonth, n,
     };
   },
@@ -145,16 +148,17 @@ export const AddEntryModal = {
         </label>
         <label class="field"><span>Сколько человек едят</span>
           <select v-model.number="people"><option v-for="i in 10" :key="i" :value="i">{{ i }}</option></select>
-          <span class="tiny">Для списка покупок; КБЖУ считается на вас</span>
+          <span class="tiny">Все едят такую же порцию: столько уйдёт из кастрюли и в покупки. КБЖУ — на вас</span>
         </label>
       </div>
 
       <div class="small" v-if="portion"><span class="muted">Ваша порция: </span><Macros :m="portion" /></div>
 
-      <div v-if="potStatus && potStatus.has_active_pot" class="alert" :class="potStatus.enough_for_portion ? 'info' : 'warn'">
+      <div v-if="potStatus && potStatus.has_active_pot" class="alert" :class="potFree >= n(weight) * people ? 'info' : 'warn'">
         В холодильнике есть это блюдо: осталось {{ grams(potStatus.available_g) }},
-        уже запланировано {{ grams(potStatus.planned_g) }}.
-        {{ potStatus.enough_for_portion ? 'На эту порцию хватает.' : 'На эту порцию может не хватить.' }}
+        из них уже запланировано {{ grams(potStatus.planned_g) }}.
+        <template v-if="potFree >= n(weight) * people">Свободного хватает: {{ grams(n(weight) * people) }} возьмём из кастрюли, при «Съедено» она спишется.</template>
+        <template v-else>Свободно только {{ grams(Math.max(0, potFree)) }} — блюдо попадёт в список покупок как «надо приготовить».</template>
       </div>
 
       <label class="field"><span>Приём пищи</span>
@@ -185,6 +189,7 @@ export const EntryModal = {
   emits: ["close", "saved"],
   setup(props, { emit }) {
     const weight = ref(n(props.entry.weight_g));
+    const people = ref(props.entry.servings_multiplier || 1);
     const busy = ref(false);
     const error = ref("");
     const e = computed(() => props.entry);
@@ -204,15 +209,21 @@ export const EntryModal = {
         busy.value = false;
       }
     }
-    const eat = () => run(() => api.post(`/diary/${e.value.id}/eat`, { weight_g: n(weight.value) }), "Отмечено как съеденное");
-    const saveWeight = () => run(() => api.patch(`/diary/${e.value.id}/weight`, { weight_g: n(weight.value) }), "Вес обновлён");
+    const peopleChanged = computed(() => Number(people.value) !== (e.value.servings_multiplier || 1));
+    const eat = () => run(async () => {
+      // сначала фиксируем число едоков — от него зависит, сколько спишется из кастрюли
+      if (peopleChanged.value) await api.patch(`/diary/${e.value.id}/weight`, { weight_g: n(e.value.weight_g), servings_multiplier: Number(people.value) });
+      await api.post(`/diary/${e.value.id}/eat`, { weight_g: n(weight.value) });
+    }, "Отмечено как съеденное");
+    const saveWeight = () => run(() => api.patch(`/diary/${e.value.id}/weight`, { weight_g: n(weight.value), servings_multiplier: Number(people.value) }), "Сохранено");
+    const fromPot = computed(() => e.value.kind === "recipe" && (e.value.cooking_log_id || e.value.fridge_pot_id));
     const detach = () => run(() => api.post(`/diary/${e.value.id}/detach`), "Отвязано от холодильника");
     const remove = () => {
       const extra = e.value.status === "fact" && e.value.cooking_log_id ? "\nВес вернётся в кастрюлю холодильника." : "";
       if (!confirm(`Удалить «${entryName(e.value)}»?${extra}`)) return;
       run(() => api.del(`/diary/${e.value.id}`), "Удалено");
     };
-    return { e, weight, busy, error, st, badge, eat, saveWeight, detach, remove, entryName, MEAL_LABEL, grams, fmtWeekday, fmtDayMonth };
+    return { e, weight, people, busy, error, st, badge, eat, saveWeight, detach, remove, fromPot, entryName, MEAL_LABEL, grams, fmtWeekday, fmtDayMonth, n };
   },
   template: `
     <Modal :title="entryName(e)" @close="$emit('close')">
@@ -222,10 +233,15 @@ export const EntryModal = {
         <span class="muted small">{{ MEAL_LABEL[e.meal_type] }} · {{ fmtWeekday(e.date_day) }} {{ fmtDayMonth(e.date_day) }}</span>
       </div>
       <div><Macros :m="e" :digits="1" /> <span class="muted small">на {{ grams(e.weight_g) }}</span></div>
-      <div class="muted small" v-if="(e.servings_multiplier || 1) > 1">В списке покупок — на {{ e.servings_multiplier }} чел.</div>
-      <label class="field"><span>{{ e.status === 'fact' ? 'Съедено, г' : 'Порция, г' }}</span>
-        <input type="number" min="1" max="999.9" step="any" v-model="weight" @keydown.enter="e.status === 'fact' ? saveWeight() : eat()">
-      </label>
+      <div class="grid-2">
+        <label class="field"><span>{{ e.status === 'fact' ? 'Съедено на человека, г' : 'Порция на человека, г' }}</span>
+          <input type="number" min="1" max="999.9" step="any" v-model="weight" @keydown.enter="e.status === 'fact' ? saveWeight() : eat()">
+        </label>
+        <label class="field"><span>Сколько человек едят</span>
+          <select v-model.number="people"><option v-for="i in 10" :key="i" :value="i">{{ i }}</option></select>
+        </label>
+      </div>
+      <div class="muted small" v-if="fromPot && people > 1">Из кастрюли уйдёт {{ grams(n(weight) * people) }} — порция на {{ people }} чел.</div>
       <div v-if="error" class="alert error">{{ error }}</div>
       <template #foot>
         <button class="danger" :disabled="busy" @click="remove">Удалить</button>
