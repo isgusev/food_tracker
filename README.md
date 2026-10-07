@@ -4,6 +4,10 @@
 Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, без сборки),
 раздаётся самим API на http://localhost:8000/app/.
 
+**Семья:** рецепты, холодильник, план и список покупок общие для семьи; у каждого
+члена семьи (в том числе без аккаунта — ребёнок) свои порции и цели КБЖУ.
+Второй взрослый вступает в семью по коду приглашения (раздел «Семья» в интерфейсе).
+
 Разбор возможностей и план развития — [docs/REVIEW.md](docs/REVIEW.md).
 Доступ на push в GitHub — [docs/GITHUB_ACCESS.md](docs/GITHUB_ACCESS.md).
 
@@ -12,7 +16,7 @@ Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, бе�
 ```
 app/
   core/          # конфигурация (pydantic-settings), безопасность (JWT, хэширование), исключения
-  models/        # ORM-модели (по доменам: user, product, recipe, diary)
+  models/        # ORM-модели (по доменам: user, household, product, recipe, plan)
   schemas/       # Pydantic-схемы запросов/ответов
   db/            # engine/session (async), Base
   repositories/  # слой доступа к данным (только SQL/ORM)
@@ -40,7 +44,7 @@ web/             # веб-интерфейс: index.html, styles.css, js/ (Vue 3
    alembic upgrade head
    ```
 5. Демо-данные (при запущенном API): `python -m scripts.seed`
-   (доступ: `demo / demo-pass-123`)
+   (доступ: `demo / demo-pass-123`; создаётся семья с ребёнком «Маша» и ужином на сегодня)
 6. Запуск: `uvicorn app.main:app --reload`
    - интерфейс: http://localhost:8000/app/ (корень `/` перенаправляет туда)
    - API docs: http://localhost:8000/docs
