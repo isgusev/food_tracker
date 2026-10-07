@@ -16,6 +16,10 @@ from app.schemas.plan import (
     PortionIn,
     PortionWeightIn,
     PotSourceStatus,
+    TemplateApplied,
+    TemplateApply,
+    TemplateResponse,
+    TemplateSave,
 )
 
 router = APIRouter(prefix="/plan", tags=["План питания"])
@@ -38,6 +42,31 @@ async def create_item(
 ):
     """Добавить блюдо (recipe_id) или готовый продукт (variant_id) с порциями по людям."""
     return await service.create(me.household_id, user.id, payload)
+
+
+@router.get("/templates", response_model=list[TemplateResponse])
+async def list_templates(service: PlanServiceDep, me: CurrentMemberDep):
+    return await service.list_templates(me.household_id)
+
+
+@router.post("/templates", response_model=TemplateResponse, status_code=201)
+async def save_template(payload: TemplateSave, service: PlanServiceDep, me: CurrentMemberDep):
+    """Сохранить неделю (с понедельника week_start) как шаблон."""
+    return await service.save_template(me.household_id, payload.name, payload.week_start)
+
+
+@router.post("/templates/{template_id}/apply", response_model=TemplateApplied)
+async def apply_template(
+    template_id: int, payload: TemplateApply, service: PlanServiceDep, me: CurrentMemberDep, user: CurrentUserDep
+):
+    """Добавить блюда шаблона в неделю week_start (уже запланированное остаётся)."""
+    t = await service.get_owned_template(template_id, me.household_id)
+    return await service.apply_template(me.household_id, user.id, t, payload.week_start)
+
+
+@router.delete("/templates/{template_id}", status_code=204)
+async def delete_template(template_id: int, service: PlanServiceDep, me: CurrentMemberDep):
+    await service.delete_template(await service.get_owned_template(template_id, me.household_id))
 
 
 @router.get("/pot-status/{recipe_id}", response_model=PotSourceStatus)

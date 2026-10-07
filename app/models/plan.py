@@ -3,6 +3,7 @@ from __future__ import annotations
 
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     Date,
@@ -88,3 +89,19 @@ class MealPortion(Base):
     item = relationship("MealItem", back_populates="portions")
     member = relationship("HouseholdMember")
     eaten_from_pot = relationship("RecipeCookingLog")
+
+
+class WeekTemplate(Base):
+    """Шаблон недели: снимок плана (день недели, приём пищи, блюдо, порции),
+    который можно применить к любой неделе."""
+
+    __tablename__ = "week_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name = Column(String(100), nullable=False)
+    # [{"weekday": 0..6, "meal_type", "recipe_id"|"variant_id", "portions": [{"member_id", "weight_g"}]}]
+    items = Column(JSON, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())

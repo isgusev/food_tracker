@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.core.exceptions import NotFoundError, ValidationError
@@ -23,13 +23,18 @@ from app.domain import (
     quantize,
     scale_nutrients,
 )
-from app.models.plan import MealItem, MealPortion
+from sqlalchemy import select
+
+from app.models.household import HouseholdMember
+from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
 from app.repositories.plan import PlanRepository, remaining_weight
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.plan import (
+    TemplateApplied,
+    TemplateResponse,
     MealItemCreate,
     MealItemMove,
     MealItemResponse,
@@ -389,3 +394,82 @@ class PlanService:
             planned_g=booked,
             enough_for_portion=(available - booked >= portion_g) if portion_g is not None else None,
         )
+
+
+    # ------------------------------------------------------- шаблоны недель
+    @staticmethod
+    def _template_out(t: WeekTemplate) -> TemplateResponse:
+        per_day: dict[int, int] = {}
+        for it in t.items:
+            per_day[it["weekday"]] = per_day.get(it["weekday"], 0) + 1
+        return TemplateResponse(id=t.id, name=t.name, items_count=len(t.items), meals_per_day=per_day)
+
+    async def list_templates(self, household_id: int) -> list[TemplateResponse]:
+        return [self._template_out(t) for t in await self._plan.templates(household_id)]
+
+    async def save_template(self, household_id: int, name: str, week_start: date) -> TemplateResponse:
+        """Снимок недели: день недели, приём пищи, блюдо и плановые порции."""
+        items = await self._plan.list_in_range(household_id, week_start, week_start + timedelta(days=6))
+        snapshot = [
+            {
+                "weekday": (it.date_day - week_start).days,
+                "meal_type": it.meal_type,
+                "recipe_id": it.recipe_id,
+                "variant_id": it.variant_id,
+                "portions": [{"member_id": p.member_id, "weight_g": str(p.weight_g)} for p in it.portions],
+            }
+            for it in items
+            if it.recipe_id is not None or it.variant_id is not None
+        ]
+        if not snapshot:
+            raise ValidationError("На этой неделе нет блюд — сохранять нечего")
+        t = WeekTemplate(household_id=household_id, name=name.strip(), items=snapshot)
+        self._plan.add(t)
+        await self._plan.flush()
+        return self._template_out(t)
+
+    async def get_owned_template(self, template_id: int, household_id: int) -> WeekTemplate:
+        t = await self._plan.template(template_id)
+        if t is None or t.household_id != household_id:
+            raise NotFoundError("Шаблон не найден")
+        return t
+
+    async def apply_template(
+        self, household_id: int, user_id: int, t: WeekTemplate, week_start: date
+    ) -> TemplateApplied:
+        """Добавить блюда шаблона в неделю (как обычные новые планы — с резервом
+        из холодильника). Удалённые рецепты и скрытые члены семьи пропускаются."""
+        active = {
+            m.id for m in await self._members.list(
+                select(HouseholdMember).where(
+                    HouseholdMember.household_id == household_id, HouseholdMember.is_active.is_(True)
+                )
+            )
+        }
+        created = skipped = 0
+        for it in t.items:
+            portions = [
+                PortionIn(member_id=p["member_id"], weight_g=Decimal(p["weight_g"]))
+                for p in it["portions"]
+                if p["member_id"] is None or p["member_id"] in active
+            ]
+            if not portions:
+                skipped += 1
+                continue
+            data = MealItemCreate(
+                date_day=week_start + timedelta(days=it["weekday"]),
+                meal_type=it["meal_type"],
+                recipe_id=it.get("recipe_id"),
+                variant_id=it.get("variant_id"),
+                portions=portions,
+            )
+            try:
+                await self.create(household_id, user_id, data)
+                created += 1
+            except NotFoundError:
+                skipped += 1   # рецепт или продукт удалён
+        return TemplateApplied(created=created, skipped=skipped)
+
+    async def delete_template(self, t: WeekTemplate) -> None:
+        await self._plan.delete(t)
+        await self._plan.flush()

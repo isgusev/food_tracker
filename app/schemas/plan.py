@@ -119,3 +119,24 @@ class PotSourceStatus(BaseModel):
     available_g: Decimal = Decimal("0")
     planned_g: Decimal = Decimal("0")
     enough_for_portion: Optional[bool] = None
+
+
+class TemplateSave(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    week_start: date_type          # понедельник недели, которую сохраняем
+
+
+class TemplateApply(BaseModel):
+    week_start: date_type          # понедельник недели, куда применяем
+
+
+class TemplateResponse(BaseModel):
+    id: int
+    name: str
+    items_count: int
+    meals_per_day: dict[int, int]  # день недели (0 = пн) → сколько блюд
+
+
+class TemplateApplied(BaseModel):
+    created: int
+    skipped: int                   # блюда, чей рецепт/продукт уже удалён

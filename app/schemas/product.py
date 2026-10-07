@@ -31,6 +31,7 @@ class ProductWithCategoryCreate(BaseModel):
     category_name: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=255)
     brand_name: Optional[str] = None
+    barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
     base_variant: ProductVariantCreate
 
     @field_validator("category_name", "name")
@@ -71,6 +72,7 @@ class ProductCreate(ORMModel):
     name: str = Field(min_length=1, max_length=255)
     brand_id: Optional[int] = None
     brand_name: Optional[str] = None
+    barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
     base_variant: ProductVariantCreate
 
     @field_validator("name")
@@ -102,6 +104,7 @@ class ProductResponse(ORMModel):
     is_verified: bool
     base_unit: str = "g"
     piece_weight_g: Optional[Decimal] = None
+    barcode: Optional[str] = None
     packages: list[PackageResponse] = []
     manufacturers: list[ManufacturerResponse] = []
 
@@ -140,3 +143,27 @@ class CategoryCreate(ORMModel):
 class CategoryResponse(ORMModel):
     id: int
     name: str
+
+
+class BarcodeIn(BaseModel):
+    barcode: str = Field(pattern=r"^\d{8,14}$")
+
+
+class BarcodeSuggestion(BaseModel):
+    """Подсказка из Open Food Facts — пользователь проверяет и сохраняет сам."""
+
+    name: Optional[str] = None
+    brand: Optional[str] = None
+    calories: Optional[Decimal] = None
+    proteins: Optional[Decimal] = None
+    fats: Optional[Decimal] = None
+    carbs: Optional[Decimal] = None
+    package_unit: Optional[str] = None
+    package_amount: Optional[Decimal] = None
+
+
+class BarcodeLookup(BaseModel):
+    barcode: str
+    source: str                                   # "local" | "openfoodfacts" | "none"
+    product: Optional[ProductResponse] = None     # уже есть в справочнике
+    suggestion: Optional[BarcodeSuggestion] = None

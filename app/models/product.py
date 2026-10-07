@@ -55,6 +55,8 @@ class Product(Base):
     # для жидкостей считаем 1 мл ≈ 1 г.
     base_unit = Column(String(4), nullable=False, default="g", server_default="g")
     piece_weight_g = Column(Numeric(7, 1), nullable=True)
+    # Штрихкод упаковки (EAN): один код — один продукт конкретного бренда
+    barcode = Column(String(32), nullable=True, unique=True)
 
     category = relationship("ProductCategory", back_populates="products")
     brand = relationship("Brand", back_populates="products")

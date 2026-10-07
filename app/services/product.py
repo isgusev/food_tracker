@@ -20,7 +20,16 @@ from app.repositories.product import (
     VariantRepository,
 )
 from app.repositories.recipe import RecipeRepository
-from app.schemas.product import PackageCreate, ProductCreate, ProductVariantCreate, UnitUpdate
+from app.schemas.product import (
+    BarcodeLookup,
+    BarcodeSuggestion,
+    PackageCreate,
+    ProductCreate,
+    ProductResponse,
+    ProductVariantCreate,
+    UnitUpdate,
+)
+from app.services import barcode as off
 from app.services.recipe import retarget_recipes_to_variant
 
 
@@ -81,6 +90,8 @@ class ProductService:
         brand_id = await self._resolve_brand_id(data)
 
         search_name = data.name.lower()
+        if data.barcode and await self._products.by_barcode(data.barcode):
+            raise ConflictError("Продукт с таким штрихкодом уже есть в справочнике")
         if await self._products.find_duplicate(brand_id, search_name):
             raise ConflictError(
                 f"Продукт '{data.name}' для этого бренда уже существует (регистр не имеет значения)"
@@ -93,6 +104,7 @@ class ProductService:
             brand_id=brand_id,
             name=data.name,
             search_name=search_name,
+            barcode=data.barcode,
             base_unit=same[0].base_unit if same else "g",
             piece_weight_g=same[0].piece_weight_g if same else None,
         )
@@ -134,6 +146,26 @@ class ProductService:
         if product is None:
             raise NotFoundError("Продукт не найден")
         return product
+
+    # --- ШТРИХКОД ---
+    async def lookup_barcode(self, code: str) -> BarcodeLookup:
+        """Свой справочник → Open Food Facts → ничего (тогда — ввести вручную)."""
+        local = await self._products.by_barcode(code)
+        if local is not None:
+            return BarcodeLookup(barcode=code, source="local", product=ProductResponse.model_validate(local))
+        raw = await off.fetch_off(code)
+        if raw is None:
+            return BarcodeLookup(barcode=code, source="none")
+        return BarcodeLookup(barcode=code, source="openfoodfacts", suggestion=BarcodeSuggestion(**off.parse_off(raw)))
+
+    async def set_barcode(self, product_id: int, code: str) -> Product:
+        product = await self.get_product(product_id)
+        other = await self._products.by_barcode(code)
+        if other is not None and other.id != product.id:
+            raise ConflictError(f"Этот штрихкод уже у продукта «{other.name}»")
+        product.barcode = code
+        await self._products.flush()
+        return await self.get_product(product_id)
 
     # --- ЕДИНИЦЫ И УПАКОВКИ ---
     async def set_unit(self, product_id: int, data: UnitUpdate) -> Product:

@@ -9,7 +9,7 @@ from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.domain import MEAL_ORDER
-from app.models.plan import MealItem, MealPortion
+from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.product import Product, ProductManufacturer, ProductVariant
 from app.repositories.base import BaseRepository
 
@@ -49,6 +49,13 @@ class PlanRepository(BaseRepository[MealItem]):
             .execution_options(populate_existing=True)
         )
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
+
+    async def templates(self, household_id: int) -> list[WeekTemplate]:
+        stmt = select(WeekTemplate).where(WeekTemplate.household_id == household_id).order_by(WeekTemplate.name)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def template(self, template_id: int) -> WeekTemplate | None:
+        return await self._session.get(WeekTemplate, template_id)
 
     async def get_portion(self, portion_id: int) -> MealPortion | None:
         stmt = select(MealPortion).where(MealPortion.id == portion_id)

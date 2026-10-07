@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from app.db.base import Base
 from app.models.household import Household, HouseholdMember
-from app.models.plan import MealItem, MealPortion
+from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.product import (
     Brand,
     Product,
@@ -41,6 +41,7 @@ __all__ = [
     "HouseholdMember",
     "MealItem",
     "MealPortion",
+    "WeekTemplate",
     "Product",
     "ProductCategory",
     "ProductManufacturer",

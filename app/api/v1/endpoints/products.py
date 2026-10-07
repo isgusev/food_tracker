@@ -8,6 +8,8 @@ from app.api.deps import ProductServiceDep
 from app.schemas.product import (
     CategoryCreate,
     CategoryResponse,
+    BarcodeIn,
+    BarcodeLookup,
     PackageCreate,
     UnitUpdate,
     ProductCreate,
@@ -43,6 +45,7 @@ async def create_product_with_category(
         category_id=category_id,
         name=product.name,
         brand_name=product.brand_name,
+        barcode=product.barcode,
         base_variant=product.base_variant,
     )
     return await service.create_product(payload)
@@ -108,3 +111,18 @@ async def add_package(product_id: int, payload: PackageCreate, service: ProductS
 @router.delete("/packages/{package_id}", response_model=ProductResponse)
 async def delete_package(package_id: int, service: ProductServiceDep):
     return await service.delete_package(package_id)
+
+
+@router.get("/barcode/{code}", response_model=BarcodeLookup)
+async def lookup_barcode(code: str, service: ProductServiceDep):
+    """Поиск по штрихкоду: свой справочник, затем Open Food Facts (подсказка КБЖУ)."""
+    if not code.isdigit() or not 8 <= len(code) <= 14:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("Штрихкод — 8–14 цифр")
+    return await service.lookup_barcode(code)
+
+
+@router.put("/{product_id}/barcode", response_model=ProductResponse)
+async def set_barcode(product_id: int, payload: BarcodeIn, service: ProductServiceDep):
+    """Привязать штрихкод к продукту (чтобы в следующий раз найти его сканером)."""
+    return await service.set_barcode(product_id, payload.barcode)

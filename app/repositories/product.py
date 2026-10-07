@@ -65,6 +65,10 @@ class ProductRepository(BaseRepository[Product]):
         stmt = select(Product).where(Product.search_name == search_name).options(selectinload(Product.packages))
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def by_barcode(self, code: str) -> Product | None:
+        stmt = self.full_query().where(Product.barcode == code)
+        return (await self._session.execute(stmt)).unique().scalar_one_or_none()
+
     async def get_package(self, package_id: int) -> ProductPackage | None:
         return await self._session.get(ProductPackage, package_id)
 
