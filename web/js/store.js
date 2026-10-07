@@ -5,6 +5,8 @@ import { local, n } from "./util.js";
 
 export const state = reactive({
   user: null,
+  household: null,      // { id, name, invite_code, me_member_id, members: [...] }
+  viewMemberId: null,   // чьи КБЖУ показываем в плане (по умолчанию — свои)
   products: [],
   productCategories: [],
   recipes: [],
@@ -35,6 +37,23 @@ export async function loadProducts() {
   state.productCategories = cats;
   state.loaded.products = true;
 }
+
+export async function loadHousehold() {
+  state.household = await api.get("/household");
+  const saved = local.get(`ft.viewMember.${state.user?.id}`, null);
+  const ids = state.household.members.map((m) => m.id);
+  state.viewMemberId = ids.includes(saved) ? saved : state.household.me_member_id;
+}
+
+export function setViewMember(id) {
+  state.viewMemberId = id;
+  local.set(`ft.viewMember.${state.user?.id}`, id);
+}
+
+export const members = computed(() => state.household?.members || []);
+export const activeMembers = computed(() => members.value.filter((m) => m.is_active));
+export const memberById = computed(() => Object.fromEntries(members.value.map((m) => [m.id, m])));
+export const viewMember = computed(() => memberById.value[state.viewMemberId] || null);
 
 export async function loadRecipes() {
   const [recipes, cats] = await Promise.all([
@@ -104,11 +123,19 @@ export function variantLabel(id) {
   return v ? v.label : `Продукт #${id}`;
 }
 
-// ---------- Личные цели КБЖУ (пока хранятся в браузере, см. docs/REVIEW.md) ----------
+// ---------- Личные цели КБЖУ (хранятся у члена семьи на сервере) ----------
 const DEFAULT_TARGETS = { calories: 2000, proteins: 100, fats: 70, carbs: 230 };
-export function getTargets() {
-  return { ...DEFAULT_TARGETS, ...local.get(`ft.targets.${state.user?.id}`, {}) };
+export function targetsOf(member) {
+  const t = member?.targets || {};
+  const out = {};
+  for (const k of Object.keys(DEFAULT_TARGETS)) out[k] = t[k] != null ? n(t[k]) : null;
+  return out;
 }
-export function setTargets(t) {
-  local.set(`ft.targets.${state.user?.id}`, t);
+// Для полосок прогресса: незаданные цели подменяем ориентиром
+export function targetsForMeters(member) {
+  const t = targetsOf(member);
+  return Object.fromEntries(Object.entries(t).map(([k, v]) => [k, v ?? DEFAULT_TARGETS[k]]));
+}
+export function hasTargets(member) {
+  return Object.values(targetsOf(member)).some((v) => v != null);
 }

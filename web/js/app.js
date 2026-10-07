@@ -1,14 +1,14 @@
 // Точка входа: hash-роутер, оболочка (меню), авторизация.
 import { createApp, ref, computed, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api, auth } from "./api.js";
-import { state } from "./store.js";
+import { state, loadHousehold } from "./store.js";
 import { local } from "./util.js";
 import { PlannerView, DayView } from "./views/planner.js";
 import { ShoppingView } from "./views/shopping.js";
 import { FridgeView } from "./views/fridge.js";
 import { RecipesView } from "./views/recipes.js";
 import { CatalogView } from "./views/catalog.js";
-import { LoginView, ProfileView } from "./views/misc.js";
+import { LoginView, FamilyView } from "./views/misc.js";
 
 const theme = local.get("ft.theme", "auto");
 if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
@@ -19,7 +19,7 @@ const NAV = [
   { path: "fridge", label: "Холодильник", icon: "🧊" },
   { path: "recipes", label: "Рецепты", icon: "🍲" },
   { path: "catalog", label: "Продукты", icon: "📦" },
-  { path: "profile", label: "Профиль", icon: "👤" },
+  { path: "family", label: "Семья", icon: "👪" },
 ];
 
 function parseHash() {
@@ -30,7 +30,7 @@ function parseHash() {
 }
 
 const App = {
-  components: { PlannerView, DayView, ShoppingView, FridgeView, RecipesView, CatalogView, LoginView, ProfileView },
+  components: { PlannerView, DayView, ShoppingView, FridgeView, RecipesView, CatalogView, LoginView, FamilyView },
   setup() {
     const route = ref(parseHash());
     const ready = ref(false);
@@ -40,8 +40,10 @@ const App = {
 
     async function bootstrap() {
       if (!auth.token) { ready.value = true; return; }
-      try { state.user = await api.me(); }
-      catch { auth.clear(); state.user = null; }
+      try {
+        state.user = await api.me();
+        await loadHousehold();
+      } catch { auth.clear(); state.user = null; }
       ready.value = true;
     }
     auth.onUnauthorized(() => { state.user = null; });
@@ -49,7 +51,7 @@ const App = {
 
     function logout() {
       auth.clear();
-      Object.assign(state, { user: null, products: [], recipes: [], loaded: { products: false, recipes: false } });
+      Object.assign(state, { user: null, household: null, products: [], recipes: [], loaded: { products: false, recipes: false } });
     }
     // Ключ роутера: перерисовываем экран при смене маршрута (включая параметры)
     const viewKey = computed(() => route.value.name + "/" + (route.value.param || "") + "?" + new URLSearchParams(route.value.query));
@@ -64,7 +66,7 @@ const App = {
         <div class="brand">🥗 Food Tracker</div>
         <a v-for="n in NAV" :key="n.path" :href="'#/' + n.path" class="nav-link" :class="{ active: active(n.path) }">
           <span class="nav-icon">{{ n.icon }}</span>{{ n.label }}</a>
-        <div class="sidebar-foot small muted">{{ state.user.username }}</div>
+        <div class="sidebar-foot small muted">{{ state.user.username }}<div class="tiny" v-if="state.household">{{ state.household.name }}</div></div>
       </nav>
       <main class="main">
         <PlannerView v-if="route.name === 'plan'" :key="viewKey" :query="route.query" />
@@ -73,7 +75,7 @@ const App = {
         <FridgeView v-else-if="route.name === 'fridge'" />
         <RecipesView v-else-if="route.name === 'recipes'" />
         <CatalogView v-else-if="route.name === 'catalog'" />
-        <ProfileView v-else-if="route.name === 'profile'" @logout="logout" />
+        <FamilyView v-else-if="route.name === 'family' || route.name === 'profile'" @logout="logout" />
         <div v-else class="empty">Страница не найдена. <a href="#/plan">К плану</a></div>
       </main>
       <nav class="tabbar">
