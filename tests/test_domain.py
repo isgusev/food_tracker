@@ -65,10 +65,3 @@ def test_nutrients_are_inconsistent(cal, p, f, c, expected):
     n = Nutrients(calories=cal, proteins=p, fats=f, carbs=c)
     assert nutrients_are_inconsistent(n) is expected
 
-
-def test_pot_share_multiplies_by_people():
-    from app.domain import pot_share
-
-    assert pot_share(Decimal("150"), 3) == Decimal("450")
-    assert pot_share(Decimal("150"), None) == Decimal("150")
-    assert pot_share(Decimal("150"), 0) == Decimal("150")

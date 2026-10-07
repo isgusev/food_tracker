@@ -1,46 +1,24 @@
-"""Эндпоинт «Список покупок» по диапазону дат.
-
-Вынесен из diary.py в отдельный префикс /shopping-list, чтобы не терять
-обратную совместимость со старыми клиентами (UI обращался к
-/diary/{user_id}/shopping-list). user_id всегда берётся из JWT.
-"""
+"""Эндпоинт «Список покупок» семьи на период."""
 from __future__ import annotations
+
 
 from datetime import date
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUserDep, DiaryServiceDep
-from app.core.exceptions import ValidationError
-from app.schemas.diary import ShoppingListResponse
+from app.api.deps import CurrentMemberDep, PlanServiceDep
+from app.schemas.plan import ShoppingListResponse
 
 router = APIRouter(prefix="/shopping-list", tags=["Список покупок"])
 
 
 @router.get("", response_model=ShoppingListResponse)
 async def get_shopping_list(
-    service: DiaryServiceDep,
-    current_user: CurrentUserDep,
+    service: PlanServiceDep,
+    me: CurrentMemberDep,
     start_date: date = Query(),
     end_date: date = Query(),
 ):
-    """Агрегированный список покупок по планам текущего пользователя."""
-    if start_date > end_date:
-        raise ValidationError("Дата окончания не может быть раньше даты начала")
-    items = await service.shopping_list(current_user.id, start_date, end_date)
-    return ShoppingListResponse(
-        start_date=start_date, end_date=end_date, items=items
-    )
-
-
-# Совместимость: старый путь с user_id в URL — id из пути игнорируется,
-# данные всегда отдаются только для пользователя из токена.
-@router.get("/{path_user_id}", response_model=ShoppingListResponse)
-async def get_shopping_list_legacy(
-    path_user_id: int,
-    service: DiaryServiceDep,
-    current_user: CurrentUserDep,
-    start_date: date = Query(),
-    end_date: date = Query(),
-):
-    return await get_shopping_list(service, current_user, start_date, end_date)
+    """Что купить под план семьи: несъеденные порции блюд, которых нет в холодильнике."""
+    items = await service.shopping_list(me.household_id, start_date, end_date)
+    return ShoppingListResponse(start_date=start_date, end_date=end_date, items=items)

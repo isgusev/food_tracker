@@ -36,27 +36,27 @@ class RecipeRepository(BaseRepository[Recipe]):
             ).options(joinedload(Product.brand), joinedload(Product.category)),
         )
 
-    async def get_by_id(self, pk: int, user_id: int | None = None) -> Recipe | None:
-        """Рецепт без состава; если указан user_id — только рецепт владельца."""
-        if user_id is None:
+    async def get_by_id(self, pk: int, household_id: int | None = None) -> Recipe | None:
+        """Рецепт без состава; если указан household_id — только рецепт этой семьи."""
+        if household_id is None:
             return await self.get(pk)
-        stmt = select(Recipe).where(Recipe.id == pk, Recipe.user_id == user_id)
+        stmt = select(Recipe).where(Recipe.id == pk, Recipe.household_id == household_id)
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def get_full(self, recipe_id: int, user_id: int | None = None) -> Recipe | None:
-        """Получить рецепт с составом. Если указан user_id — только рецепт этого владельца."""
+    async def get_full(self, recipe_id: int, household_id: int | None = None) -> Recipe | None:
+        """Рецепт с составом. Если указан household_id — только рецепт этой семьи."""
         stmt = self.full_query().where(Recipe.id == recipe_id)
-        if user_id is not None:
-            stmt = stmt.where(Recipe.user_id == user_id)
+        if household_id is not None:
+            stmt = stmt.where(Recipe.household_id == household_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
     async def list_full(
-        self, user_id: int | None = None, limit: int = 100, offset: int = 0
+        self, household_id: int | None = None, limit: int = 100, offset: int = 0
     ) -> list[Recipe]:
-        """Список рецептов; если user_id задан — только рецепты пользователя."""
+        """Список рецептов; если household_id задан — только рецепты семьи."""
         stmt = self.full_query()
-        if user_id is not None:
-            stmt = stmt.where(Recipe.user_id == user_id)
+        if household_id is not None:
+            stmt = stmt.where(Recipe.household_id == household_id)
         stmt = stmt.order_by(Recipe.id).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
@@ -67,14 +67,14 @@ class RecipeRepository(BaseRepository[Recipe]):
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
-    async def name_exists(self, user_id: int, name: str) -> bool:
-        """Есть ли у пользователя рецепт с таким названием (без учёта регистра).
+    async def name_exists(self, household_id: int, name: str) -> bool:
+        """Есть ли в семье рецепт с таким названием (без учёта регистра).
 
         Регистронезависимость обеспечивается прикладным сравнением, а не SQL LOWER():
         в SQLite LOWER() не работает для кириллицы, а в PostgreSQL collation может
         отличаться от Python .lower().
         """
-        stmt = select(Recipe.name).where(Recipe.user_id == user_id)
+        stmt = select(Recipe.name).where(Recipe.household_id == household_id)
         target = name.strip().lower()
         for (existing,) in (await self._session.execute(stmt)).fetchall():
             if existing.strip().lower() == target:
@@ -98,26 +98,26 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
 
     async def list_full(
         self,
-        user_id: int | None = None,
+        household_id: int | None = None,
         limit: int = 200,
         offset: int = 0,
         include_finished: bool = False,
     ) -> list[RecipeCookingLog]:
         stmt = self.full_query()
-        if user_id is not None:
-            stmt = stmt.where(RecipeCookingLog.user_id == user_id)
+        if household_id is not None:
+            stmt = stmt.where(RecipeCookingLog.household_id == household_id)
         if not include_finished:
             # по умолчанию — только активные кастрюли («Холодильник»)
             stmt = stmt.where(RecipeCookingLog.is_finished.is_(False))
         stmt = stmt.order_by(RecipeCookingLog.cooked_at.desc()).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
-    async def find_active_pot(self, user_id: int, recipe_id: int) -> RecipeCookingLog | None:
-        """Самая свежая недоеденная кастрюля пользователя по рецепту."""
+    async def find_active_pot(self, household_id: int, recipe_id: int) -> RecipeCookingLog | None:
+        """Самая свежая недоеденная кастрюля семьи по рецепту."""
         stmt = (
             select(RecipeCookingLog)
             .where(
-                RecipeCookingLog.user_id == user_id,
+                RecipeCookingLog.household_id == household_id,
                 RecipeCookingLog.recipe_id == recipe_id,
                 RecipeCookingLog.is_finished.is_(False),
             )
@@ -127,13 +127,13 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def list_finished(
-        self, user_id: int, limit: int = 200, offset: int = 0
+        self, household_id: int, limit: int = 200, offset: int = 0
     ) -> list[RecipeCookingLog]:
         """Архив: закончившиеся кастрюли (пустые или помеченные удалёнными)."""
         stmt = (
             self.full_query()
             .where(
-                RecipeCookingLog.user_id == user_id,
+                RecipeCookingLog.household_id == household_id,
                 or_(
                     RecipeCookingLog.is_finished.is_(True),
                     RecipeCookingLog.is_discarded.is_(True),

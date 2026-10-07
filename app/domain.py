@@ -10,15 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-# --- Статусы записей дневника питания (DiaryLog.status) ---
-# Единый источник правды: роутеры, UI и тесты должны использовать эти значения.
-STATUS_TEMPLATE_PLAN = "template_plan"  # примерный план по шаблону рецепта
-STATUS_COOKED_PLAN = "cooked_plan"      # точный план (есть конкретная кастрюля)
-STATUS_FACT = "fact"                    # съедено по факту
-
-DIARY_STATUSES: frozenset[str] = frozenset(
-    {STATUS_TEMPLATE_PLAN, STATUS_COOKED_PLAN, STATUS_FACT}
-)
+# --- Состояние блюда в плане (выводится из связей MealItem, см. app/models/plan.py) ---
+ITEM_PRODUCT = "product"      # готовый продукт: покупается «как есть»
+ITEM_TO_COOK = "to_cook"      # рецепт, кастрюли нет — надо приготовить (→ покупки)
+ITEM_IN_FRIDGE = "in_fridge"  # рецепт, порции зарезервированы в кастрюле
 
 # Типы приемов пищи (порядок — как в течение дня; используется для сортировки)
 MEAL_ORDER: tuple[str, ...] = ("breakfast", "lunch", "dinner", "snack")
@@ -57,21 +52,6 @@ def nutrients_are_inconsistent(n: Nutrients) -> bool:
     )
     diff = abs(n.calories - calculated)
     return diff > NUTRIENTS_TOLERANCE_ABS and diff > NUTRIENTS_TOLERANCE_REL * calculated
-
-
-def people_count(servings_multiplier: int | None) -> Decimal:
-    """Сколько человек едят запись плана (минимум 1)."""
-    return Decimal(max(1, abs(int(servings_multiplier or 1))))
-
-
-def pot_share(weight_g, servings_multiplier: int | None) -> Decimal:
-    """Сколько граммов запись забирает из кастрюли/покупок: порция × число едоков.
-
-    «Сколько человек едят» означает, что все едят одинаковую порцию одного блюда.
-    Личные КБЖУ считаются по одной порции (weight_g), а кастрюля и список
-    покупок — по всей семье.
-    """
-    return Decimal(str(weight_g)) * people_count(servings_multiplier)
 
 
 def scale_nutrients(per_100g: Nutrients, weight_g: Decimal) -> Nutrients:

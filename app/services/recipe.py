@@ -9,16 +9,11 @@ from sqlalchemy import select
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
-    MEAL_TYPES,
-    STATUS_COOKED_PLAN,
-    STATUS_FACT,
     ZERO,
     Nutrients,
     per_100g_from_totals,
-    pot_share,
     quantize,
 )
-from app.models.diary import DiaryLog
 from app.models.recipe import (
     Recipe,
     RecipeActualIngredient,
@@ -26,7 +21,7 @@ from app.models.recipe import (
     RecipeCookingLog,
     RecipeTemplateIngredient,
 )
-from app.repositories.diary import DiaryRepository
+from app.repositories.plan import PlanRepository
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import (
     CookingLogRepository,
@@ -43,12 +38,6 @@ from app.schemas.recipe import (
     RecipeUpdate,
 )
 
-MEAL_RU = {
-    "breakfast": "завтрак",
-    "lunch": "обед",
-    "dinner": "ужин",
-    "snack": "перекус",
-}
 
 
 async def _sum_ingredients(
@@ -124,13 +113,13 @@ class RecipeService:
         categories: RecipeCategoryRepository,
         cooking_logs: CookingLogRepository,
         variants: VariantRepository,
-        diary: DiaryRepository,
+        plan: PlanRepository,
     ) -> None:
         self._recipes = recipes
         self._categories = categories
         self._cooking_logs = cooking_logs
         self._variants = variants
-        self._diary = diary
+        self._plan = plan
 
     # --- КАТЕГОРИИ РЕЦЕПТОВ ---
     async def create_category(self, name: str) -> RecipeCategory:
@@ -150,17 +139,18 @@ class RecipeService:
             )
         )
 
-    # --- ШАБЛОНЫ РЕЦЕПТОВ (личная библиотека пользователя) ---
-    async def create_recipe(self, user_id: int, data: RecipeCreate) -> Recipe:
+    # --- ШАБЛОНЫ РЕЦЕПТОВ (общая библиотека семьи) ---
+    async def create_recipe(self, household_id: int, user_id: int, data: RecipeCreate) -> Recipe:
         if await self._categories.get(data.recipe_category_id) is None:
             raise NotFoundError("Указанная категория рецептов не найдена")
-        if await self._recipes.name_exists(user_id, data.name):
+        if await self._recipes.name_exists(household_id, data.name):
             raise ConflictError(f"Рецепт '{data.name.strip()}' уже существует")
 
         total_raw, totals = await _sum_ingredients(data.ingredients, self._variants)
         per_100 = per_100g_from_totals(totals, data.estimated_cooked_weight)
 
         recipe = Recipe(
+            household_id=household_id,
             user_id=user_id,
             recipe_category_id=data.recipe_category_id,
             name=data.name,
@@ -181,31 +171,31 @@ class RecipeService:
         )
         self._recipes.add(recipe)
         await self._recipes.flush()
-        full = await self._recipes.get_full(recipe.id, user_id=user_id)
+        full = await self._recipes.get_full(recipe.id, household_id=household_id)
         assert full is not None
         return full
 
     async def list_recipes(
-        self, user_id: int, limit: int = 100, offset: int = 0
+        self, household_id: int, limit: int = 100, offset: int = 0
     ) -> list[Recipe]:
-        return await self._recipes.list_full(user_id=user_id, limit=limit, offset=offset)
+        return await self._recipes.list_full(household_id=household_id, limit=limit, offset=offset)
 
-    async def get_recipe(self, recipe_id: int, user_id: int) -> Recipe:
-        """Чужой рецепт недоступен — единый 404 без утечки информации."""
-        recipe = await self._recipes.get_full(recipe_id, user_id=user_id)
+    async def get_recipe(self, recipe_id: int, household_id: int) -> Recipe:
+        """Рецепт другой семьи недоступен — единый 404 без утечки информации."""
+        recipe = await self._recipes.get_full(recipe_id, household_id=household_id)
         if recipe is None:
             raise NotFoundError("Шаблон рецепта не найден")
         return recipe
 
-    async def update_recipe(self, recipe_id: int, user_id: int, data: RecipeUpdate) -> Recipe:
+    async def update_recipe(self, recipe_id: int, household_id: int, data: RecipeUpdate) -> Recipe:
         """Частичное обновление шаблона (PATCH). КБЖУ пересчитываются, если менялся состав."""
-        recipe = await self._recipes.get_full(recipe_id, user_id=user_id)
+        recipe = await self._recipes.get_full(recipe_id, household_id=household_id)
         if recipe is None:
             raise NotFoundError("Шаблон рецепта не найден")
 
         fields = data.model_dump(exclude_unset=True)
         if "name" in fields and fields["name"].strip().lower() != recipe.name.strip().lower():
-            if await self._recipes.name_exists(user_id, fields["name"]):
+            if await self._recipes.name_exists(household_id, fields["name"]):
                 raise ConflictError(f"Рецепт '{fields['name'].strip()}' уже существует")
 
         if "recipe_category_id" in fields and fields["recipe_category_id"] != recipe.recipe_category_id:
@@ -243,12 +233,11 @@ class RecipeService:
         _apply_per_100(recipe, per_100g_from_totals(totals, new_weight))
 
         await self._recipes.flush()
-        return await self.get_recipe(recipe.id, user_id)
+        return await self.get_recipe(recipe.id, household_id)
 
-    async def delete_recipe(self, recipe_id: int, user_id: int) -> None:
-        """Удаление шаблона. Связанные кастрюли остаются (recipe_id → NULL через FK SET NULL),
-        их планы в дневнике откатываются к привязке по кастрюле."""
-        recipe = await self._recipes.get_full(recipe_id, user_id=user_id)
+    async def delete_recipe(self, recipe_id: int, household_id: int) -> None:
+        """Удаление шаблона. Кастрюли и блюда плана остаются (recipe_id → NULL через FK)."""
+        recipe = await self._recipes.get_full(recipe_id, household_id=household_id)
         if recipe is None:
             raise NotFoundError("Шаблон рецепта не найден")
         await self._recipes.delete(recipe)
@@ -256,9 +245,14 @@ class RecipeService:
 
     # --- ХОЛОДИЛЬНИК ---
     async def cook(
-        self, user_id: int, recipe_id: int, data: RecipeCookingLogCreate, today: date
+        self,
+        household_id: int,
+        user_id: int,
+        recipe_id: int,
+        data: RecipeCookingLogCreate,
+        today: date,
     ) -> RecipeCookingLog:
-        template = await self._recipes.get_by_id(recipe_id, user_id=user_id)
+        template = await self._recipes.get_by_id(recipe_id, household_id=household_id)
         if template is None:
             raise NotFoundError("Шаблон рецепта не найден")
 
@@ -267,6 +261,7 @@ class RecipeService:
 
         pot = RecipeCookingLog(
             recipe_id=recipe_id,
+            household_id=household_id,
             user_id=user_id,
             total_raw_weight=quantize(total_raw),
             total_cooked_weight=data.total_cooked_weight,
@@ -284,10 +279,10 @@ class RecipeService:
         self._cooking_logs.add(pot)
         await self._cooking_logs.flush()
 
-        # Автоуточнение планов: template_plan по этому рецепту → cooked_plan на свежую
-        # кастрюлю, начиная с сегодняшнего дня и только сколько влезает в выход блюда
-        await self._diary.reattach_template_plans(
-            user_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight
+        # Блюда плана по этому рецепту резервируются в свежей кастрюле —
+        # начиная с сегодняшнего дня и только сколько влезает в выход блюда
+        await self._plan.attach_to_new_pot(
+            household_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight
         )
 
         full = await self._cooking_logs.get_full(pot.id)
@@ -296,38 +291,33 @@ class RecipeService:
 
     async def list_pots(
         self,
-        user_id: int,
+        household_id: int,
         limit: int = 200,
         offset: int = 0,
         include_finished: bool = False,
     ) -> list[RecipeCookingLog]:
         return await self._cooking_logs.list_full(
-            user_id, limit=limit, offset=offset, include_finished=include_finished
+            household_id, limit=limit, offset=offset, include_finished=include_finished
         )
 
-    async def pot_plan_stats(self, user_id: int) -> dict[int, Decimal]:
-        """Сумма весов планов дневника по кастрюлям (для колонки «Запланировано»)."""
-        return await self._diary.planned_weight_by_pot(user_id)
+    async def pot_plan_stats(self, household_id: int) -> dict[int, Decimal]:
+        """Резерв плана по кастрюлям (для колонки «Запланировано»)."""
+        return await self._plan.reserved_by_pot(household_id)
 
-    async def get_owned_pot(self, log_id: int, user_id: int) -> RecipeCookingLog:
-        """Кастрюля только для её владельца; чужая = 404 (без утечки информации)."""
+    async def get_owned_pot(self, log_id: int, household_id: int) -> RecipeCookingLog:
+        """Кастрюля только своей семьи; чужая = 404 (без утечки информации)."""
         pot = await self._cooking_logs.get_full(log_id)
-        if pot is None or pot.user_id != user_id:
+        if pot is None or pot.household_id != household_id:
             raise NotFoundError("Запись готовки не найдена")
         return pot
-
-    async def delete_pot(self, pot: RecipeCookingLog) -> None:
-        # Связанные планы откатываются в template_plan (иначе остались бы «висячие» ссылки)
-        await self._diary.detach_plans_from_pot(pot.id)
-        await self._cooking_logs.delete(pot)
 
     async def pot_diary_usage(
         self, pot: RecipeCookingLog, today: date
     ) -> dict[str, list[str]]:
-        """Даты упоминания кастрюли в дневнике: past / current_future (ISO-строки)."""
-        logs = await self._diary.logs_using_pot(pot.id)
-        past = sorted({log.date_day for log in logs if log.date_day < today})
-        future = sorted({log.date_day for log in logs if log.date_day >= today})
+        """Даты, где кастрюля участвует в плане: past / current_future (ISO-строки)."""
+        items = await self._plan.items_touching_pot(pot.id)
+        past = sorted({i.date_day for i in items if i.date_day < today})
+        future = sorted({i.date_day for i in items if i.date_day >= today})
         return {
             "past": [d.isoformat() for d in past],
             "current_future": [d.isoformat() for d in future],
@@ -352,21 +342,21 @@ class RecipeService:
                 "Кастрюлю нельзя удалить: она учтена в дневнике питания за даты: "
                 + ", ".join(usage["past"])
             )
-        linked = await self._diary.logs_using_pot(pot.id)
+        linked = await self._plan.items_touching_pot(pot.id)
         if remove_from_diary:
-            for log in linked:
-                await self._diary.delete(log)
+            for item in linked:
+                await self._plan.delete(item)
         else:
-            # планы, отвязанные от кастрюли, должны остаться «планами по шаблону»
-            # (иначе попадут в план покупок с нулевым весом); факты не трогаем
-            for log in linked:
-                if log.status == STATUS_COOKED_PLAN and log.recipe_id is None:
+            # блюда без рецепта нельзя вернуть в «надо приготовить» — покупать нечего
+            for item in linked:
+                if item.cooking_log_id == pot.id and item.recipe_id is None:
                     raise ValidationError(
-                        "Некоторые планы не связаны с шаблоном рецепта — "
-                        "удалите их вручную или подтвердите удаление из дневника."
+                        "Некоторые блюда плана не связаны с рецептом — "
+                        "удалите их вручную или подтвердите удаление из плана."
                     )
-            await self._diary.unattach_pot_keep_recipe(pot.id)
-            await self._diary.detach_plans_from_pot(pot.id)
+            # несъеденное — снова «надо приготовить», съеденное остаётся без холодильника
+            await self._plan.detach_from_pot(pot.id, keep_eaten_link=False)
+        await self._cooking_logs.flush()
         await self._cooking_logs.delete(pot)
         await self._cooking_logs.flush()
 
@@ -377,27 +367,27 @@ class RecipeService:
         pot.current_remaining_weight = remainder
         pot.is_finished = remainder <= ZERO
         await self._cooking_logs.flush()
-        # остатка стало меньше — поздние планы, которым не хватает, снова «надо приготовить»
-        await self._diary.release_overbooked(pot.id, remainder)
+        # остатка стало меньше — поздние блюда, которым не хватает, снова «надо приготовить»
+        await self._plan.release_overbooked(pot.id, remainder)
         return pot
 
     # --- АРХИВ ХОЛОДИЛЬНИКА ---
     async def list_pot_archive(
-        self, user_id: int, include_deleted: bool, limit: int = 200, offset: int = 0
+        self, household_id: int, include_deleted: bool, limit: int = 200, offset: int = 0
     ) -> list[PotArchiveItem]:
         """Закончившиеся кастрюли (пустые или удалённые) с логом съедания/списания.
 
         Удалённые физически в архиве отсутствуют; помеченные is_discarded —
         показываются с флагом «удалена», если include_deleted=True.
         """
-        pots = await self._cooking_logs.list_finished(user_id, limit=limit, offset=offset)
+        pots = await self._cooking_logs.list_finished(household_id, limit=limit, offset=offset)
         items: list[PotArchiveItem] = []
         for pot in pots:
             if pot.is_discarded and not include_deleted:
                 continue
             recipe_name = None
             if pot.recipe_id is not None:
-                recipe = await self._recipes.get_by_id(pot.recipe_id, user_id=user_id)
+                recipe = await self._recipes.get_by_id(pot.recipe_id, household_id=household_id)
                 recipe_name = recipe.name if recipe else None
             items.append(
                 PotArchiveItem(
@@ -415,13 +405,15 @@ class RecipeService:
 
     async def _pot_events(self, pot: RecipeCookingLog) -> list[str]:
         """Человекочитаемый лог жизни кастрюли: съедено по приёмам пищи + списания."""
-        logs = await self._diary.logs_using_pot(pot.id)
-        eaten_by_day: dict[str, Decimal] = {}
+        items = await self._plan.items_touching_pot(pot.id)
+        eaten_by_day: dict[date, Decimal] = {}
         events: list[str] = []
-        for log in sorted(logs, key=lambda l: (l.date_day, l.id)):
-            if log.status == STATUS_FACT:
-                day = eaten_by_day.setdefault(log.date_day, ZERO)
-                eaten_by_day[log.date_day] = day + pot_share(log.weight_g, log.servings_multiplier)
+        for item in items:
+            for portion in item.portions:
+                if portion.is_eaten and portion.eaten_from_pot_id == pot.id:
+                    eaten_by_day[item.date_day] = eaten_by_day.get(item.date_day, ZERO) + Decimal(
+                        str(portion.weight_g)
+                    )
         for day, grams in sorted(eaten_by_day.items()):
             events.append(f"{day}: съедено {quantize(grams)} г")
         consumed = sum(eaten_by_day.values(), start=ZERO)
@@ -436,15 +428,6 @@ class RecipeService:
             events.append("блюдо доедено")
         return events
 
-    async def detach_fact_from_pot(self, log: DiaryLog) -> None:
-        """«Считаем, что было без холодильника»: отвязываем факт от кастрюли.
-
-        Вес остаётся учтённым в дневнике, но перестаёт быть связанным с
-        холодильником (обязательность учёта в нём снимается).
-        """
-        log.cooking_log_id = None
-        await self._diary.flush()
-
     async def mark_pot_discarded(self, pot: RecipeCookingLog) -> RecipeCookingLog:
         """Пометить кастрюлю удалённой: остаток выбрасывается, запись уходит в архив.
 
@@ -455,8 +438,8 @@ class RecipeService:
         pot.is_discarded = True
         pot.is_finished = True
         pot.current_remaining_weight = ZERO
-        # отвязываем оставшиеся планы (останутся «надо приготовить» по шаблону)
-        await self._diary.detach_plans_from_pot(pot.id)
+        # несъеденные блюда плана снова «надо приготовить» по шаблону
+        await self._plan.detach_from_pot(pot.id)
         await self._cooking_logs.flush()
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None

@@ -34,6 +34,10 @@ class Recipe(Base):
     __tablename__ = "recipes"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Рецепты общие для семьи; user_id — автор
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -90,6 +94,10 @@ class RecipeCookingLog(Base):
     recipe_id = Column(
         Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True
     )
+    # Холодильник общий для семьи; user_id — кто готовил
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -115,10 +123,6 @@ class RecipeCookingLog(Base):
         cascade="all, delete-orphan",
     )
     recipe = relationship("Recipe", back_populates="cooking_logs")
-    diary_entries = relationship("DiaryLog", back_populates="cooking_log")
-
-    # --- ЗАДЕЛ НА БУДУЩЕЕ ---
-    household_id = Column(String, index=True, nullable=True)  # ID семьи для общего холодильника
 
 
 class RecipeActualIngredient(Base):

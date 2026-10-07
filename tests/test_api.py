@@ -129,7 +129,7 @@ async def test_inconsistent_nutrients_flagged(client):
     assert variant["wrong_nutrients"] is True
 
 
-# --- ДНЕВНИК: ИЗОЛЯЦИЯ ПОЛЬЗОВАТЕЛЕЙ + СЦЕНАРИЙ «ПЛАН → ПРИГОТОВИЛ → СЪЕЛ» ---
+# --- РЕЦЕПТЫ И ХОЛОДИЛЬНИК (план семьи — в tests/test_plan.py) ---
 
 
 async def build_recipe_stack(client, headers) -> tuple[int, int]:
@@ -172,85 +172,6 @@ async def build_recipe_stack(client, headers) -> tuple[int, int]:
     )
     assert r.status_code == 201, r.text
     return variant_id, r.json()["id"]
-
-
-async def test_diary_isolated_between_users(client):
-    anna = await register_and_login(client, "anna", "anna@test.com")
-    boris = await register_and_login(client, "boris", "boris@test.com")
-    _, recipe_id = await build_recipe_stack(client, anna)
-
-    r = await client.post(
-        "/api/v1/diary/",
-        json={
-            "date_day": "2026-10-02",
-            "meal_type": "lunch",
-            "recipe_id": recipe_id,
-            "weight_g": 200,
-        },
-        headers=anna,
-    )
-    assert r.status_code == 201, r.text
-    log_id = r.json()["id"]
-    assert r.json()["status"] == "template_plan"
-
-    # свой день виден владельцу
-    r = await client.get("/api/v1/diary/day/2026-10-02", headers=anna)
-    assert r.status_code == 200, r.text
-    assert [x["id"] for x in r.json()] == [log_id]
-
-    # чужой день пуст; чужая запись недоступна (404 без утечки существования)
-    r = await client.get("/api/v1/diary/day/2026-10-02", headers=boris)
-    assert r.json() == []
-    r = await client.patch(f"/api/v1/diary/{log_id}/weight", json={"weight_g": 50}, headers=boris)
-    assert r.status_code == 404
-
-
-async def test_full_flow_plan_cook_eaten_pot_accounting(client):
-    """План → готовка (кастрюля) → «съедено»: статусы и остаток кастрюли сходятся."""
-    headers = await register_and_login(client, "vera", "vera@test.com")
-    _, recipe_id = await build_recipe_stack(client, headers)
-
-    # 1. план на сегодня (прошлые планы к новой кастрюле не привязываются)
-    r = await client.post(
-        "/api/v1/diary/",
-        json={"date_day": TODAY, "meal_type": "dinner",
-              "recipe_id": recipe_id, "weight_g": 150},
-        headers=headers,
-    )
-    log_id = r.json()["id"]
-
-    # 2. приготовили кастрюлю 600 г
-    r = await client.post(
-        f"/api/v1/recipes/{recipe_id}/cook",
-        json={"total_cooked_weight": 600,
-              "ingredients": [{"variant_id": 1, "weight_g": 120}]},
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    pot_id = r.json()["id"]
-    assert float(r.json()["current_remaining_weight"]) == 600
-
-    # автоуточнение плана: template_plan → cooked_plan на свежую кастрюлю
-    r = await client.get(f"/api/v1/diary/day/{TODAY}", headers=headers)
-    plan = next(x for x in r.json() if x["id"] == log_id)
-    assert plan["status"] == "cooked_plan"
-    assert plan["cooking_log_id"] == pot_id
-
-    # 3. съели порцию 150 г → fact, кастрюля минус 150
-    r = await client.post(f"/api/v1/diary/{log_id}/eat", json={"weight_g": 150}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "fact"
-
-    r = await client.get("/api/v1/recipes/cooking-logs", headers=headers)
-    pot = next(p for p in r.json() if p["id"] == pot_id)
-    assert float(pot["current_remaining_weight"]) == 450
-
-    # 4. удалили факт — вес вернулся в кастрюлю
-    r = await client.delete(f"/api/v1/diary/{log_id}", headers=headers)
-    assert r.status_code == 204, r.text
-    r = await client.get("/api/v1/recipes/cooking-logs", headers=headers)
-    pot = next(p for p in r.json() if p["id"] == pot_id)
-    assert float(pot["current_remaining_weight"]) == 600
 
 
 async def get_variant_id(client, headers) -> int:
@@ -355,11 +276,11 @@ async def test_recipes_isolated_between_users(client):
     r = await client.post("/api/v1/recipes/", json=dup, headers=owner)
     assert r.status_code == 409
 
-    # план дневника по чужому рецепту невозможен
+    # план по рецепту другой семьи невозможен
     r = await client.post(
-        "/api/v1/diary/",
-        json={"date_day": "2026-10-03", "meal_type": "lunch",
-              "recipe_id": recipe_id, "weight_g": 150},
+        "/api/v1/plan",
+        json={"date_day": TODAY, "meal_type": "lunch", "recipe_id": recipe_id,
+              "portions": [{"weight_g": 150}]},
         headers=thief,
     )
     assert r.status_code == 404
@@ -410,7 +331,7 @@ async def test_pot_ingredients_replace(client):
     assert r.status_code == 404
 
 
-# --- ГОТОВЫЕ ПРОДУКТЫ В ПЛАНЕ (йогурт из магазина и т.п.) ---
+# --- ГОТОВЫЙ ПРОДУКТ (для плана) ---
 
 
 async def create_ready_product(client, headers) -> int:
@@ -434,101 +355,7 @@ async def create_ready_product(client, headers) -> int:
     return r.json()["manufacturers"][0]["variants"][0]["id"]
 
 
-async def test_ready_product_plan_eat_and_shopping(client):
-    headers = await register_and_login(client, "yana", "yana@test.com")
-    oat_variant_id, recipe_id = await build_recipe_stack(client, headers)
-    yogurt_id = await create_ready_product(client, headers)
-
-    # План: йогурт 150 г на 2 человек + каша по рецепту
-    r = await client.post(
-        "/api/v1/diary/",
-        json={
-            "date_day": "2026-10-10",
-            "meal_type": "snack",
-            "variant_id": yogurt_id,
-            "weight_g": 150,
-            "servings_multiplier": 2,
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    entry = r.json()
-    assert entry["kind"] == "product"
-    assert entry["source_status"] == "product"
-    assert "Йогурт" in entry["product_name"]
-    assert float(entry["calories"]) == 99.0  # 66 * 1.5
-    assert float(entry["proteins"]) == 12.0
-
-    r = await client.post(
-        "/api/v1/diary/",
-        json={"date_day": "2026-10-11", "meal_type": "breakfast", "recipe_id": recipe_id, "weight_g": 300},
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-
-    # Список покупок: йогурт «как есть» (150 × 2), овсянка — из рецепта
-    r = await client.get(
-        "/api/v1/shopping-list",
-        params={"start_date": "2026-10-10", "end_date": "2026-10-11"},
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    items = {i["variant_id"]: i for i in r.json()["items"]}
-    assert float(items[yogurt_id]["weight_g"]) == 300.0
-    assert items[yogurt_id]["category_name"] == "Молочные продукты"
-    assert float(items[oat_variant_id]["weight_g"]) == 60.0
-
-    # Недельный диапазон отдаёт оба типа записей
-    r = await client.get(
-        "/api/v1/diary/range",
-        params={"start_date": "2026-10-10", "end_date": "2026-10-16"},
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    assert {e["kind"] for e in r.json()} == {"product", "recipe"}
-
-    # Съели йогурт — факт, в покупки больше не попадает
-    r = await client.post(f"/api/v1/diary/{entry['id']}/eat", json={"weight_g": 125}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "fact"
-    assert float(r.json()["calories"]) == 82.5
-    r = await client.get(
-        "/api/v1/shopping-list",
-        params={"start_date": "2026-10-10", "end_date": "2026-10-10"},
-        headers=headers,
-    )
-    assert r.json()["items"] == []
-
-
-async def test_diary_entry_requires_exactly_one_source(client):
-    headers = await register_and_login(client, "zoe", "zoe@test.com")
-    _, recipe_id = await build_recipe_stack(client, headers)
-    yogurt_id = await create_ready_product(client, headers)
-    base = {"date_day": "2026-10-10", "meal_type": "snack", "weight_g": 100}
-
-    r = await client.post("/api/v1/diary/", json=base, headers=headers)
-    assert r.status_code == 422
-    r = await client.post(
-        "/api/v1/diary/", json={**base, "recipe_id": recipe_id, "variant_id": yogurt_id}, headers=headers
-    )
-    assert r.status_code == 422
-    r = await client.post("/api/v1/diary/", json={**base, "variant_id": 99999}, headers=headers)
-    assert r.status_code == 404
-
-
-
-# --- КАСТРЮЛЯ НЕ «СЪЕДАЕТ» ВСЕ ПЛАНЫ; СЕМЬЯ; ВЕРСИИ КБЖУ ---
-
-
-async def add_plan(client, headers, recipe_id, date_day, weight, people=1, meal="dinner"):
-    r = await client.post(
-        "/api/v1/diary/",
-        json={"date_day": date_day, "meal_type": meal, "recipe_id": recipe_id,
-              "weight_g": weight, "servings_multiplier": people},
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return r.json()["id"]
+# --- КАСТРЮЛИ, ВЕРСИИ КБЖУ, ПОИСК ---
 
 
 async def cook(client, headers, recipe_id, variant_id, cooked_g):
@@ -540,90 +367,6 @@ async def cook(client, headers, recipe_id, variant_id, cooked_g):
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]
-
-
-async def entry(client, headers, date_day, log_id):
-    r = await client.get(f"/api/v1/diary/day/{date_day}", headers=headers)
-    return next(x for x in r.json() if x["id"] == log_id)
-
-
-async def test_cooking_attaches_only_plans_that_fit_from_today(client):
-    """Регрессия: готовка привязывала к кастрюле ВСЕ планы рецепта, и поздние
-    блюда пропадали из списка покупок, хотя кастрюлю к ним уже доедят."""
-    h = await register_and_login(client, "kira", "kira@test.com")
-    vid, recipe_id = await build_recipe_stack(client, h)
-
-    stale = await add_plan(client, h, recipe_id, day(-2), 300)          # прошлый, не отмечен
-    today_plan = await add_plan(client, h, recipe_id, TODAY, 250, people=2)   # 500 г
-    next_week = await add_plan(client, h, recipe_id, day(6), 300)       # уже не влезет
-
-    pot_id = await cook(client, h, recipe_id, vid, 600)
-
-    assert (await entry(client, h, day(-2), stale))["status"] == "template_plan"
-    e = await entry(client, h, TODAY, today_plan)
-    assert e["status"] == "cooked_plan" and e["cooking_log_id"] == pot_id
-    assert float(e["fridge_planned_g"]) == 500
-    assert (await entry(client, h, day(6), next_week))["status"] == "template_plan"
-
-    # блюдо через неделю осталось в покупках: 300 г из выхода 300 г → 60 г овсянки
-    r = await client.get("/api/v1/shopping-list",
-                         params={"start_date": TODAY, "end_date": day(6)}, headers=h)
-    items = {i["variant_id"]: float(i["weight_g"]) for i in r.json()["items"]}
-    assert items[vid] == 60.0
-
-
-async def test_family_portion_and_overbooking_release(client):
-    h = await register_and_login(client, "lev", "lev@test.com")
-    vid, recipe_id = await build_recipe_stack(client, h)
-    family = await add_plan(client, h, recipe_id, TODAY, 100, people=3)        # 300 г
-    later = await add_plan(client, h, recipe_id, day(1), 200, meal="lunch")    # 200 г
-    pot_id = await cook(client, h, recipe_id, vid, 500)
-    assert (await entry(client, h, day(1), later))["status"] == "cooked_plan"
-
-    # семья из 3 человек съела по 150 г → из кастрюли ушло 450, а не 150
-    r = await client.post(f"/api/v1/diary/{family}/eat", json={"weight_g": 150}, headers=h)
-    assert r.status_code == 200, r.text
-    # личные КБЖУ — на одну порцию по кастрюле: 60 г овсянки (228 ккал) на 500 г выхода
-    assert float(r.json()["calories"]) == 68.4
-
-    pots = (await client.get("/api/v1/recipes/cooking-logs", headers=h)).json()
-    assert float(next(p for p in pots if p["id"] == pot_id)["current_remaining_weight"]) == 50
-
-    # завтрашнему обеду 200 г уже не хватает → снова «надо приготовить»
-    e = await entry(client, h, day(1), later)
-    assert e["status"] == "template_plan" and e["cooking_log_id"] is None
-
-    # правка съеденного сверх остатка — ошибка, а не молчаливое обнуление кастрюли
-    r = await client.patch(f"/api/v1/diary/{family}/weight", json={"weight_g": 200}, headers=h)
-    assert r.status_code == 400, r.text
-
-    # удаление факта возвращает в кастрюлю всю семейную долю
-    r = await client.delete(f"/api/v1/diary/{family}", headers=h)
-    assert r.status_code == 204
-    pots = (await client.get("/api/v1/recipes/cooking-logs", headers=h)).json()
-    assert float(next(p for p in pots if p["id"] == pot_id)["current_remaining_weight"]) == 500
-
-
-async def test_manual_remainder_releases_plans(client):
-    h = await register_and_login(client, "mila", "mila@test.com")
-    vid, recipe_id = await build_recipe_stack(client, h)
-    plan = await add_plan(client, h, recipe_id, day(1), 300)
-    pot_id = await cook(client, h, recipe_id, vid, 400)
-    assert (await entry(client, h, day(1), plan))["status"] == "cooked_plan"
-
-    r = await client.patch(f"/api/v1/recipes/cooking-logs/{pot_id}",
-                           json={"current_remaining_weight": 100}, headers=h)
-    assert r.status_code == 200, r.text
-    assert (await entry(client, h, day(1), plan))["status"] == "template_plan"
-
-
-async def test_day_sorted_by_meal_order(client):
-    h = await register_and_login(client, "nina", "nina@test.com")
-    _, recipe_id = await build_recipe_stack(client, h)
-    for meal in ("snack", "dinner", "lunch", "breakfast"):
-        await add_plan(client, h, recipe_id, day(3), 100, meal=meal)
-    r = await client.get(f"/api/v1/diary/day/{day(3)}", headers=h)
-    assert [e["meal_type"] for e in r.json()] == ["breakfast", "lunch", "dinner", "snack"]
 
 
 async def test_new_kbju_version_updates_recipes_but_not_pots(client):
@@ -687,20 +430,3 @@ async def test_big_family_pot_fits(client):
     assert r.status_code == 201, r.text
 
 
-async def test_new_plan_reserves_from_existing_pot_when_it_fits(client):
-    h = await register_and_login(client, "sasha", "sasha@test.com")
-    vid, recipe_id = await build_recipe_stack(client, h)
-    pot_id = await cook(client, h, recipe_id, vid, 300)
-
-    fits = await add_plan(client, h, recipe_id, day(1), 100, people=2)     # 200 из 300
-    too_much = await add_plan(client, h, recipe_id, day(2), 150)           # свободно 100
-    e = await entry(client, h, day(1), fits)
-    assert e["status"] == "cooked_plan" and e["cooking_log_id"] == pot_id
-    e = await entry(client, h, day(2), too_much)
-    assert e["status"] == "template_plan" and e["fridge_enough"] is False
-
-    # в покупки попадает только то, что не помещается в кастрюлю
-    r = await client.get("/api/v1/shopping-list",
-                         params={"start_date": day(1), "end_date": day(2)}, headers=h)
-    items = {i["variant_id"]: float(i["weight_g"]) for i in r.json()["items"]}
-    assert items[vid] == 30.0  # 150 г из выхода 300 г → половина закладки (60 г)

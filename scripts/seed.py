@@ -128,7 +128,7 @@ class Api:
                         return variants[0]["id"]
         return None
 
-    # ---------- recipes & diary ----------
+    # ---------- recipes & plan ----------
     def get_or_create_recipe_category(self, name: str) -> int:
         r = self.session.get(f"{self.base}/recipes/categories")
         r.raise_for_status()
@@ -162,25 +162,34 @@ class Api:
         print(f"  ❌ рецепт {name}: {r.status_code} {r.text[:200]}")
         return None
 
-    def add_diary_plan(self, recipe_id: int, weight_g: float) -> bool:
+    def ensure_child(self, name: str, targets: dict) -> None:
+        """Член семьи без аккаунта — чтобы было видно порции по людям."""
+        r = self.session.get(f"{self.base}/household")
+        if self._ok(r) and any(m["name"] == name for m in r.json()["members"]):
+            return
+        r = self.session.post(f"{self.base}/household/members", json={"name": name, "targets": targets})
+        if not self._ok(r):
+            print(f"  ⚠ член семьи {name}: {r.status_code} {r.text[:200]}")
+
+    def add_family_plan(self, recipe_id: int, adult_g: float, child_g: float) -> bool:
+        """Блюдо на сегодняшний ужин: порции всем активным членам семьи."""
         today = date.today().isoformat()
-        r = self.session.get(f"{self.base}/diary/day/{today}")
+        r = self.session.get(f"{self.base}/plan", params={"start_date": today, "end_date": today})
         if self._ok(r) and any(x["recipe_id"] == recipe_id for x in r.json()):
             return True  # план на сегодня уже есть — не дублируем
+        members = self.session.get(f"{self.base}/household").json()["members"]
+        portions = [
+            {"member_id": m["id"], "weight_g": adult_g if m["user_id"] else child_g}
+            for m in members if m["is_active"]
+        ]
         r = self.session.post(
-            f"{self.base}/diary/",
-            json={
-                "date_day": today,
-                "meal_type": "dinner",
-                "recipe_id": recipe_id,
-                "weight_g": weight_g,
-            },
+            f"{self.base}/plan",
+            json={"date_day": today, "meal_type": "dinner", "recipe_id": recipe_id, "portions": portions},
         )
         if self._ok(r):
             return True
         print(f"  ⚠ план дня: {r.status_code} {r.text[:200]}")
         return False
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Seed демо-данных через API")
@@ -239,7 +248,8 @@ def main() -> int:
         )
         if rid:
             print(f"   ✅ рецепт 'Гречка с курицей' (id={rid})")
-            api.add_diary_plan(rid, 300.0)
+            api.ensure_child("Маша", {"calories": 1400, "proteins": 45, "fats": 50, "carbs": 180})
+            api.add_family_plan(rid, 300.0, 150.0)
     if mushroom_v and oil_v:
         rid2 = api.get_or_create_recipe(
             rc_cat, "Жареные шампиньоны",

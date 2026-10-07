@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_access_token
 from app.db.session import SessionDep, get_session
+from app.models.household import HouseholdMember
 from app.models.user import User
-from app.repositories.diary import DiaryRepository
+from app.repositories.household import HouseholdRepository, MemberRepository
+from app.repositories.plan import PlanRepository
 from app.repositories.product import (
     BrandRepository,
     ManufacturerRepository,
@@ -27,7 +29,8 @@ from app.repositories.recipe import (
 )
 from app.repositories.user import UserRepository
 from app.services.auth import AuthService
-from app.services.diary import DiaryService
+from app.services.household import HouseholdService
+from app.services.plan import PlanService
 from app.services.product import ProductService
 from app.services.recipe import RecipeService
 
@@ -89,6 +92,27 @@ async def require_admin(current_user: CurrentUserDep) -> User:
 AdminUserDep = Annotated[User, Depends(require_admin)]
 
 
+# --- СЕМЬЯ ---
+def get_household_service(session: SessionDep) -> HouseholdService:
+    return HouseholdService(
+        households=HouseholdRepository(session), members=MemberRepository(session)
+    )
+
+
+HouseholdServiceDep = Annotated[HouseholdService, Depends(get_household_service)]
+
+
+async def get_current_member(
+    current_user: CurrentUserDep, service: HouseholdServiceDep
+) -> HouseholdMember:
+    """Член семьи текущего пользователя. Все данные (рецепты, холодильник, план)
+    ограничиваются его household_id; при первом входе семья создаётся."""
+    return await service.ensure_member(current_user)
+
+
+CurrentMemberDep = Annotated[HouseholdMember, Depends(get_current_member)]
+
+
 # --- СЕРВИСЫ ДОМЕНА ---
 def get_product_service(session: SessionDep) -> ProductService:
     return ProductService(
@@ -107,19 +131,20 @@ def get_recipe_service(session: SessionDep) -> RecipeService:
         categories=RecipeCategoryRepository(session),
         cooking_logs=CookingLogRepository(session),
         variants=VariantRepository(session),
-        diary=DiaryRepository(session),
+        plan=PlanRepository(session),
     )
 
 
-def get_diary_service(session: SessionDep) -> DiaryService:
-    return DiaryService(
-        diary=DiaryRepository(session),
+def get_plan_service(session: SessionDep) -> PlanService:
+    return PlanService(
+        plan=PlanRepository(session),
         recipes=RecipeRepository(session),
         cooking_logs=CookingLogRepository(session),
         variants=VariantRepository(session),
+        members=MemberRepository(session),
     )
 
 
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
-DiaryServiceDep = Annotated[DiaryService, Depends(get_diary_service)]
+PlanServiceDep = Annotated[PlanService, Depends(get_plan_service)]
