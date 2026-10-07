@@ -10,7 +10,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.domain import Nutrients, nutrients_are_inconsistent
+from app.domain import Nutrients, base_to_grams, grams_to_base, nutrients_are_inconsistent, quantize
 from app.models.product import Brand, Product, ProductManufacturer, ProductPackage, ProductVariant
 from app.repositories.product import (
     BrandRepository,
@@ -86,11 +86,15 @@ class ProductService:
                 f"Продукт '{data.name}' для этого бренда уже существует (регистр не имеет значения)"
             )
 
+        # единица — свойство товара: новый бренд наследует её у товара с тем же названием
+        same = await self._products.same_item(search_name)
         product = Product(
             category_id=data.category_id,
             brand_id=brand_id,
             name=data.name,
             search_name=search_name,
+            base_unit=same[0].base_unit if same else "g",
+            piece_weight_g=same[0].piece_weight_g if same else None,
         )
         self._products.add(product)
         await self._products.flush()  # получаем product.id внутри той же транзакции
@@ -138,9 +142,23 @@ class ProductService:
         product = await self.get_product(product_id)
         if data.base_unit == "pcs" and not data.piece_weight_g:
             raise ValidationError("Для штучного товара укажите вес одной штуки, г")
+        new_piece = data.piece_weight_g if data.base_unit == "pcs" else None
+        if (product.base_unit, product.piece_weight_g) == (data.base_unit, new_piece):
+            return product
+        # запасы хранятся в единице товара — менять её под живыми остатками нельзя
+        # (справочник общий: это задело бы и другие семьи)
+        if await self._products.item_has_stock(product.search_name):
+            raise ConflictError(
+                "Единицу нельзя поменять, пока этот товар есть в запасах "
+                "(в том числе у других семей). Сначала спишите или обнулите остаток."
+            )
         for p in await self._products.same_item(product.search_name):
+            # упаковки пересчитываем: старая единица → граммы → новая
+            for pk in p.packages:
+                g = base_to_grams(Decimal(str(pk.amount)), p.base_unit, p.piece_weight_g)
+                pk.amount = quantize(grams_to_base(g, data.base_unit, new_piece))
             p.base_unit = data.base_unit
-            p.piece_weight_g = data.piece_weight_g if data.base_unit == "pcs" else None
+            p.piece_weight_g = new_piece
         await self._products.flush()
         return await self.get_product(product_id)
 

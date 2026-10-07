@@ -102,6 +102,7 @@ CREATE TABLE shopping_lists (
 );
 CREATE INDEX ix_shopping_lists_household_id ON shopping_lists (household_id);
 CREATE INDEX ix_shopping_lists_id ON shopping_lists (id);
+CREATE UNIQUE INDEX uq_shopping_lists_active_household ON shopping_lists (household_id) WHERE status = 'active';
 CREATE TABLE shopping_lines (
 	id SERIAL NOT NULL, 
 	list_id INTEGER NOT NULL, 

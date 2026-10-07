@@ -48,9 +48,21 @@ class ProductRepository(BaseRepository[Product]):
             selectinload(Product.packages),
         )
 
+    async def item_has_stock(self, search_name: str) -> bool:
+        """Есть ли у кого-нибудь ненулевые партии этого товара."""
+        from app.models.stock import StockLot  # локально: репозиторий каталога не зависит от запасов
+
+        stmt = (
+            select(StockLot.id)
+            .join(Product, Product.id == StockLot.product_id)
+            .where(Product.search_name == search_name, StockLot.remaining > 0)
+            .limit(1)
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
     async def same_item(self, search_name: str) -> list[Product]:
         """Все продукты одного товара (одно название, разные бренды)."""
-        stmt = select(Product).where(Product.search_name == search_name)
+        stmt = select(Product).where(Product.search_name == search_name).options(selectinload(Product.packages))
         return list((await self._session.execute(stmt)).scalars().all())
 
     async def get_package(self, package_id: int) -> ProductPackage | None:

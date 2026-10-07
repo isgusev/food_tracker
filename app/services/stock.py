@@ -106,6 +106,9 @@ class StockService:
         record_shortfall: bool = True,
     ) -> Decimal:
         """Списать qty (базовая единица) товара по партиям. Вернёт недостачу."""
+        # остатки хранятся с точностью 0,1 — округляем ДО сравнения, иначе
+        # 100 г / 60 г = 1,666… шт даёт ложную «недостачу» в сотые доли
+        qty = quantize(qty)
         if qty <= 0:
             return ZERO
         key = product.search_name
@@ -131,7 +134,7 @@ class StockService:
                 household_id=household_id, product_id=lot.product_id, lot_id=lot.id, delta=-take,
                 reason=reason, pot_id=pot_id, portion_id=portion_id, created_by_user_id=user_id, note=note,
             ))
-        if left > 0 and record_shortfall:
+        if left >= Decimal("0.1") and record_shortfall:
             self._stock.add_movement(StockMovement(
                 household_id=household_id, product_id=product.id, lot_id=None, delta=-left,
                 reason=reason, pot_id=pot_id, portion_id=portion_id, created_by_user_id=user_id,
@@ -173,25 +176,36 @@ class StockService:
 
         Полный откат и повторное списание исказили бы остаток, если между
         готовкой и правкой была инвентаризация (она уже учла израсходованное).
+        Разница считается по ТОВАРУ (замена бренда того же товара — не расход),
+        и сначала возвраты, потом новые списания — чтобы не было ложной недостачи.
         """
-        for variant_id in set(old_grams) | set(new_grams):
-            diff = new_grams.get(variant_id, ZERO) - old_grams.get(variant_id, ZERO)
-            if diff == 0:
-                continue
-            product = await self._stock.product_for_variant(variant_id)
-            if product is None:
-                continue
-            qty = grams_to_base(abs(diff), product.base_unit, product.piece_weight_g)
-            if diff > 0:
+        by_key: dict[str, dict] = {}
+        for grams_map, sign in ((old_grams, -1), (new_grams, 1)):
+            for variant_id, grams in grams_map.items():
+                product = await self._stock.product_for_variant(variant_id)
+                if product is None:
+                    continue
+                entry = by_key.setdefault(product.search_name, {"product": product, "variant_id": variant_id, "diff": ZERO})
+                entry["diff"] += sign * grams
+                if sign > 0:
+                    entry["product"], entry["variant_id"] = product, variant_id
+        changes = [
+            (e, quantize(grams_to_base(abs(e["diff"]), e["product"].base_unit, e["product"].piece_weight_g)))
+            for e in by_key.values() if e["diff"] != 0
+        ]
+        for e, qty in changes:
+            if e["diff"] < 0:
+                await self._give_back(pot.id, e["product"].search_name, qty)
+        for e, qty in changes:
+            if e["diff"] > 0:
                 await self._consume(
-                    pot.household_id, product, qty, "cook",
-                    today=today, variant_id=variant_id, pot_id=pot.id, user_id=user_id,
+                    pot.household_id, e["product"], qty, "cook",
+                    today=today, variant_id=e["variant_id"], pot_id=pot.id, user_id=user_id,
                 )
-            else:
-                await self._give_back(pot.id, product.search_name, qty)
 
     async def _give_back(self, pot_id: int, key: str, qty: Decimal) -> None:
         """Вернуть часть списанного кастрюлей: сперва гасим недостачу, потом партии с конца."""
+        qty = quantize(qty)
         movements = [
             m for m in await self._stock.movements(pot_id=pot_id)
             if m.reason == "cook" and (await self._stock.product(m.product_id)).search_name == key
@@ -230,10 +244,19 @@ class StockService:
             raise NotFoundError("Продукт не найден")
         return product
 
+    async def _refuse_staple(self, household_id: int, product: Product) -> None:
+        s = await self._stock.settings(household_id, product.search_name)
+        if s is not None and s.is_staple:
+            raise ValidationError(
+                "Это базовый товар — его остаток не учитывается. "
+                "Снимите отметку «базовый», чтобы вести запасы"
+            )
+
     async def add_lot(
         self, household_id: int, user_id: int | None, data: LotAdd, *, source: str, today: date
     ) -> StockLot:
         product = await self._product(data.product_id)
+        await self._refuse_staple(household_id, product)
         lot = StockLot(
             household_id=household_id,
             product_id=product.id,
@@ -260,6 +283,7 @@ class StockService:
     ) -> None:
         """Испортилось/выбросили: списываем, но не больше, чем есть (без «недостачи»)."""
         product = await self._product(product_id)
+        await self._refuse_staple(household_id, product)
         await self._consume(
             household_id, product, qty, "write_off",
             today=today, user_id=user_id, note=note, record_shortfall=False,
@@ -270,6 +294,7 @@ class StockService:
     ) -> None:
         """Пересчитали: остаток товара становится ровно actual; «учёт сбился» снимается."""
         product = await self._product(product_id)
+        await self._refuse_staple(household_id, product)
         key = product.search_name
         total = sum((_d(lot.remaining) for lot in await self._stock.open_lots_for_key(household_id, key)), ZERO)
         if actual < total:
@@ -388,7 +413,8 @@ class StockService:
             raise ValidationError("Дата окончания не может быть раньше даты начала")
         period = await self.needs(household_id, start, end)
         before = await self.needs(household_id, today, start - timedelta(days=1)) if start > today else Needs()
-        stock = await self._stock.available_by_key(household_id, today)
+        # партии, которые испортятся до начала периода, запасом не считаем
+        stock = await self._stock.available_by_key(household_id, max(today, start))
         settings = await self._stock.settings_map(household_id)
         low_staples = {k for k, s in settings.items() if s.is_staple and s.is_low}
         keys = set(period.by_key) | low_staples
@@ -458,10 +484,7 @@ class StockService:
         items = await self.to_buy(household_id, start, end, today)
         lst = await self._lists.active(household_id)
         if lst is None:
-            lst = ShoppingList(household_id=household_id, start_date=start, end_date=end, status="active")
-            self._lists.add(lst)
-            await self._lists.flush()
-            lst = await self._lists.get_full(lst.id)
+            lst = await self._lists.create_active(household_id, start, end)
         lst.start_date, lst.end_date = start, end
         for line in list(lst.lines):
             if not line.is_checked and not line.is_extra:
@@ -507,6 +530,16 @@ class StockService:
         """«Куплено»: строка отмечается, товар сразу попадает в запасы партией."""
         if line.is_checked:
             raise ValidationError("Уже отмечено как купленное")
+        if line.is_staple:
+            # базовый товар: остаток не ведём — просто снимаем «заканчивается»
+            product = await self._product(line.product_id)
+            (await self._stock.get_or_create_settings(lst.household_id, product.search_name)).is_low = False
+            line.is_checked = True
+            line.checked_by_user_id = user_id
+            line.checked_at = _now()
+            lst.updated_at = _now()
+            await self._lists.flush()
+            return self._list_out(await self._lists.get_full(lst.id))
         qty = data.quantity
         if qty is None and line.package_amount and line.package_count:
             qty = _d(line.package_amount) * line.package_count
@@ -524,9 +557,6 @@ class StockService:
         line.is_checked = True
         line.checked_by_user_id = user_id
         line.checked_at = _now()
-        if line.is_staple:
-            product = await self._product(line.product_id)
-            (await self._stock.get_or_create_settings(lst.household_id, product.search_name)).is_low = False
         lst.updated_at = _now()
         await self._lists.flush()
         return self._list_out(await self._lists.get_full(lst.id))
@@ -564,6 +594,10 @@ class StockService:
         if not line.is_checked or line.lot_id is None:
             if "quantity" in fields and data.quantity is not None:
                 line.needed = data.quantity
+                # подсказка по упаковкам должна следовать за новым количеством
+                product = await self._product(line.product_id)
+                amounts = sorted(_d(p.amount) for p in product.packages)
+                line.package_amount, line.package_count = pick_packages(data.quantity, amounts, product.base_unit)
         else:
             lot = await self._stock.get(line.lot_id)
             if "quantity" in fields and data.quantity is not None:

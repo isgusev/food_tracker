@@ -17,9 +17,11 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -137,6 +139,18 @@ class ShoppingList(Base):
         back_populates="shopping_list",
         cascade="all, delete-orphan",
         order_by="ShoppingLine.id",
+    )
+
+    # Активный список у семьи один: двое одновременно нажали «Сформировать» —
+    # второй получит уже созданный, а не дубль
+    __table_args__ = (
+        Index(
+            "uq_shopping_lists_active_household",
+            "household_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
     )
 
 

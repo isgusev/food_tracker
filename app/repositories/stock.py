@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.models.product import Product, ProductManufacturer, ProductVariant
@@ -110,6 +111,9 @@ class StockRepository(BaseRepository[StockLot]):
         self._session.add(m)
 
     async def movements(self, *, pot_id: int | None = None, portion_id: int | None = None) -> list[StockMovement]:
+        if pot_id is None and portion_id is None:
+            # без фильтра это были бы движения всех семей — откат «всего» недопустим
+            raise ValueError("movements(): нужен pot_id или portion_id")
         stmt = select(StockMovement).options(joinedload(StockMovement.lot))
         if pot_id is not None:
             stmt = stmt.where(StockMovement.pot_id == pot_id)
@@ -157,6 +161,18 @@ class ShoppingListRepository(BaseRepository[ShoppingList]):
             .execution_options(populate_existing=True)
         )
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
+
+    async def create_active(self, household_id: int, start: date, end: date) -> ShoppingList:
+        """Создать активный список; если параллельно уже создали — вернуть тот."""
+        try:
+            async with self._session.begin_nested():
+                lst = ShoppingList(household_id=household_id, start_date=start, end_date=end, status="active")
+                self._session.add(lst)
+            return await self.get_full(lst.id)
+        except IntegrityError:
+            existing = await self.active(household_id)
+            assert existing is not None
+            return existing
 
     async def get_full(self, list_id: int) -> ShoppingList | None:
         stmt = self._full().where(ShoppingList.id == list_id).execution_options(populate_existing=True)

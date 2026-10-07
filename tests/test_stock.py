@@ -274,3 +274,79 @@ async def test_write_off_never_goes_below_zero(client):
     await client.post(f"/api/v1/stock/items/{yogurt['id']}/write-off", json={"quantity": 300}, headers=h)
     s = await stock(client, h)
     assert YOGURT not in s or (float(s[YOGURT]["remaining"]) == 0 and not s[YOGURT]["needs_check"])
+
+
+# --- РЕГРЕССИИ ИЗ РЕВЬЮ ---
+
+
+async def test_unit_change_blocked_while_anyone_has_stock_and_inherited_by_new_brand(client):
+    a = await register_and_login(client, "rega", "rega@test.com")
+    yogurt_v = await create_ready_product(client, a)
+    yogurt = await product_of_variant(client, a, yogurt_v)
+    await client.post(f"/api/v1/products/{yogurt['id']}/packages", json={"amount": 500}, headers=a)
+    await add_lot(client, a, yogurt["id"], 600)
+    # другая семья не может перевести товар в штуки, пока у семьи A есть остаток
+    b = await register_and_login(client, "regb", "regb@test.com")
+    r = await client.put(f"/api/v1/products/{yogurt['id']}/unit", json={"base_unit": "pcs", "piece_weight_g": 125}, headers=b)
+    assert r.status_code == 409
+    assert (await stock(client, a))[YOGURT]["unit"] == "g"
+
+    # остаток обнулили — можно; упаковка 500 г пересчиталась в 4 шт
+    await client.post(f"/api/v1/stock/items/{yogurt['id']}/inventory", json={"quantity": 0}, headers=a)
+    r = await client.put(f"/api/v1/products/{yogurt['id']}/unit", json={"base_unit": "pcs", "piece_weight_g": 125}, headers=a)
+    assert r.status_code == 200 and r.json()["packages"][0]["amount"] == "4.0"
+
+    # новый бренд того же товара наследует единицу
+    r = await client.post("/api/v1/products/with-category", json={
+        "category_name": "Молочные продукты", "name": YOGURT, "brand_name": "Новый",
+        "base_variant": {"manufacturer_name": "Новый", "calories": 70, "proteins": 8, "fats": 2.5, "carbs": 4}}, headers=a)
+    assert r.json()["base_unit"] == "pcs" and r.json()["piece_weight_g"] == "125.0"
+
+
+async def test_pieces_rounding_makes_no_false_shortfall(client):
+    h = await register_and_login(client, "eggs", "eggs@test.com")
+    yogurt_v = await create_ready_product(client, h)
+    yogurt = await product_of_variant(client, h, yogurt_v)
+    await client.put(f"/api/v1/products/{yogurt['id']}/unit", json={"base_unit": "pcs", "piece_weight_g": 60}, headers=h)
+    await add_lot(client, h, yogurt["id"], 10)
+    me = await me_id(client, h)
+    for w in (100, 500):   # 1,67 шт + 8,33 шт = ровно 10 шт
+        item = await plan(client, h, variant_id=yogurt_v, meal="snack", portions=[{"member_id": me, "weight_g": w}])
+        await client.post(f"/api/v1/plan/{item['id']}/eat", headers=h)
+    s = (await stock(client, h)).get(YOGURT)
+    assert s is None or not s["needs_check"]
+
+
+async def test_editing_line_quantity_recomputes_packages(client):
+    h = await register_and_login(client, "pkg", "pkg@test.com")
+    yogurt_v = await create_ready_product(client, h)
+    yogurt = await product_of_variant(client, h, yogurt_v)
+    await client.post(f"/api/v1/products/{yogurt['id']}/packages", json={"amount": 400}, headers=h)
+    await plan(client, h, variant_id=yogurt_v, meal="snack", portions=[{"member_id": await me_id(client, h), "weight_g": 300}])
+    line = (await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()["lines"][0]
+    r = await client.patch(f"/api/v1/shopping-lists/lines/{line['id']}", json={"quantity": 1200}, headers=h)
+    assert r.json()["lines"][0]["package_count"] == 3
+    r = await client.post(f"/api/v1/shopping-lists/lines/{line['id']}/check", json={}, headers=h)
+    assert float(r.json()["lines"][0]["bought_quantity"]) == 1200
+
+
+async def test_staples_never_get_lots(client):
+    h = await register_and_login(client, "staple2", "staple2@test.com")
+    vid, _ = await build_recipe_stack(client, h)
+    oats = await product_of_variant(client, h, vid)
+    await client.patch(f"/api/v1/stock/items/{oats['id']}", json={"is_staple": True, "is_low": True}, headers=h)
+    assert (await client.post("/api/v1/stock/lots", json={"product_id": oats["id"], "quantity": 100}, headers=h)).status_code == 400
+    line = (await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()["lines"][0]
+    r = await client.post(f"/api/v1/shopping-lists/lines/{line['id']}/check", json={}, headers=h)
+    assert r.status_code == 200 and r.json()["lines"][0]["bought_quantity"] is None
+    s = (await stock(client, h))[OATS]
+    assert s["lots"] == [] and not s["is_low"]
+
+
+async def test_lots_expiring_before_period_are_not_stock(client):
+    h = await register_and_login(client, "expire", "expire@test.com")
+    yogurt_v = await create_ready_product(client, h)
+    yogurt = await product_of_variant(client, h, yogurt_v)
+    await add_lot(client, h, yogurt["id"], 500, expires_on=day(1))
+    await plan(client, h, date_day=day(3), variant_id=yogurt_v, meal="snack", portions=[{"member_id": await me_id(client, h), "weight_g": 200}])
+    assert float((await preview(client, h, day(3)))[YOGURT]["to_buy"]) == 200
