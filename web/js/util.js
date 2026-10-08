@@ -118,3 +118,13 @@ export function fmtQty(v, unit = "g") {
 export function gramsToBase(g, unit, pieceWeight) {
   return unit === "pcs" && n(pieceWeight) > 0 ? n(g) / n(pieceWeight) : n(g);
 }
+
+// Упаковка товара → граммы (для порций): мл = г, штуки — через вес одной
+export function packageGrams(amount, unit, pieceWeight) {
+  return unit === "pcs" ? n(amount) * n(pieceWeight) : n(amount);
+}
+// Подпись упаковок для поиска: «930 мл», «200 г / 400 г»; нет упаковки — «100 г» (КБЖУ на 100 г)
+export function packagesLabel(packages, unit = "g") {
+  const list = (packages || []).slice(0, 2).map((p) => fmtQty(p.amount, unit));
+  return list.length ? list.join(" / ") + ((packages || []).length > 2 ? " …" : "") : "100 г";
+}

@@ -1,36 +1,13 @@
 // Справочник продуктов: КБЖУ с версиями по производителям.
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, Macros, BarcodeScanner } from "../components.js";
+import { Modal, Macros, BarcodeScanner, KbjuInputs } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, toast, toastError } from "../store.js";
-import { fmt, matches, n } from "../util.js";
-
-// То же правило, что на сервере (app/domain.py): ошибка — если расхождение > 10 ккал И > 15 %
-function atwater(k) {
-  const calc = 4 * n(k.proteins) + 9 * n(k.fats) + 4 * n(k.carbs);
-  const diff = Math.abs(n(k.calories) - calc);
-  return { calc, off: n(k.calories) > 0 && diff > 10 && diff > 0.15 * calc };
-}
-
-const KbjuInputs = {
-  props: { modelValue: Object },
-  setup(props) { return { check: computed(() => atwater(props.modelValue)), fmt }; },
-  template: `
-    <div class="stack tight">
-      <div class="grid-4">
-        <label class="field"><span>Ккал / 100 г</span><input type="number" min="0" step="any" v-model="modelValue.calories"></label>
-        <label class="field"><span>Белки, г</span><input type="number" min="0" step="any" v-model="modelValue.proteins"></label>
-        <label class="field"><span>Жиры, г</span><input type="number" min="0" step="any" v-model="modelValue.fats"></label>
-        <label class="field"><span>Углеводы, г</span><input type="number" min="0" step="any" v-model="modelValue.carbs"></label>
-      </div>
-      <div v-if="check.off" class="tiny" style="color: var(--warn)">
-        По БЖУ выходит ≈ {{ fmt(check.calc) }} ккал — проверьте цифры с упаковки (сохранить можно, версия будет помечена).
-      </div>
-    </div>`,
-};
+import { fmt, matches, n, packagesLabel } from "../util.js";
+import { OffSearchModal } from "../product-finder.js";
 
 const NewProductModal = {
-  components: { Modal, KbjuInputs, BarcodeScanner },
+  components: { Modal, KbjuInputs, BarcodeScanner, OffSearchModal },
   emits: ["close", "saved"],
   setup(_, { emit }) {
     const f = ref({ name: "", category: "", brand: "", manufacturer: "", kbju: { calories: "", proteins: "", fats: "", carbs: "" } });
@@ -41,6 +18,18 @@ const NewProductModal = {
     const scanning = ref(false);
     const hint = ref("");
     const pkg = ref(null);   // упаковка из Open Food Facts: { unit, amount }
+    const searching = ref(false);  // поиск по названию в Open Food Facts
+    function fill(s) {
+      Object.assign(f.value, { name: s.name || f.value.name, brand: s.brand || f.value.brand, manufacturer: s.manufacturer || f.value.manufacturer });
+      f.value.kbju = { calories: s.calories ?? "", proteins: s.proteins ?? "", fats: s.fats ?? "", carbs: s.carbs ?? "" };
+      pkg.value = s.package_amount ? { unit: s.package_unit || "g", amount: n(s.package_amount) } : null;
+    }
+    function pickFound(s) {
+      searching.value = false;
+      fill(s);
+      if (s.barcode) barcode.value = s.barcode;
+      hint.value = "Заполнено из Open Food Facts — проверьте цифры с упаковки.";
+    }
     async function lookup(code) {
       scanning.value = false;
       barcode.value = code;
@@ -49,10 +38,7 @@ const NewProductModal = {
         const r = await api.get(`/products/barcode/${code}`);
         if (r.source === "local") { hint.value = `Уже есть в справочнике: «${r.product.name}» (${r.product.brand?.name || "без бренда"})`; return; }
         if (r.source === "none") { hint.value = "В Open Food Facts не нашли — заполните вручную, код сохранится."; return; }
-        const s = r.suggestion;
-        Object.assign(f.value, { name: s.name || f.value.name, brand: s.brand || f.value.brand, manufacturer: s.brand || f.value.manufacturer });
-        f.value.kbju = { calories: s.calories ?? "", proteins: s.proteins ?? "", fats: s.fats ?? "", carbs: s.carbs ?? "" };
-        pkg.value = s.package_amount ? { unit: s.package_unit, amount: n(s.package_amount) } : null;
+        fill(r.suggestion);
         hint.value = "Заполнено из Open Food Facts — проверьте цифры с упаковки.";
       } catch (e) { hint.value = e.message; }
     }
@@ -62,29 +48,25 @@ const NewProductModal = {
       if (!v.name.trim() || !v.category.trim()) { error.value = "Укажите название и категорию"; return; }
       busy.value = true;
       try {
-        const created = await api.post("/products/with-category", {
+        await api.post("/products/with-category", {
           category_name: v.category.trim(),
           name: v.name.trim(),
           brand_name: v.brand.trim() || "Без бренда",
           barcode: /^\d{8,14}$/.test(barcode.value) ? barcode.value : null,
+          // упаковка с этикетки: сервер переведёт в единицу товара (бутылка → мл)
+          package_amount: pkg.value?.amount || null,
+          package_unit: pkg.value?.amount ? pkg.value.unit : null,
           base_variant: {
             manufacturer_name: v.manufacturer.trim() || v.brand.trim() || null,
             calories: n(v.kbju.calories), proteins: n(v.kbju.proteins), fats: n(v.kbju.fats), carbs: n(v.kbju.carbs),
           },
         });
-        // упаковка с этикетки: граммы — сразу; мл — переводим товар в мл (если у него нет запасов)
-        if (pkg.value && (pkg.value.unit === "g" || pkg.value.unit === "ml")) {
-          try {
-            if (pkg.value.unit === "ml" && created.base_unit !== "ml") await api.put(`/products/${created.id}/unit`, { base_unit: "ml" });
-            await api.post(`/products/${created.id}/packages`, { amount: pkg.value.amount });
-          } catch { /* упаковку можно добавить вручную */ }
-        }
         await loadProducts();
         toast(`«${v.name}» добавлен`);
         emit("saved");
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    return { f, busy, error, save, state, barcode, scanning, hint, lookup, pkg };
+    return { f, busy, error, save, state, barcode, scanning, hint, lookup, pkg, searching, pickFound };
   },
   template: `
     <Modal title="Новый продукт" @close="$emit('close')">
@@ -95,10 +77,17 @@ const NewProductModal = {
           <button class="sm" :disabled="!barcode" @click="lookup(barcode)">Найти</button>
         </div>
         <span v-if="hint" class="tiny">{{ hint }}</span>
-        <span v-if="pkg" class="tiny muted">Упаковка с этикетки: {{ pkg.amount }} {{ pkg.unit === 'ml' ? 'мл' : pkg.unit === 'pcs' ? 'шт' : 'г' }} — добавится к продукту.</span>
+        <span v-if="pkg" class="tiny muted">Упаковка с этикетки: {{ pkg.amount }} {{ pkg.unit === 'ml' ? 'мл' : pkg.unit === 'pcs' ? 'шт' : 'г' }} — добавится к продукту{{ pkg.unit === 'pcs' ? ' (если товар учитывается в штуках)' : '' }}.</span>
       </label>
       <BarcodeScanner v-if="scanning" @close="scanning = false" @code="lookup" />
-      <label class="field"><span>Название</span><input v-model="f.name" placeholder="Йогурт греческий 2%"></label>
+      <div class="field"><span>Название</span>
+        <div class="row" style="flex-wrap: nowrap">
+          <input v-model="f.name" placeholder="Йогурт греческий 2%" @keydown.enter="f.name.trim().length >= 2 && (searching = true)">
+          <button class="sm" @click="searching = true" title="Найти по названию в Open Food Facts">🔎 Найти</button>
+        </div>
+        <span class="tiny muted">Можно найти по названию и бренду в Open Food Facts — КБЖУ, упаковка и штрихкод заполнятся сами.</span>
+      </div>
+      <OffSearchModal v-if="searching" :initial="f.name" @close="searching = false" @pick="pickFound" />
       <div class="grid-2">
         <label class="field"><span>Категория</span>
           <input v-model="f.category" list="cat-list" placeholder="Молочные продукты">
@@ -117,7 +106,7 @@ const NewProductModal = {
 };
 
 const ProductModal = {
-  components: { Modal, KbjuInputs, Macros },
+  components: { Modal, KbjuInputs, Macros, BarcodeScanner },
   props: { product: Object },
   emits: ["close", "saved"],
   setup(props, { emit }) {
@@ -161,11 +150,24 @@ const ProductModal = {
       .then(() => { pkgAmount.value = ""; pkgName.value = ""; });
     const delPkg = (pk) => run(() => api.del(`/products/packages/${pk.id}`), "Упаковка удалена");
     const unitLabel = { g: "г", ml: "мл", pcs: "шт" };
-    return { p, adding, busy, error, startAdd, saveVariant, rollback, sortedVariants, categoryName, fmt, unit, piece, pkgAmount, pkgName, saveUnit, addPkg, delPkg, unitLabel };
+    // Штрихкод: чтобы в следующий раз найти продукт сканером
+    const code = ref(p.value.barcode || "");
+    const scanningCode = ref(false);
+    const validCode = computed(() => /^\d{8,14}$/.test(code.value));
+    const saveCode = () => validCode.value && run(() => api.put(`/products/${p.value.id}/barcode`, { barcode: code.value }), "Штрихкод сохранён");
+    const onScanCode = (c) => { scanningCode.value = false; code.value = c; saveCode(); };
+    return { code, validCode, scanningCode, saveCode, onScanCode, p, adding, busy, error, startAdd, saveVariant, rollback, sortedVariants, categoryName, fmt, unit, piece, pkgAmount, pkgName, saveUnit, addPkg, delPkg, unitLabel };
   },
   template: `
     <Modal :title="p.name" wide @close="$emit('close')">
       <div class="row small muted"><span class="badge">{{ categoryName[p.category_id] }}</span><span>Бренд: {{ p.brand?.name }}</span></div>
+      <div class="row small">
+        <span class="muted">Штрихкод</span>
+        <input v-model="code" inputmode="numeric" placeholder="не задан" style="width: 160px" @keydown.enter="saveCode">
+        <button class="sm" @click="scanningCode = true" title="Сканировать камерой">📷</button>
+        <button v-if="code !== (p.barcode || '')" class="sm" :disabled="busy || !validCode" @click="saveCode">Сохранить</button>
+      </div>
+      <BarcodeScanner v-if="scanningCode" @close="scanningCode = false" @code="onScanCode" />
       <div class="card stack">
         <h3>Покупка и учёт запасов</h3>
         <div class="row">
@@ -231,14 +233,14 @@ export const CatalogView = {
     const opened = ref(null);
     onMounted(() => ensureCatalog().catch(toastError));
     const rows = computed(() => state.products
-      .filter((p) => (!cat.value || p.category_id === cat.value) && matches(`${p.name} ${p.brand?.name}`, q.value))
+      .filter((p) => (!cat.value || p.category_id === cat.value) && matches(`${p.name} ${p.brand?.name} ${p.barcode || ""}`, q.value))
       .map((p) => {
         const actives = p.manufacturers.flatMap((m) => m.variants.filter((v) => v.is_active));
         const v = actives[0] || {};
         return { p, v, makers: p.manufacturers.length, warn: actives.some((x) => x.wrong_nutrients) };
       })
       .sort((a, b) => (categoryName.value[a.p.category_id] || "").localeCompare(categoryName.value[b.p.category_id] || "", "ru") || a.p.name.localeCompare(b.p.name, "ru")));
-    return { q, cat, creating, opened, rows, state, categoryName, fmt };
+    return { q, cat, creating, opened, rows, state, categoryName, fmt, packagesLabel };
   },
   template: `
     <div>
@@ -260,7 +262,7 @@ export const CatalogView = {
           <tbody>
             <tr v-for="r in rows" :key="r.p.id" style="cursor: pointer" @click="opened = r.p">
               <td><b>{{ r.p.name }}</b> <span v-if="r.warn" class="badge warn" title="Калории не сходятся с БЖУ">⚠</span>
-                <div class="tiny muted">{{ r.p.brand?.name }}<span v-if="r.makers > 1"> · {{ r.makers }} производителя</span></div></td>
+                <div class="tiny muted">{{ r.p.brand?.name }}<span v-if="r.makers > 1"> · {{ r.makers }} производителя</span> · {{ packagesLabel(r.p.packages, r.p.base_unit) }}</div></td>
               <td class="small muted">{{ categoryName[r.p.category_id] }}</td>
               <td class="r num">{{ fmt(r.v.calories) }}</td><td class="r num">{{ fmt(r.v.proteins, 1) }}</td>
               <td class="r num">{{ fmt(r.v.fats, 1) }}</td><td class="r num">{{ fmt(r.v.carbs, 1) }}</td>

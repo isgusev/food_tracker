@@ -1,7 +1,7 @@
 // Общее состояние: справочники (продукты, рецепты, категории), пользователь, уведомления.
 import { reactive, computed } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
-import { local, n } from "./util.js";
+import { local, n, packagesLabel } from "./util.js";
 
 export const state = reactive({
   user: null,
@@ -96,6 +96,8 @@ export const variantIndex = computed(() => {
           variant: v,
           name: p.name,
           sub: [brand, maker].filter(Boolean).join(" · "),
+          // для поиска: бренд · производитель · упаковка (или «100 г»)
+          subFull: [brand, maker, packagesLabel(p.packages, p.base_unit)].filter(Boolean).join(" · "),
           label: [p.name, brand].filter(Boolean).join(" · "),
           category: categoryName.value[p.category_id] || "",
           active: v.is_active,

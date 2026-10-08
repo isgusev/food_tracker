@@ -1,11 +1,12 @@
 // План семьи: добавление блюда с порциями по людям и карточка блюда (кто что съел).
 import { ref, computed, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, Picker, VariantPicker, Macros } from "../components.js";
+import { Modal, Picker, Macros } from "../components.js";
+import { ProductFinder, OffDraftCard, saveDraft, draftError, activeVariantOf } from "../product-finder.js";
 import {
   state, toast, variantIndex, recipeById, recipeCategoryName, activeMembers, memberById,
 } from "../store.js";
-import { MEALS, MEAL_LABEL, fmt, grams, local, n, fmtWeekday, fmtDayMonth } from "../util.js";
+import { MEALS, MEAL_LABEL, fmt, fmtQty, grams, local, n, packageGrams, fmtWeekday, fmtDayMonth } from "../util.js";
 
 // ---------- помощники для отображения блюда ----------
 export const allEaten = (it) => it.portions.length > 0 && it.portions.every((p) => p.is_eaten);
@@ -54,13 +55,14 @@ const portionMemoryKey = (kind, id) => `ft.portions.${kind}.${id}`;
 
 // ---------- добавление блюда ----------
 export const AddItemModal = {
-  components: { Modal, Picker, VariantPicker, Macros },
+  components: { Modal, Picker, Macros, ProductFinder, OffDraftCard },
   props: { date: String, meal: String, days: Array },
   emits: ["close", "saved"],
   setup(props, { emit }) {
     const kind = ref("recipe");
     const recipeId = ref(null);
     const variantId = ref(null);
+    const draft = ref(null);          // продукт из Open Food Facts, ещё не в справочнике
     const meal = ref(props.meal || "lunch");
     const dates = ref([props.date]);
     const rows = ref(activeMembers.value.map((m) => ({ member_id: m.id, name: m.name, on: true, weight: 250 })));
@@ -89,9 +91,43 @@ export const AddItemModal = {
         const r = recipe.value;
         return { calories: n(r.calories_per_100g), proteins: n(r.proteins_per_100g), fats: n(r.fats_per_100g), carbs: n(r.carbs_per_100g) };
       }
+      if (draft.value) {
+        const k = draft.value.kbju;
+        return k.calories === "" ? null : { calories: n(k.calories), proteins: n(k.proteins), fats: n(k.fats), carbs: n(k.carbs) };
+      }
       const v = variantIndex.value[variantId.value];
       return v ? { calories: v.calories, proteins: v.proteins, fats: v.fats, carbs: v.carbs } : null;
     });
+
+    // Упаковки готового продукта: можно сразу взять «по упаковке», а не вводить граммы
+    const packages = computed(() => {
+      if (kind.value !== "product") return [];
+      if (draft.value) {
+        const d = draft.value;
+        return n(d.package_amount) > 0 && d.package_unit !== "pcs"
+          ? [{ label: fmtQty(d.package_amount, d.package_unit), grams: n(d.package_amount) }] : [];
+      }
+      const p = variantIndex.value[variantId.value]?.product;
+      if (!p) return [];
+      return (p.packages || [])
+        .map((pk) => ({ label: fmtQty(pk.amount, p.base_unit), grams: packageGrams(pk.amount, p.base_unit, p.piece_weight_g) }))
+        .filter((pk) => pk.grams > 0);
+    });
+    const amountMode = ref("manual");   // "manual" | "package"
+    const pkgIdx = ref(0);
+    const pkgCount = ref(1);
+    const pkgSplit = ref("each");       // "each" — каждому по упаковке, "shared" — одна на всех
+    const pkg = computed(() => packages.value[pkgIdx.value] || packages.value[0] || null);
+    function applyPackage() {
+      if (amountMode.value !== "package" || !pkg.value) return;
+      const g = pkg.value.grams * Math.max(1, n(pkgCount.value));
+      const eaters = rows.value.filter((r) => r.on).length + n(guests.value);
+      const each = pkgSplit.value === "each" ? g : g / Math.max(1, eaters);
+      const w = Math.round(each * 10) / 10;
+      for (const r of rows.value) r.weight = w;
+      guestWeight.value = w;
+    }
+    watch([amountMode, pkgIdx, pkgCount, pkgSplit, guests, () => rows.value.map((r) => r.on).join()], applyPackage);
     const kcal = (w) => (per100.value ? (per100.value.calories * n(w)) / 100 : 0);
     const total = computed(() =>
       rows.value.filter((r) => r.on).reduce((s, r) => s + n(r.weight), 0) + n(guests.value) * n(guestWeight.value)
@@ -107,9 +143,20 @@ export const AddItemModal = {
       }
       guests.value = saved?.guests || 0;
       guestWeight.value = Math.round(saved?.guestWeight || fallback);
+      return saved;
     }
     watch(recipeId, (id) => { if (id) applyDefaults(portionMemoryKey("r", id), portionHint.value || 250); });
-    watch(variantId, (id) => { if (id) applyDefaults(portionMemoryKey("v", id), 100); });
+    // готовый продукт: если есть упаковка — по умолчанию «по упаковке» (или как в прошлый раз)
+    function productDefaults(memoryKey) {
+      const saved = memoryKey ? applyDefaults(memoryKey, 100) : applyDefaults("ft.none", 100);
+      pkgIdx.value = Math.min(saved?.pkgIdx || 0, Math.max(0, packages.value.length - 1));
+      pkgCount.value = saved?.pkgCount || 1;
+      pkgSplit.value = saved?.pkgSplit || "each";
+      amountMode.value = packages.value.length && (!saved || saved.mode === "package") ? "package" : "manual";
+      applyPackage();
+    }
+    watch(variantId, (id) => { if (id) productDefaults(portionMemoryKey("v", id)); });
+    watch(draft, (d, old) => { if (d && !old) productDefaults(null); });
 
     watch([recipeId, total, kind], async () => {
       potStatus.value = null;
@@ -135,16 +182,24 @@ export const AddItemModal = {
         if (!recipeId.value) { error.value = "Выберите блюдо"; return; }
         body.recipe_id = recipeId.value;
       } else {
-        if (!variantId.value) { error.value = "Выберите продукт"; return; }
+        if (!variantId.value && !draft.value) { error.value = "Выберите продукт"; return; }
+        if (draft.value && (error.value = draftError(draft.value))) return;
         body.variant_id = variantId.value;
       }
       if (!portions.length) { error.value = "Отметьте, кто ест"; return; }
       busy.value = true;
       try {
+        if (kind.value === "product" && draft.value) {
+          // выбран продукт из Open Food Facts — сначала в справочник, потом в план
+          const product = await saveDraft(draft.value);
+          body.variant_id = activeVariantOf(product, draft.value.manufacturer || draft.value.brand);
+          if (!body.variant_id) throw new Error("У сохранённого продукта нет активной версии КБЖУ");
+        }
         for (const d of [...dates.value].sort()) await api.post("/plan", { ...body, date_day: d });
         local.set(portionMemoryKey(kind.value === "recipe" ? "r" : "v", body.recipe_id || body.variant_id), {
           members: Object.fromEntries(rows.value.filter((r) => r.on).map((r) => [r.member_id, n(r.weight)])),
           guests: n(guests.value), guestWeight: n(guestWeight.value),
+          mode: amountMode.value, pkgIdx: pkgIdx.value, pkgCount: n(pkgCount.value), pkgSplit: pkgSplit.value,
         });
         toast(dates.value.length > 1 ? `Добавлено в ${dates.value.length} дн.` : "Добавлено в план");
         emit("saved");
@@ -156,7 +211,7 @@ export const AddItemModal = {
     }
 
     return {
-      kind, recipeId, variantId, meal, dates, rows, guests, guestWeight, potStatus, potFree, busy, error,
+      kind, recipeId, variantId, draft, packages, amountMode, pkgIdx, pkgCount, pkgSplit, meal, dates, rows, guests, guestWeight, potStatus, potFree, busy, error,
       recipeItems, portionHint, per100, kcal, total, MEALS, toggleDate, save, fmt, grams, fmtWeekday, fmtDayMonth, n,
     };
   },
@@ -172,23 +227,43 @@ export const AddItemModal = {
         <span v-if="!recipeItems.length" class="tiny">Рецептов пока нет — создайте их в разделе «Рецепты».</span>
         <span v-else-if="portionHint" class="tiny">Стандартная порция ≈ {{ fmt(portionHint) }} г</span>
       </label>
-      <label class="field" v-else><span>Продукт из магазина</span>
-        <VariantPicker v-model="variantId" placeholder="Йогурт, хлеб, сыр…" autofocus />
-        <span class="tiny">Нет нужного? Добавьте его в «Продукты» — с КБЖУ с упаковки.</span>
-      </label>
+      <div class="field" v-else><span>Продукт из магазина</span>
+        <ProductFinder v-model="variantId" v-model:draft="draft" autofocus />
+        <span v-if="!variantId && !draft" class="tiny muted">Сначала ищем в справочнике, не нашли — в Open Food Facts. 📷 — штрихкод камерой.</span>
+      </div>
+      <OffDraftCard v-if="kind === 'product' && draft" :draft="draft" />
+
+      <div v-if="packages.length" class="stack tight">
+        <div class="segmented">
+          <button :class="{ on: amountMode === 'package' }" @click="amountMode = 'package'">По упаковке</button>
+          <button :class="{ on: amountMode === 'manual' }" @click="amountMode = 'manual'">Вес вручную</button>
+        </div>
+        <div v-if="amountMode === 'package'" class="row small">
+          <input type="number" min="1" step="1" v-model.number="pkgCount" style="width: 56px" aria-label="Сколько упаковок">
+          <span class="muted">×</span>
+          <select v-if="packages.length > 1" v-model.number="pkgIdx" style="width: auto">
+            <option v-for="(p, i) in packages" :key="i" :value="i">{{ p.label }}</option>
+          </select>
+          <b v-else>{{ packages[0].label }}</b>
+          <div class="segmented">
+            <button :class="{ on: pkgSplit === 'each' }" @click="pkgSplit = 'each'">каждому</button>
+            <button :class="{ on: pkgSplit === 'shared' }" @click="pkgSplit = 'shared'">на всех</button>
+          </div>
+        </div>
+      </div>
 
       <div class="stack tight">
         <div class="row between"><b class="small">Кто ест и сколько, г</b><span class="small muted num">всего {{ grams(total) }}</span></div>
         <div v-for="r in rows" :key="r.member_id" class="row" style="flex-wrap: nowrap">
           <label class="row grow" style="gap: 8px; cursor: pointer"><input type="checkbox" v-model="r.on"><span class="ellipsis">{{ r.name }}</span></label>
-          <input type="number" min="1" max="2000" step="any" v-model="r.weight" :disabled="!r.on" style="width: 90px">
+          <input type="number" min="1" max="2000" step="any" v-model="r.weight" :disabled="!r.on || (packages.length && amountMode === 'package')" style="width: 90px">
           <span class="small muted num nowrap" style="width: 76px; text-align: right">{{ r.on && per100 ? fmt(kcal(r.weight)) + ' ккал' : '' }}</span>
         </div>
         <div class="row" style="flex-wrap: nowrap">
           <span class="grow small">Гости</span>
           <select v-model.number="guests" style="width: 70px"><option v-for="i in 11" :key="i" :value="i - 1">{{ i - 1 }}</option></select>
           <span class="small muted">по</span>
-          <input type="number" min="1" max="2000" step="any" v-model="guestWeight" :disabled="!guests" style="width: 90px">
+          <input type="number" min="1" max="2000" step="any" v-model="guestWeight" :disabled="!guests || (packages.length && amountMode === 'package')" style="width: 90px">
           <span style="width: 76px"></span>
         </div>
         <span class="tiny muted">Гости учитываются в кастрюле и покупках, но не в чьих-то КБЖУ.</span>

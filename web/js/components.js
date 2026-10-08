@@ -25,7 +25,8 @@ export const Modal = {
     </div>`,
 };
 
-// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right? }]
+// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right?, keys? }]
+// sub — вторая мелкая строка (бренд · производитель · упаковка), keys — скрытые поля поиска (штрихкод)
 export const Picker = {
   props: {
     items: { type: Array, required: true },
@@ -44,7 +45,7 @@ export const Picker = {
 
     const filtered = computed(() => {
       const q = open.value && selected.value && query.value === selected.value.label ? "" : query.value;
-      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""}`, q)).slice(0, 80);
+      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""} ${i.keys || ""}`, q)).slice(0, 80);
     });
     const rows = computed(() => {
       const out = [];
@@ -86,8 +87,8 @@ export const Picker = {
         <template v-for="r in rows" :key="r.key">
           <div v-if="r.header" class="picker-group">{{ r.header }}</div>
           <div v-else class="picker-item" :class="{ hl: r.idx === hl }" @mousedown.prevent="pick(r.item)">
-            <span class="grow"><span>{{ r.item.label }}</span>
-              <span v-if="r.item.sub" class="muted small"> · {{ r.item.sub }}</span></span>
+            <span class="grow" style="min-width: 0"><span>{{ r.item.label }}</span>
+              <span v-if="r.item.sub" class="tiny muted ellipsis" style="display: block">{{ r.item.sub }}</span></span>
             <span v-if="r.item.right" class="muted small nowrap num">{{ r.item.right }}</span>
           </div>
         </template>
@@ -143,8 +144,8 @@ export const VariantPicker = {
   emits: ["update:modelValue", "pick"],
   setup() {
     const items = computed(() => activeVariants.value.map((v) => ({
-      id: v.id, label: v.name, sub: v.sub, group: v.category || "Без категории",
-      right: `${fmt(v.calories)} ккал`,
+      id: v.id, label: v.name, sub: v.subFull, group: v.category || "Без категории",
+      right: `${fmt(v.calories)} ккал`, keys: v.product.barcode || "",
     })));
     return { items };
   },
@@ -285,4 +286,29 @@ export const BarcodeScanner = {
         <button class="primary" @click="submit">Найти</button>
       </div>
     </Modal>`,
+};
+
+// ---------- КБЖУ на 100 г: поля ввода с мягкой проверкой ----------
+// То же правило, что на сервере (app/domain.py): ошибка — если расхождение > 10 ккал И > 15 %
+function atwater(k) {
+  const calc = 4 * n(k.proteins) + 9 * n(k.fats) + 4 * n(k.carbs);
+  const diff = Math.abs(n(k.calories) - calc);
+  return { calc, off: n(k.calories) > 0 && diff > 10 && diff > 0.15 * calc };
+}
+
+export const KbjuInputs = {
+  props: { modelValue: Object },
+  setup(props) { return { check: computed(() => atwater(props.modelValue)), fmt }; },
+  template: `
+    <div class="stack tight">
+      <div class="grid-4">
+        <label class="field"><span>Ккал / 100 г</span><input type="number" min="0" step="any" v-model="modelValue.calories"></label>
+        <label class="field"><span>Белки, г</span><input type="number" min="0" step="any" v-model="modelValue.proteins"></label>
+        <label class="field"><span>Жиры, г</span><input type="number" min="0" step="any" v-model="modelValue.fats"></label>
+        <label class="field"><span>Углеводы, г</span><input type="number" min="0" step="any" v-model="modelValue.carbs"></label>
+      </div>
+      <div v-if="check.off" class="tiny" style="color: var(--warn)">
+        По БЖУ выходит ≈ {{ fmt(check.calc) }} ккал — проверьте цифры с упаковки (сохранить можно, версия будет помечена).
+      </div>
+    </div>`,
 };
