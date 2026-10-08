@@ -1,5 +1,5 @@
 // Вход/регистрация и страница «Семья» (члены семьи, цели КБЖУ, приглашение, тема).
-import { ref, reactive, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
+import { ref, reactive, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { state, loadHousehold, loadRecipes, toast } from "../store.js";
 import { fmt, local, n } from "../util.js";
@@ -65,15 +65,36 @@ const TARGET_KEYS = [
 ];
 const emptyToNull = (v) => (v === "" || v == null ? null : n(v));
 
+// Расчёт целей: МР 2.3.1.0253-21 (Миффлин–Сан Жеор × КФА) + поправка на цель (app/services/nutrition.py)
+const ACTIVITY = [
+  { v: 1.4, label: "Очень низкая: сидячая работа" },
+  { v: 1.6, label: "Низкая: 1–3 тренировки в нед." },
+  { v: 1.9, label: "Средняя: на ногах, 3–5 трен." },
+  { v: 2.2, label: "Высокая: тяжёлый труд, спорт" },
+];
+const GOALS = [
+  { k: "lose", label: "Снижение" },
+  { k: "maintain", label: "Поддержание" },
+  { k: "gain", label: "Набор" },
+];
+const PROFILE_KEYS = ["sex", "birth_year", "height_cm", "weight_kg", "activity", "goal"];
+
 // Карточка члена семьи: имя, цели, скрыть/вернуть
 const MemberCard = {
   props: { member: Object },
   emits: ["saved"],
   setup(props, { emit }) {
-    const f = reactive({ name: "", targets: {}, weight: 70 });
+    const f = reactive({ name: "", targets: {}, profile: {} });
+    const calc = ref(null);   // последний расчёт: основной обмен, поддержание, пояснения
     function reset() {
       f.name = props.member.name;
       f.targets = Object.fromEntries(TARGET_KEYS.map(({ k }) => [k, props.member.targets[k] != null ? n(props.member.targets[k]) : ""]));
+      const pr = props.member.profile || {};
+      f.profile = {
+        sex: pr.sex || "", birth_year: pr.birth_year ?? "", height_cm: pr.height_cm != null ? n(pr.height_cm) : "",
+        weight_kg: pr.weight_kg != null ? n(pr.weight_kg) : "", activity: pr.activity != null ? n(pr.activity) : 1.6,
+        goal: pr.goal || "maintain",
+      };
     }
     watch(() => props.member, reset, { immediate: true });
     const busy = ref(false);
@@ -85,19 +106,30 @@ const MemberCard = {
         emit("saved");
       } catch (e) { toast(e.message, "error"); } finally { busy.value = false; }
     }
+    const profileBody = () => Object.fromEntries(PROFILE_KEYS.map((k) => [k, ["sex", "goal"].includes(k) ? f.profile[k] || null : emptyToNull(f.profile[k])]));
     const save = () => patch({
       name: f.name,
       targets: Object.fromEntries(TARGET_KEYS.map(({ k }) => [k, emptyToNull(f.targets[k])])),
+      profile: profileBody(),
     }, "Сохранено");
     const toggle = () => patch({ is_active: !props.member.is_active }, props.member.is_active ? "Скрыт из планирования" : "Снова в планировании");
-    // Ориентир: Б 1.6 г/кг, Ж 0.9 г/кг, остальное — углеводы
-    function suggest() {
-      const kg = n(f.weight);
-      const kcal = n(f.targets.calories) || 2000;
-      const p = Math.round(kg * 1.6), fat = Math.round(kg * 0.9);
-      f.targets = { calories: kcal, proteins: p, fats: fat, carbs: Math.max(0, Math.round((kcal - p * 4 - fat * 9) / 4)) };
+    const calcError = ref("");
+    async function suggest() {
+      calcError.value = "";
+      const pr = f.profile;
+      if (!pr.sex || !pr.birth_year || !pr.height_cm || !pr.weight_kg) { calcError.value = "Укажите пол, год рождения, рост и вес"; return; }
+      try {
+        calc.value = await api.post("/household/targets/calc", profileBody());
+        f.targets = Object.fromEntries(TARGET_KEYS.map(({ k }) => [k, n(calc.value.targets[k])]));
+      } catch (e) { calc.value = null; calcError.value = e.message; }
     }
-    return { f, busy, save, toggle, suggest, TARGET_KEYS };
+    const goalNote = computed(() => {
+      if (!calc.value) return "";
+      const g = f.profile.goal;
+      return g === "lose" ? "−15 % к поддержанию, белок 1,6 г/кг" : g === "gain" ? "+10 % к поддержанию, белок 1,6 г/кг" : "белок 12–14 % калорий";
+    });
+    const hasProfile = computed(() => PROFILE_KEYS.some((k) => props.member.profile?.[k] != null));
+    return { f, busy, save, toggle, suggest, calc, calcError, goalNote, hasProfile, TARGET_KEYS, ACTIVITY, GOALS, fmt };
   },
   template: `
     <div class="card stack" :style="{ opacity: member.is_active ? 1 : .6 }">
@@ -115,10 +147,34 @@ const MemberCard = {
         <label v-for="t in TARGET_KEYS" :key="t.k" class="field"><span>{{ t.label }}</span>
           <input type="number" min="0" v-model="f.targets[t.k]" placeholder="—"></label>
       </div>
-      <div class="row small">
-        <span class="muted">БЖУ под калории для веса</span>
-        <input type="number" min="10" max="250" v-model="f.weight" style="width: 72px"><span class="muted">кг</span>
-        <button class="sm" @click="suggest">Рассчитать</button>
+      <details :open="!hasProfile">
+        <summary class="small" style="cursor: pointer">Рассчитать цели по росту, весу и цели</summary>
+        <div class="stack tight" style="margin-top: 8px">
+          <div class="segmented" role="group" aria-label="Цель">
+            <button v-for="g in GOALS" :key="g.k" :class="{ on: f.profile.goal === g.k }" @click="f.profile.goal = g.k">{{ g.label }}</button>
+          </div>
+          <div class="grid-4">
+            <label class="field"><span>Пол</span>
+              <select v-model="f.profile.sex"><option value="">—</option><option value="f">женский</option><option value="m">мужской</option></select></label>
+            <label class="field"><span>Год рождения</span><input type="number" min="1920" max="2010" inputmode="numeric" v-model="f.profile.birth_year" placeholder="1990"></label>
+            <label class="field"><span>Рост, см</span><input type="number" min="120" max="230" step="any" v-model="f.profile.height_cm" placeholder="170"></label>
+            <label class="field"><span>Вес, кг</span><input type="number" min="30" max="300" step="any" v-model="f.profile.weight_kg" placeholder="70"></label>
+          </div>
+          <label class="field"><span>Активность</span>
+            <select v-model.number="f.profile.activity"><option v-for="a in ACTIVITY" :key="a.v" :value="a.v">{{ a.label }}</option></select></label>
+          <div class="row">
+            <button class="sm" @click="suggest">Рассчитать</button>
+            <span v-if="calcError" class="small" style="color: var(--warn)">{{ calcError }}</span>
+          </div>
+          <div v-if="calc" class="tiny muted">
+            Основной обмен {{ fmt(calc.bmr) }} ккал · поддержание {{ fmt(calc.maintenance) }} ккал · {{ goalNote }}, жиры 30 %.
+            Цифры подставлены выше — проверьте и сохраните.
+            <div v-for="note in calc.notes" :key="note" style="color: var(--warn)">{{ note }}</div>
+          </div>
+          <div class="tiny muted">По нормам Роспотребнадзора (МР 2.3.1.0253-21, формула Миффлина–Сан Жеора); для взрослых 18+, точность ±10 %.</div>
+        </div>
+      </details>
+      <div class="row">
         <span class="grow"></span>
         <button class="sm primary" :disabled="busy" @click="save">Сохранить</button>
       </div>

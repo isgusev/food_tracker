@@ -70,7 +70,10 @@ def display_name(variant, variant_id: int) -> str:
         return f"Продукт #{variant_id}"
     brand_name = product.brand.name if product.brand else ""
     m_name = manufacturer.name or ""
-    return f"{product.name} ({brand_name} / {m_name})".replace("( / )", "").strip()
+    # производитель — только если отличается от бренда: «Творог (Простоквашино)»
+    parts = [brand_name] + ([m_name] if m_name and m_name.lower() != brand_name.lower() else [])
+    parts = [x for x in parts if x]
+    return f"{product.name} ({' / '.join(parts)})" if parts else product.name
 
 
 class PlanService:

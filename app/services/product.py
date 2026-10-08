@@ -23,10 +23,12 @@ from app.repositories.recipe import RecipeRepository
 from app.schemas.product import (
     BarcodeLookup,
     BarcodeSuggestion,
+    OffSearchResult,
     PackageCreate,
     ProductCreate,
     ProductResponse,
     ProductVariantCreate,
+    ProductWithCategoryCreate,
     UnitUpdate,
 )
 from app.services import barcode as off
@@ -116,6 +118,64 @@ class ProductService:
         assert full is not None
         return full
 
+    async def create_with_category(self, data: ProductWithCategoryCreate) -> Product:
+        """Продукт из формы (или из Open Food Facts): категория по имени, штрихкод,
+        упаковка с этикетки. reuse_existing — вернуть уже существующий продукт."""
+        if data.reuse_existing:
+            existing = await self._find_existing(data)
+            if existing is not None:
+                if data.barcode and not existing.barcode and await self._products.by_barcode(data.barcode) is None:
+                    existing.barcode = data.barcode
+                await self._add_label_package(existing, data.package_amount, data.package_unit)
+                await self._products.flush()
+                return await self.get_product(existing.id)
+        category_id = await self.get_or_create_category(data.category_name)
+        product = await self.create_product(ProductCreate(
+            category_id=category_id,
+            name=data.name,
+            brand_name=data.brand_name or "Без бренда",
+            barcode=data.barcode,
+            base_variant=data.base_variant,
+        ))
+        await self._add_label_package(product, data.package_amount, data.package_unit, is_new=True)
+        await self._products.flush()
+        return await self.get_product(product.id)
+
+    async def _find_existing(self, data: ProductWithCategoryCreate) -> Product | None:
+        if data.barcode:
+            found = await self._products.by_barcode(data.barcode)
+            if found is not None:
+                return found
+        brand = await self._brands.get_by_search_name((data.brand_name or "Без бренда").strip().lower())
+        if brand is None:
+            return None
+        dup = await self._products.find_duplicate(brand.id, data.name.lower())
+        return await self._products.get_full(dup.id) if dup else None
+
+    async def _add_label_package(
+        self, product: Product, amount: Decimal | None, unit: str | None, is_new: bool = False
+    ) -> None:
+        """Упаковка с этикетки → в единице товара. г и мл считаем 1:1; штуки
+        без веса одной штуки перевести нельзя — такую упаковку пропускаем."""
+        if not amount or not unit:
+            return
+        if unit == "ml" and product.base_unit == "g" and is_new:
+            # новый товар в бутылке — сразу учитываем в мл (если других брендов нет)
+            if len(await self._products.same_item(product.search_name)) == 1:
+                product.base_unit = "ml"
+        if unit == "pcs":
+            if product.base_unit != "pcs":
+                return
+            qty = amount
+        else:
+            if product.base_unit == "pcs" and not product.piece_weight_g:
+                return
+            qty = grams_to_base(amount, product.base_unit, product.piece_weight_g)
+        qty = quantize(qty)
+        if qty <= 0 or any(Decimal(str(p.amount)) == qty for p in product.packages):
+            return
+        product.packages.append(ProductPackage(amount=qty))
+
     async def _resolve_brand_id(self, data: ProductCreate) -> int:
         if data.brand_id is not None:
             brand = await self._brands.get(data.brand_id)
@@ -157,6 +217,26 @@ class ProductService:
         if raw is None:
             return BarcodeLookup(barcode=code, source="none")
         return BarcodeLookup(barcode=code, source="openfoodfacts", suggestion=BarcodeSuggestion(**off.parse_off(raw)))
+
+    async def search_off(self, q: str, limit: int = 20) -> OffSearchResult:
+        """Поиск по названию в Open Food Facts. Позиции, чей штрихкод уже есть
+        в справочнике, возвращаются как свои продукты (local), а не подсказки."""
+        raw = await off.search_off(q, limit)
+        if raw is None:
+            return OffSearchResult(available=False)
+        items, local, seen = [], [], set()
+        for p in raw:
+            s = off.parse_off(p)
+            if not s["name"] or (s["barcode"] and s["barcode"] in seen):
+                continue
+            if s["barcode"]:
+                seen.add(s["barcode"])
+                own = await self._products.by_barcode(s["barcode"])
+                if own is not None:
+                    local.append(ProductResponse.model_validate(own))
+                    continue
+            items.append(BarcodeSuggestion(**s))
+        return OffSearchResult(items=items, local=local)
 
     async def set_barcode(self, product_id: int, code: str) -> Product:
         product = await self.get_product(product_id)

@@ -14,13 +14,19 @@ from app.models.user import RegistrationInvite
 from app.repositories.household import HouseholdRepository, MemberRepository
 from app.repositories.user import InviteRepository
 from app.schemas.auth import InviteResponse
+from datetime import date
+
 from app.schemas.household import (
+    BodyProfile,
     HouseholdResponse,
     MemberCreate,
     MemberResponse,
     MemberUpdate,
     Targets,
+    TargetsCalcIn,
+    TargetsCalcOut,
 )
+from app.services.nutrition import calc_targets
 
 # Без похожих символов (0/O, 1/I/L), чтобы код легко продиктовать
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -36,6 +42,22 @@ def _targets(member: HouseholdMember) -> Targets:
         proteins=member.target_proteins,
         fats=member.target_fats,
         carbs=member.target_carbs,
+    )
+
+
+PROFILE_FIELDS = ("sex", "birth_year", "height_cm", "weight_kg", "activity", "goal")
+
+
+def _profile(member: HouseholdMember) -> BodyProfile:
+    return BodyProfile(**{f: getattr(member, f) for f in PROFILE_FIELDS})
+
+
+def calc_member_targets(data: TargetsCalcIn) -> TargetsCalcOut:
+    age = date.today().year - data.birth_year
+    r = calc_targets(data.sex, age, data.height_cm, data.weight_kg, data.activity, data.goal)
+    return TargetsCalcOut(
+        targets=Targets(calories=r.calories, proteins=r.proteins, fats=r.fats, carbs=r.carbs),
+        age=age, bmr=r.bmr, maintenance=r.maintenance, notes=r.notes,
     )
 
 
@@ -98,6 +120,7 @@ class HouseholdService:
             is_active=m.is_active,
             is_me=m.id == me.id,
             targets=_targets(m),
+            profile=_profile(m),
         )
 
     async def rename(self, me: HouseholdMember, name: str) -> HouseholdResponse:
@@ -135,6 +158,9 @@ class HouseholdService:
             member.name = data.name
         if "targets" in fields and data.targets is not None:
             _apply_targets(member, data.targets)
+        if "profile" in fields and data.profile is not None:
+            for f in PROFILE_FIELDS:
+                setattr(member, f, getattr(data.profile, f))
         if "is_active" in fields and data.is_active is not None:
             if member.user_id is not None and not data.is_active:
                 raise ValidationError("Участника со своим аккаунтом нельзя скрыть из семьи")
