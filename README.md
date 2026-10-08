@@ -1,4 +1,4 @@
-# Food Tracker
+# ЕлиГуси (Food Tracker)
 
 Трекер питания: справочник продуктов (с версиями КБЖУ), рецепты/готовки, дневник питания.
 Backend: FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL. UI: Vue 3 (`web/`, без сборки),

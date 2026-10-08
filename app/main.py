@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="Учет продуктов КБЖУ",
+        title="ЕлиГуси — API",
         version="0.2.0",
         docs_url="/docs" if not settings.is_production else None,
         redoc_url=None,

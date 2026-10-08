@@ -29,8 +29,9 @@ export const LoginView = {
   template: `
     <div class="login-wrap">
       <form class="card login-card stack" @submit.prevent="submit">
-        <div style="font-size: 34px">🥗</div>
-        <h1>Food Tracker</h1>
+        <img src="icons/icon.svg" alt="" width="56" height="56" style="border-radius: 14px">
+        <h1>ЕлиГуси</h1>
+        <div class="small muted" style="margin-top: -6px">План питания, покупки и КБЖУ для всей семьи</div>
         <div class="segmented">
           <button type="button" :class="{ on: mode === 'login' }" @click="mode = 'login'">Вход</button>
           <button type="button" :class="{ on: mode === 'register' }" @click="mode = 'register'">Регистрация</button>

@@ -210,8 +210,22 @@ export const IngredientsEditor = {
     </div>`,
 };
 
-// Сканер штрихкода: камера + BarcodeDetector (Chrome/Android, Chrome на Mac),
-// иначе — ручной ввод цифр. Камера доступна только на https или localhost.
+// Сканер штрихкода. Где есть встроенный BarcodeDetector (Chrome на Android/Mac) —
+// он; иначе (Safari и все браузеры на iPhone) — библиотека ZXing из vendor/.
+// Камера доступна только на https или localhost; всегда можно ввести цифры руками.
+let zxingLoading = null;
+function loadZxing() {
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  zxingLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "vendor/zxing.min.js";
+    s.onload = () => resolve(window.ZXing);
+    s.onerror = () => reject(new Error("не удалось загрузить распознавание"));
+    document.head.appendChild(s);
+  });
+  return zxingLoading;
+}
+
 export const BarcodeScanner = {
   components: { Modal },
   emits: ["close", "code"],
@@ -219,40 +233,52 @@ export const BarcodeScanner = {
     const video = ref(null);
     const manual = ref("");
     const status = ref("");
-    const supported = "BarcodeDetector" in window && !!navigator.mediaDevices?.getUserMedia;
-    let stream = null;
-    let timer = null;
+    const supported = !!navigator.mediaDevices?.getUserMedia && window.isSecureContext;
+    let stop = () => {};
+    let done = false;
+    const found = (code) => { if (done) return; done = true; stop(); emit("code", String(code)); };
+
+    async function withDetector() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      video.value.srcObject = stream;
+      await video.value.play();
+      const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+      const timer = setInterval(async () => {
+        try { const r = await detector.detect(video.value); if (r.length) found(r[0].rawValue); } catch { /* кадр не готов */ }
+      }, 300);
+      stop = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); };
+    }
+
+    async function withZxing() {
+      const Z = await loadZxing();
+      const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E]]]);
+      const reader = new Z.BrowserMultiFormatReader(hints, 300);
+      stop = () => { try { reader.reset(); } catch { /* уже остановлен */ } };
+      await reader.decodeFromConstraints({ video: { facingMode: "environment" } }, video.value, (result) => {
+        if (result) found(result.getText());
+      });
+    }
+
     async function start() {
-      if (!supported) { status.value = "Этот браузер не умеет сканировать — введите цифры под штрихкодом."; return; }
+      if (!supported) { status.value = "Камера доступна только по https — введите цифры под штрихкодом."; return; }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        video.value.srcObject = stream;
-        await video.value.play();
-        const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
         status.value = "Наведите камеру на штрихкод";
-        timer = setInterval(async () => {
-          try {
-            const found = await detector.detect(video.value);
-            if (found.length) { stop(); emit("code", found[0].rawValue); }
-          } catch { /* кадр не готов */ }
-        }, 300);
-      } catch {
-        status.value = "Нет доступа к камере (нужен https или localhost) — введите цифры вручную.";
+        if ("BarcodeDetector" in window) await withDetector();
+        else await withZxing();
+      } catch (e) {
+        status.value = e?.name === "NotAllowedError"
+          ? "Нет разрешения на камеру — разрешите доступ в настройках браузера или введите цифры."
+          : "Камера недоступна — введите цифры под штрихкодом.";
       }
     }
-    function stop() {
-      clearInterval(timer);
-      stream?.getTracks().forEach((t) => t.stop());
-      stream = null;
-    }
     onMounted(start);
-    onBeforeUnmount(stop);
-    const submit = () => { const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) { stop(); emit("code", c); } };
+    onBeforeUnmount(() => stop());
+    const submit = () => { const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) found(c); };
     return { video, manual, status, supported, submit };
   },
   template: `
     <Modal title="Штрихкод" @close="$emit('close')">
-      <video v-if="supported" ref="video" playsinline muted style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
+      <video v-if="supported" ref="video" playsinline muted autoplay style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
       <div class="small muted">{{ status }}</div>
       <div class="row" style="flex-wrap: nowrap">
         <input v-model="manual" inputmode="numeric" placeholder="4600000000000" @keydown.enter="submit">
