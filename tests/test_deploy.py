@@ -92,3 +92,21 @@ def test_production_requires_invites_and_secret(monkeypatch):
     with pytest.raises(RuntimeError):
         Settings(environment="prod", registration_mode="invite", secret_key="CHANGE_ME_IN_PRODUCTION").validate_runtime()
     Settings(environment="prod", registration_mode="invite", secret_key="x" * 32).validate_runtime()
+
+
+def test_postgres_ssl_in_url():
+    from app.core.config import Settings
+
+    s = Settings(postgres_ssl="require", database_url_override=None)
+    assert s.database_url.endswith("?ssl=require")
+    assert "?ssl" not in Settings(postgres_ssl=None, database_url_override=None).database_url
+
+
+def test_password_with_special_chars_is_escaped():
+    from sqlalchemy.engine import make_url
+
+    from app.core.config import Settings
+
+    s = Settings(postgres_password="a/b+c=d@e%f", postgres_ssl="require", database_url_override=None)
+    url = make_url(s.database_url)
+    assert url.password == "a/b+c=d@e%f" and url.query == {"ssl": "require"}

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 
 from functools import lru_cache
+from urllib.parse import quote
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,6 +35,9 @@ class Settings(BaseSettings):
     postgres_db: str = "food_db"
     postgres_user: str = "food_user"
     postgres_password: str = "food_password"
+    # Шифрование соединения с БД: require — только по SSL (рекомендуется на хостинге),
+    # prefer — SSL, если сервер умеет; disable — без SSL. Пусто — поведение драйвера (prefer)
+    postgres_ssl: str | None = None
     db_echo: bool = False
     db_pool_size: int = 5
     db_max_overflow: int = 10
@@ -64,6 +68,8 @@ class Settings(BaseSettings):
 
     def validate_runtime(self) -> None:
         """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""
+        if self.postgres_ssl not in (None, "", "require", "prefer", "disable", "verify-ca", "verify-full"):
+            raise RuntimeError("POSTGRES_SSL: require, prefer, disable, verify-ca или verify-full")
         if self.registration_mode not in ("invite", "open"):
             raise RuntimeError("REGISTRATION_MODE должен быть invite или open")
         if self.is_production and self.registration_mode != "invite":
@@ -88,10 +94,15 @@ class Settings(BaseSettings):
         return self._url("postgresql")
 
     def _url(self, driver: str) -> str:
-        return (
-            f"{driver}://{self.postgres_user}:{self.postgres_password}"
+        # логин/пароль экранируем: символы / + = @ % в пароле иначе ломают URL
+        url = (
+            f"{driver}://{quote(self.postgres_user, safe='')}:{quote(self.postgres_password, safe='')}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+        if self.postgres_ssl:
+            # asyncpg (через SQLAlchemy) понимает ?ssl=require|prefer|disable — и приложение, и alembic
+            url += f"?ssl={self.postgres_ssl}"
+        return url
 
 
 @lru_cache
