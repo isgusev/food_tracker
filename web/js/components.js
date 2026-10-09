@@ -3,17 +3,19 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../v
 import { activeVariants, variantIndex } from "./store.js";
 import { fmt, grams, matches, n } from "./util.js";
 
+// Закрывается только явно — ✕ или кнопкой в подвале: промах мышью мимо окна
+// не должен терять введённое. dismissible — разрешить закрытие по фону и Esc.
 export const Modal = {
-  props: { title: String, wide: Boolean },
+  props: { title: String, wide: Boolean, dismissible: Boolean },
   emits: ["close"],
-  setup(_, { emit }) {
-    const onKey = (e) => { if (e.key === "Escape") emit("close"); };
+  setup(props, { emit }) {
+    const onKey = (e) => { if (props.dismissible && e.key === "Escape") emit("close"); };
     onMounted(() => document.addEventListener("keydown", onKey));
     onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
     return {};
   },
   template: `
-    <div class="modal-backdrop" @mousedown.self="$emit('close')">
+    <div class="modal-backdrop" @mousedown.self="dismissible && $emit('close')">
       <div class="modal" :class="{ wide }" role="dialog" aria-modal="true">
         <div class="modal-head">
           <h2>{{ title }}</h2>
@@ -81,8 +83,12 @@ export const Picker = {
   },
   template: `
     <div class="picker">
-      <input ref="input" v-model="query" :placeholder="placeholder" @focus="open = true; $event.target.select()"
-             @input="open = true" @keydown="onKey" @blur="onBlur" autocomplete="off">
+      <div class="clearable">
+        <input ref="input" v-model="query" :placeholder="placeholder" @focus="open = true; $event.target.select()"
+               @input="open = true" @keydown="onKey" @blur="onBlur" autocomplete="off">
+        <button v-if="query" type="button" class="clear-btn" aria-label="Очистить" title="Очистить"
+                @mousedown.prevent="query = ''; open = true; input.focus()">✕</button>
+      </div>
       <div class="picker-list" v-if="open && rows.length">
         <template v-for="r in rows" :key="r.key">
           <div v-if="r.header" class="picker-group">{{ r.header }}</div>

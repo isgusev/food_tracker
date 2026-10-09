@@ -22,8 +22,12 @@
   Open Food Facts, выбранное из OFF = «черновик», сохраняется `saveDraft` при добавлении в план),
   `OffSearchModal` (форма «Новый продукт»), `OffDraftCard`. Общие компоненты — `web/js/components.js`
   (`Picker` с двухстрочными пунктами, `VariantPicker`, `KbjuInputs`, `BarcodeScanner`).
-- Open Food Facts на сервере: `app/services/barcode.py` — по штрихкоду (`api/v2/product`) и по названию
-  (`cgi/search.pl`, запасной `search.openfoodfacts.org`, кэш в памяти 10 мин — лимит OFF ~10 поисков/мин).
+- Open Food Facts на сервере: `app/services/barcode.py` — по штрихкоду (`fetch_off`, `api/v2/product`) и по
+  названию (`search_off`): точный `cgi/search.pl` → если мало, он же без последнего слова → запасной
+  `search.openfoodfacts.org`; всё ранжируется у себя (`rank_products`/`match_score`: целое слово > начало
+  слова > опечатка). Кэш в памяти 10 мин. В вебе то же правило — `fuzzyScore` в `web/js/util.js`.
+- `Modal` закрывается только явно (✕ или кнопка в подвале); по фону и Esc — только с `dismissible`.
+  Шапка и подвал модалки закреплены, прокручивается тело. Поле поиска с крестиком — обёртка `.clearable`.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
 
@@ -52,7 +56,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 70 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 76 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0011)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
@@ -86,6 +90,9 @@
 - `preview_start` по `.claude/launch.json` не может запустить сервер (нет доступа к папке проекта) —
   uvicorn запускать через Bash в фоне на временной базе (Docker, порт 5439) и открывать
   `preview_start` с `url` http://localhost:8001/app/; демо-данные — `scripts.seed --url … --user … --password …`.
+- Open Food Facts: классический поиск находит только ЦЕЛЫЕ слова и часто отвечает 503 (лимит,
+  ~10 поисков/мин на IP; при проверках из терминала легко исчерпать — делать паузы); search-a-licious
+  ищет «любое из слов», индекс неполный. Поэтому ранжирование — своё, а на 503 второй классический не ждём.
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — относительно `date.today()` (`day()` в `tests/test_api.py`).
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)

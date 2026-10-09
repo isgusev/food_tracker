@@ -217,14 +217,16 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .modal {
   background: var(--surface); border-radius: 14px; width: 100%; max-width: 560px;
   box-shadow: 0 20px 60px rgba(0,0,0,.25); border: 1px solid var(--border);
+  /* шапка с ✕ и кнопки внизу всегда видны — прокручивается только содержимое */
+  display: flex; flex-direction: column; max-height: calc(100vh - 6vh - 16px);
 }
 .modal.wide { max-width: 820px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); gap: 8px; }
-.modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+.modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 @media (max-width: 560px) {
   .modal-backdrop { padding: 0; align-items: flex-end; }
-  .modal { border-radius: 14px 14px 0 0; max-height: 92vh; overflow-y: auto; }
+  .modal { border-radius: 14px 14px 0 0; max-height: 92vh; max-height: 92dvh; }
 }
 
 /* ---------- Picker ---------- */
@@ -242,8 +244,19 @@ table.tbl { width: 100%; border-collapse: collapse; }
 /* Поиск продукта (план): список под полем, не выпадающий — удобнее на телефоне */
 .finder-list {
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
-  max-height: 340px; overflow-y: auto;
+  max-height: min(340px, 38vh); overflow-y: auto; overscroll-behavior: contain;
 }
+.finder-manual { color: var(--accent); }
+
+/* Поле поиска с крестиком «очистить» внутри */
+.clearable { position: relative; flex: 1 1 auto; min-width: 0; }
+.clearable > input { padding-right: 34px; }
+.clearable > .clear-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; padding: 0; border: none; border-radius: 50%;
+  background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.clearable > .clear-btn:hover { background: var(--surface-2); color: var(--text); }
 .finder-chosen {
   display: flex; align-items: center; gap: 10px; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);

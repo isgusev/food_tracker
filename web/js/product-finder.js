@@ -5,7 +5,7 @@ import { ref, reactive, computed, watch, nextTick, onMounted } from "../vendor/v
 import { api } from "./api.js";
 import { Modal, BarcodeScanner, KbjuInputs } from "./components.js";
 import { state, activeVariants, variantIndex, loadProducts } from "./store.js";
-import { fmt, fmtQty, matches, local, n } from "./util.js";
+import { fmt, fmtQty, fuzzyScore, local, n } from "./util.js";
 
 const CODE_RE = /^\d{8,14}$/;
 const LAST_CATEGORY = "ft.lastProductCategory";
@@ -17,9 +17,11 @@ export function offSub(s) {
 }
 const offKcal = (s) => (s.calories != null ? `${fmt(s.calories)} ккал` : "без КБЖУ");
 
-// Черновик продукта из подсказки Open Food Facts (поля формы)
-export function draftFrom(s) {
+// Черновик продукта (поля формы): из подсказки Open Food Facts (source "off")
+// или пустой для ручного ввода (source "manual")
+export function draftFrom(s, source = "off") {
   return {
+    source,
     barcode: s.barcode || null,
     name: s.name || "",
     brand: s.brand || "",
@@ -114,15 +116,25 @@ export const ProductFinder = {
     const selected = computed(() => (props.modelValue ? variantIndex.value[props.modelValue] : null));
     const chosen = computed(() => selected.value
       ? { name: selected.value.name, sub: selected.value.subFull, source: "" }
-      : props.draft ? { name: props.draft.name || "Без названия", sub: offSub(props.draft), source: "Open Food Facts" } : null);
+      : props.draft ? {
+        name: props.draft.name || "Новый продукт",
+        sub: props.draft.source === "manual" ? "заполните данные ниже" : offSub(props.draft),
+        source: props.draft.source === "manual" ? "вручную" : "Open Food Facts",
+      } : null);
     const isCode = computed(() => CODE_RE.test(query.value.trim()));
 
     const localRows = computed(() => {
       const q = query.value.trim();
       if (!q) return [];
+      // нечётко: начало слова и опечатки тоже находятся, самые похожие — первыми
       const rows = isCode.value
         ? activeVariants.value.filter((v) => v.product.barcode === q)
-        : activeVariants.value.filter((v) => matches(`${v.name} ${v.subFull} ${v.category}`, q)).slice(0, 30);
+        : activeVariants.value
+          .map((v) => ({ v, s: fuzzyScore(q, `${v.name} ${v.subFull}`) }))
+          .filter((x) => x.s >= 0.6)
+          .sort((a, b) => b.s - a.s)
+          .slice(0, 30)
+          .map((x) => x.v);
       // продукты, которые OFF нашёл по названию, а у нас они уже есть (по штрихкоду)
       for (const p of off.local) {
         const id = activeVariantOf(p);
@@ -138,7 +150,7 @@ export const ProductFinder = {
       q = q.trim();
       if (CODE_RE.test(q)) timer = setTimeout(() => lookupCode(q), 250);
       // в справочнике ничего — сами переключаемся на Open Food Facts
-      else if (q.length >= 3) timer = setTimeout(() => { if (!localRows.value.length) search(q); }, 700);
+      else if (q.length >= 3) timer = setTimeout(() => { if (!localRows.value.length) search(q); }, 900);
     });
 
     async function lookupCode(code) {
@@ -172,6 +184,14 @@ export const ProductFinder = {
       emit("update:draft", draftFrom(s));
       query.value = "";
     }
+    // Не нашли (или нашли не то) — заполнить продукт вручную прямо здесь
+    function enterManually() {
+      const q = query.value.trim();
+      emit("update:modelValue", null);
+      emit("update:draft", draftFrom(CODE_RE.test(q) ? { barcode: q } : { name: q }, "manual"));
+      query.value = "";
+    }
+    function clear() { query.value = ""; nextTick(() => input.value?.focus()); }
     function change() {
       emit("update:modelValue", null);
       emit("update:draft", null);
@@ -181,6 +201,7 @@ export const ProductFinder = {
     onMounted(() => { if (props.autofocus && !chosen.value) nextTick(() => input.value?.focus()); });
     return {
       query, input, scanning, hint, off, search, chosen, isCode, localRows, offRows, onScan, pickLocal, pickOff, change,
+      enterManually, clear,
       offSub, offKcal, fmt,
     };
   },
@@ -195,9 +216,16 @@ export const ProductFinder = {
       </div>
       <template v-else>
         <div class="row" style="flex-wrap: nowrap">
-          <input ref="input" v-model="query" placeholder="Название, бренд или штрихкод…" autocomplete="off" enterkeyhint="search"
-                 @keydown.enter.prevent="!isCode && query.trim().length >= 2 && search(query)">
+          <div class="clearable">
+            <input ref="input" v-model="query" placeholder="Название, бренд или штрихкод…" autocomplete="off" enterkeyhint="search"
+                   @keydown.enter.prevent="!isCode && query.trim().length >= 2 && search(query)">
+            <button v-if="query" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="clear">✕</button>
+          </div>
           <button class="sm" @click="scanning = true" title="Сканировать штрихкод камерой" aria-label="Сканировать штрихкод">📷</button>
+        </div>
+        <div v-if="query.trim()" class="row between small" style="flex-wrap: nowrap">
+          <span class="muted">{{ off.loading ? 'Ищем в Open Food Facts…' : 'Нет нужного?' }}</span>
+          <button class="sm ghost finder-manual" @click="enterManually">✏️ {{ isCode ? 'Ввести со штрихкодом' : 'Ввести вручную' }}</button>
         </div>
         <div v-if="query.trim()" class="finder-list">
           <template v-if="localRows.length">
@@ -208,7 +236,7 @@ export const ProductFinder = {
               <span class="muted small nowrap num">{{ fmt(v.calories) }} ккал</span>
             </div>
           </template>
-          <div v-else-if="!isCode" class="picker-item muted small">В приложении не нашли — ищем в Open Food Facts</div>
+          <div v-else-if="!isCode" class="picker-item muted small">В приложении не нашли</div>
           <template v-if="offRows.length">
             <div class="picker-group">Open Food Facts</div>
             <div v-for="(s, i) in offRows" :key="s.barcode || i" class="picker-item" @click="pickOff(s)">
@@ -217,9 +245,9 @@ export const ProductFinder = {
               <span class="muted small nowrap num">{{ offKcal(s) }}</span>
             </div>
           </template>
-          <div v-if="off.loading || hint" class="picker-item muted small">{{ off.loading ? 'Ищем в Open Food Facts…' : hint }}</div>
+          <div v-if="hint" class="picker-item muted small">{{ hint }}</div>
           <div v-else-if="off.error" class="picker-item small" style="color: var(--warn)">{{ off.error }}</div>
-          <div v-else-if="off.done && !offRows.length" class="picker-item muted small">В Open Food Facts тоже не нашли — добавьте продукт в «Продукты» вручную.</div>
+          <div v-else-if="off.done && !offRows.length" class="picker-item muted small">В Open Food Facts тоже не нашли — введите вручную.</div>
           <div v-if="!isCode && !off.done && !off.loading && localRows.length && query.trim().length >= 2" class="picker-item">
             <button class="sm ghost" @click="search(query)">Нет нужного? Искать в Open Food Facts</button>
           </div>
@@ -239,8 +267,9 @@ export const OffDraftCard = {
   },
   template: `
     <div class="card stack tight">
-      <div class="tiny muted">Из Open Food Facts — проверьте цифры с упаковки. Продукт сохранится в справочник.</div>
-      <label class="field"><span>Название</span><input v-model="draft.name"></label>
+      <div class="tiny muted" v-if="draft.source === 'manual'">Новый продукт: заполните название, категорию и КБЖУ на 100 г с упаковки. Он сохранится в справочник.</div>
+      <div class="tiny muted" v-else>Из Open Food Facts — проверьте цифры с упаковки. Продукт сохранится в справочник.</div>
+      <label class="field"><span>Название</span><input v-model="draft.name" placeholder="Пита ливанская"></label>
       <div class="grid-2">
         <label class="field"><span>Бренд</span><input v-model="draft.brand" placeholder="Без бренда"></label>
         <label class="field"><span>Категория</span>
@@ -276,7 +305,10 @@ export const OffSearchModal = {
   template: `
     <Modal title="Поиск в Open Food Facts" @close="$emit('close')">
       <div class="row" style="flex-wrap: nowrap">
-        <input ref="input" v-model="q" placeholder="Название и бренд: творог простоквашино" enterkeyhint="search" @keydown.enter.prevent="search(q)">
+        <div class="clearable">
+          <input ref="input" v-model="q" placeholder="Название и бренд: творог простоквашино" enterkeyhint="search" @keydown.enter.prevent="search(q)">
+          <button v-if="q" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="q = ''; input.focus()">✕</button>
+        </div>
         <button class="primary" :disabled="q.trim().length < 2 || off.loading" @click="search(q)">Найти</button>
       </div>
       <div v-if="off.loading" class="small muted">Ищем…</div>
