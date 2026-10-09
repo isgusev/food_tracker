@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { Modal, Macros, BarcodeScanner, KbjuInputs } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, toast, toastError } from "../store.js";
-import { fmt, matches, n, packagesLabel } from "../util.js";
+import { fmt, fuzzyScore, matches, n, packagesLabel } from "../util.js";
 import { OffSearchModal } from "../product-finder.js";
 
 const NewProductModal = {
@@ -233,7 +233,7 @@ export const CatalogView = {
     const opened = ref(null);
     onMounted(() => ensureCatalog().catch(toastError));
     const rows = computed(() => state.products
-      .filter((p) => (!cat.value || p.category_id === cat.value) && matches(`${p.name} ${p.brand?.name} ${p.barcode || ""}`, q.value))
+      .filter((p) => (!cat.value || p.category_id === cat.value) && (matches(`${p.name} ${p.brand?.name} ${p.barcode || ""}`, q.value) || fuzzyScore(q.value, `${p.name} ${p.brand?.name}`) >= 0.6))
       .map((p) => {
         const actives = p.manufacturers.flatMap((m) => m.variants.filter((v) => v.is_active));
         const v = actives[0] || {};
@@ -249,7 +249,10 @@ export const CatalogView = {
         <button class="primary" @click="creating = true">+ Продукт</button>
       </div>
       <div class="row" style="margin-bottom: 12px">
-        <input v-model="q" placeholder="Поиск по названию или бренду…" style="max-width: 320px">
+        <div class="clearable" style="max-width: 320px">
+          <input v-model="q" placeholder="Поиск по названию, бренду, штрихкоду…">
+          <button v-if="q" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="q = ''">✕</button>
+        </div>
         <select v-model.number="cat" style="max-width: 220px">
           <option :value="0">Все категории</option>
           <option v-for="c in state.productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>

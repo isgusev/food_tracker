@@ -134,3 +134,52 @@ async def test_profile_saved_and_calc_endpoint(client):
     assert float(me["targets"]["calories"]) == float(calc["targets"]["calories"])
     bad = await client.post("/api/v1/household/targets/calc", json={**profile, "birth_year": 2020}, headers=h)
     assert bad.status_code == 400
+
+
+# --- Поиск по неточному вводу: нормализация, ранжирование, обход ограничений OFF ---
+PITA = [
+    {"code": "1", "product_name": "Пита", "brands": "Пекарня Марии"},
+    {"code": "2", "product_name": "Пита Турецкая", "brands": "Русский хлеб"},
+    {"code": "3", "product_name": "Пита &quot;Ливанская&quot;", "brands": "ВкусВилл"},
+    {"code": "3", "product_name": "дубль", "brands": "x"},
+]
+
+
+def test_normalize_and_match_score():
+    assert off.normalize_query('Пита "Ливанская') == "пита ливанская"
+    assert off.normalize_query("Молоко 2,5% «Домик», ёж.") == "молоко 2,5% домик еж"
+    full = 'Пита "Ливанская" ВкусВилл'
+    assert off.match_score("Пита Ливанская", full) == 1
+    assert off.match_score("Пита Лива", full) > off.match_score("Пита Лива", "Пита Турецкая")   # начало слова
+    assert off.match_score("Пита Леванская", full) > 0.8                                    # опечатка
+    assert off.match_score("Пита Леванская", "Пита Турецкая") == 0.5
+
+
+@pytest.mark.parametrize("query", ["Пита Ливанская", "Пита Лива", "Пита Леванская", 'пита "ливанская'])
+async def test_search_off_ranks_and_broadens(monkeypatch, query):
+    off._search_cache.clear()
+    calls = []
+
+    async def classic(q, limit):
+        calls.append(q)
+        # как у OFF: только целые слова — недописанное/с опечаткой не находится
+        return [p for p in PITA if all(w in off.normalize_query(p["product_name"]) for w in q.split())]
+
+    async def new(q, limit):
+        calls.append("new:" + q)
+        return PITA[:2]
+    monkeypatch.setattr(off, "_search_classic", classic)
+    monkeypatch.setattr(off, "_search_new", new)
+    result = await off.search_off(query, 10)
+    assert result[0]["code"] == "3"                          # нужная пита первой
+    assert [p["code"] for p in result].count("3") == 1       # без дублей
+
+
+async def test_search_off_unavailable_only_when_all_sources_fail(monkeypatch):
+    off._search_cache.clear()
+
+    async def down(q, limit):
+        return None
+    monkeypatch.setattr(off, "_search_classic", down)
+    monkeypatch.setattr(off, "_search_new", down)
+    assert await off.search_off("пита ливанская") is None

@@ -84,7 +84,43 @@ export function sumMacros(rows) {
 
 // Поиск без учёта регистра и «ё»
 export function norm(s) {
-  return String(s || "").toLowerCase().replace(/ё/g, "е").trim();
+  return String(s || "").toLowerCase().replace(/ё/g, "е").replace(/[«»"“”„'`]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Нечёткая похожесть запроса на текст (0…1), то же правило, что на сервере:
+// целое слово 1, начало слова 0,9 («лива» → «ливанская»), опечатка ≥ 75 % похожести — 0,8×
+function lev(a, b) {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
+}
+const similar = (a, b) => 1 - lev(a, b) / Math.max(a.length, b.length);
+const words = (s) => norm(s).split(/[^\p{L}\p{N}%.,]+/u).filter(Boolean);
+export function fuzzyScore(query, text) {
+  const qs = words(query), ts = words(text);
+  if (!qs.length || !ts.length) return 0;
+  let sum = 0;
+  for (const q of qs) {
+    let best = 0;
+    for (const t of ts) {
+      if (t === q) { best = 1; break; }
+      if (q.length >= 2 && t.startsWith(q)) best = Math.max(best, 0.9);
+      else if (t.includes(q) && q.length >= 3) best = Math.max(best, 0.85);
+      else if (q.length >= 4 && t.length >= 4) {
+        const r = Math.max(similar(q, t), similar(q, t.slice(0, q.length)));
+        if (r >= 0.75) best = Math.max(best, 0.8 * r);
+      }
+    }
+    sum += best;
+  }
+  return sum / qs.length;
 }
 export function matches(haystack, query) {
   const q = norm(query);
