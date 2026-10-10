@@ -1,7 +1,8 @@
 // Холодильник: приготовленные блюда (кастрюли), их остатки, резерв под планы и архив.
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, Picker, IngredientsEditor, Macros } from "../components.js";
+import { Modal, Picker, Macros } from "../components.js";
+import { IngredientsEditor, resolveDraftIngredients } from "../product-finder.js";
 import { state, ensureCatalog, recipeById, toast, toastError, variantIndex } from "../store.js";
 import { fmt, fmtDateTime, fmtQty, grams, gramsToBase, n, today } from "../util.js";
 import { StockTab } from "./stock.js";
@@ -51,6 +52,8 @@ export const CookModal = {
     async function save() {
       error.value = "";
       if (!rid.value) { error.value = "Выберите рецепт"; return; }
+      try { await resolveDraftIngredients(ingredients.value); }
+      catch (e) { error.value = e.message; return; }
       const list = ingredients.value.filter((i) => i.variant_id && n(i.weight_g) > 0);
       if (!list.length) { error.value = "Добавьте хотя бы один ингредиент"; return; }
       busy.value = true;
@@ -114,9 +117,12 @@ const PotModal = {
         ? "Остаток обновлён. Планам, которым не хватит, — снова «надо приготовить»"
         : "Остаток обновлён"
     );
-    const saveIngredients = () => run(() => api.put(`/recipes/cooking-logs/${props.pot.id}/ingredients`, {
-      ingredients: ingredients.value.filter((i) => i.variant_id && n(i.weight_g) > 0).map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })),
-    }), "Состав пересчитан");
+    const saveIngredients = () => run(async () => {
+      await resolveDraftIngredients(ingredients.value);   // новые продукты — сначала в справочник
+      await api.put(`/recipes/cooking-logs/${props.pot.id}/ingredients`, {
+        ingredients: ingredients.value.filter((i) => i.variant_id && n(i.weight_g) > 0).map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })),
+      });
+    }, "Состав пересчитан");
     const discard = () => {
       if (!confirm(`Выбросить остаток (${grams(props.pot.current_remaining_weight)})? Блюдо уйдёт в архив, планы по нему снова станут «надо приготовить».`)) return;
       run(() => api.post(`/recipes/cooking-logs/${props.pot.id}/discard`), "Списано в архив");

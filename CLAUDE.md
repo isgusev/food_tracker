@@ -20,11 +20,14 @@
 - Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone).
 - Поиск продукта: `web/js/product-finder.js` — `ProductFinder` (справочник → штрихкод/📷 → Open Food Facts →
   «ввести вручную»; выбранное из OFF или введённое = «черновик» `OffDraftCard`, сохраняется `saveDraft`).
-  Один и тот же поиск в плане («Готовый продукт», `reuse: true`) и в «Продукты → + Продукт»
-  (`reuse: false`; выбор существующего открывает его карточку). Смена названия у товара из поиска
+  Один и тот же поиск в плане («Готовый продукт», `reuse: true`), в «Продукты → + Продукт»
+  (`reuse: false`; выбор существующего открывает его карточку) и в составе блюда — `IngredientsEditor`
+  (там же, в `product-finder.js`): рецепт, «Приготовить», состав кастрюли; черновики ингредиентов уходят
+  в справочник при сохранении через `resolveDraftIngredients(rows)` — вызывать его перед отправкой состава. Смена названия у товара из поиска
   сбрасывает его штрихкод (`searchName`/`searchBarcode` в черновике). В результатах справа — ккал и
   Б/Ж/У (`bjuLine` в `web/js/util.js`, у `Picker` — поле `right2`). Общие компоненты — `web/js/components.js`
-  (`Picker` с двухстрочными пунктами, `VariantPicker`, `KbjuInputs`, `BarcodeScanner`).
+  (`Picker` с двухстрочными пунктами и нечётким поиском, `KbjuInputs`, `BarcodeScanner`). `components.js`
+  не импортирует `product-finder.js` (тот импортирует его) — иначе цикл импортов.
 - Open Food Facts на сервере: `app/services/barcode.py` — по штрихкоду (`fetch_off`, `api/v2/product`) и по
   названию (`search_off`): точный `cgi/search.pl` → если мало, он же без последнего слова → запасной
   `search.openfoodfacts.org`; всё ранжируется у себя (`rank_products`/`match_score`: целое слово > начало

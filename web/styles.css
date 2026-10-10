@@ -250,6 +250,17 @@ table.tbl { width: 100%; border-collapse: collapse; }
 /* калории и Б/Ж/У справа в строке результата */
 .finder-right { display: flex; flex-direction: column; align-items: flex-end; flex: 0 0 auto; color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+/* Строка ингредиента: поиск продукта + вес; на телефоне вес — под поиском */
+.ingr + .ingr { border-top: 1px dashed var(--border); padding-top: 8px; }
+.ingr-row { display: flex; gap: 8px; align-items: flex-start; }
+.ingr-find { flex: 1 1 auto; min-width: 0; }
+.ingr-qty { display: flex; gap: 6px; align-items: center; flex: 0 0 auto; }
+.ingr-qty input { width: 84px; }
+@media (max-width: 560px) {
+  .ingr-row { flex-direction: column; align-items: stretch; }
+  .ingr-qty { justify-content: flex-end; }
+}
+
 /* Поле поиска с крестиком «очистить» внутри */
 .clearable { position: relative; flex: 1 1 auto; min-width: 0; }
 .clearable > input { padding-right: 34px; }
