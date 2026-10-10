@@ -3,9 +3,9 @@
 // цифры с упаковки, и продукт сохраняется в справочник (saveDraft).
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
-import { Modal, BarcodeScanner, KbjuInputs } from "./components.js";
+import { BarcodeScanner, KbjuInputs } from "./components.js";
 import { state, activeVariants, variantIndex, loadProducts } from "./store.js";
-import { fmt, fmtQty, fuzzyScore, local, n } from "./util.js";
+import { bjuLine, fmt, fmtQty, fuzzyScore, local, n } from "./util.js";
 
 const CODE_RE = /^\d{8,14}$/;
 const LAST_CATEGORY = "ft.lastProductCategory";
@@ -16,6 +16,8 @@ export function offSub(s) {
   return [s.brand, s.manufacturer, pkg].filter(Boolean).join(" · ");
 }
 const offKcal = (s) => (s.calories != null ? `${fmt(s.calories)} ккал` : "без КБЖУ");
+// Б/Ж/У под калориями; у подсказки OFF без КБЖУ строки нет
+const bjuOf = (m) => (m.calories == null && m.proteins == null ? "" : bjuLine(m));
 
 // Черновик продукта (поля формы): из подсказки Open Food Facts (source "off")
 // или пустой для ручного ввода (source "manual")
@@ -23,6 +25,9 @@ export function draftFrom(s, source = "off") {
   return {
     source,
     barcode: s.barcode || null,
+    // как пришло из поиска: если название поменяют — это уже другой товар, штрихкод сбросим
+    searchName: source === "off" ? s.name || "" : null,
+    searchBarcode: source === "off" ? s.barcode || null : null,
     name: s.name || "",
     brand: s.brand || "",
     manufacturer: s.manufacturer || "",
@@ -41,8 +46,9 @@ export function draftError(d) {
   return "";
 }
 
-// Сохранить черновик в справочник; тот же штрихкод / название+бренд — вернётся уже существующий
-export async function saveDraft(d) {
+// Сохранить черновик в справочник; reuse — тот же штрихкод / название+бренд вернёт
+// уже существующий (план), иначе — ошибка «уже есть» (раздел «Продукты»)
+export async function saveDraft(d, { reuse = true } = {}) {
   const product = await api.post("/products/with-category", {
     category_name: d.category.trim(),
     name: d.name.trim(),
@@ -50,7 +56,7 @@ export async function saveDraft(d) {
     barcode: d.barcode && CODE_RE.test(d.barcode) ? d.barcode : null,
     package_amount: d.package_amount || null,
     package_unit: d.package_amount ? d.package_unit : null,
-    reuse_existing: true,
+    reuse_existing: reuse,
     base_variant: {
       manufacturer_name: d.manufacturer.trim() || d.brand.trim() || null,
       calories: n(d.kbju.calories), proteins: n(d.kbju.proteins), fats: n(d.kbju.fats), carbs: n(d.kbju.carbs),
@@ -210,7 +216,7 @@ export const ProductFinder = {
     return {
       query, input, scanning, hint, off, search, chosen, isCode, localRows, offRows, onScan, pickLocal, pickOff, change,
       enterManually, clear, root, listOpen,
-      offSub, offKcal, fmt,
+      offSub, offKcal, bjuOf, fmt,
     };
   },
   template: `
@@ -243,7 +249,7 @@ export const ProductFinder = {
             <div v-for="v in localRows" :key="v.id" class="picker-item" @click="pickLocal(v)">
               <span class="grow" style="min-width: 0"><span>{{ v.name }}</span>
                 <span class="tiny muted ellipsis" style="display: block">{{ v.subFull }}</span></span>
-              <span class="muted small nowrap num">{{ fmt(v.calories) }} ккал</span>
+              <span class="finder-right"><span>{{ fmt(v.calories) }} ккал</span><span class="tiny">{{ bjuOf(v) }}</span></span>
             </div>
           </template>
           <div v-else-if="!isCode" class="picker-item muted small">В приложении не нашли</div>
@@ -252,7 +258,7 @@ export const ProductFinder = {
             <div v-for="(s, i) in offRows" :key="s.barcode || i" class="picker-item" @click="pickOff(s)">
               <span class="grow" style="min-width: 0"><span>{{ s.name }}</span>
                 <span class="tiny muted ellipsis" style="display: block">{{ offSub(s) }}</span></span>
-              <span class="muted small nowrap num">{{ offKcal(s) }}</span>
+              <span class="finder-right"><span>{{ offKcal(s) }}</span><span class="tiny">{{ bjuOf(s) }}</span></span>
             </div>
           </template>
           <div v-if="hint" class="picker-item muted small">{{ hint }}</div>
@@ -269,11 +275,24 @@ export const ProductFinder = {
 
 // ---------- Черновик из Open Food Facts: проверить и дополнить перед сохранением ----------
 export const OffDraftCard = {
-  components: { KbjuInputs },
+  components: { KbjuInputs, BarcodeScanner },
   props: { draft: { type: Object, required: true } },
-  setup() {
+  setup(props) {
     const unitLabel = { g: "г", ml: "мл", pcs: "шт" };
-    return { state, unitLabel };
+    const scanning = ref(false);
+    const barcodeReset = ref(false);
+    // Выбрали товар в поиске, а потом поменяли название — штрихкод относится к тому
+    // товару, а не к новому: сбрасываем
+    watch(() => props.draft.name, (name) => {
+      const d = props.draft;
+      if (d.searchBarcode && d.barcode === d.searchBarcode && (name || "").trim() !== (d.searchName || "").trim()) {
+        d.barcode = null;
+        barcodeReset.value = true;
+      }
+    });
+    watch(() => props.draft, () => { barcodeReset.value = false; });
+    const onScan = (code) => { scanning.value = false; props.draft.barcode = code; props.draft.searchBarcode = null; barcodeReset.value = false; };
+    return { state, unitLabel, scanning, barcodeReset, onScan };
   },
   template: `
     <div class="card stack tight">
@@ -295,45 +314,14 @@ export const OffDraftCard = {
         <select v-model="draft.package_unit" style="width: 70px">
           <option value="g">г</option><option value="ml">мл</option><option value="pcs">шт</option>
         </select>
-        <span v-if="draft.barcode" class="tiny muted">штрихкод {{ draft.barcode }}</span>
       </div>
+      <div class="field"><span>Штрихкод (необязательно)</span>
+        <div class="row" style="flex-wrap: nowrap">
+          <input v-model="draft.barcode" inputmode="numeric" placeholder="4600000000000" @input="draft.searchBarcode = null; barcodeReset = false">
+          <button class="sm" @click="scanning = true" title="Сканировать штрихкод камерой" aria-label="Сканировать штрихкод">📷</button>
+        </div>
+        <span v-if="barcodeReset" class="tiny muted">Название изменено — штрихкод найденного товара сброшен.</span>
+      </div>
+      <BarcodeScanner v-if="scanning" @close="scanning = false" @code="onScan" />
     </div>`,
-};
-
-// ---------- Поиск по названию в Open Food Facts (для формы нового продукта) ----------
-export const OffSearchModal = {
-  components: { Modal },
-  props: { initial: String },
-  emits: ["close", "pick"],
-  setup(props) {
-    const q = ref(props.initial || "");
-    const input = ref(null);
-    const { off, search } = useOffSearch();
-    onMounted(() => { nextTick(() => input.value?.focus()); if (q.value.trim().length >= 2) search(q.value); });
-    return { q, input, off, search, offSub, offKcal, fmt };
-  },
-  template: `
-    <Modal title="Поиск в Open Food Facts" dismissible @close="$emit('close')">
-      <div class="row" style="flex-wrap: nowrap">
-        <div class="clearable">
-          <input ref="input" v-model="q" placeholder="Название и бренд: творог простоквашино" enterkeyhint="search" @keydown.enter.prevent="search(q)">
-          <button v-if="q" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="q = ''; input.focus()">✕</button>
-        </div>
-        <button class="primary" :disabled="q.trim().length < 2 || off.loading" @click="search(q)">Найти</button>
-      </div>
-      <div v-if="off.loading" class="small muted">Ищем…</div>
-      <div v-else-if="off.error" class="alert warn">{{ off.error }}</div>
-      <div v-if="off.local.length" class="stack tight">
-        <div class="picker-group">Уже есть в справочнике</div>
-        <div v-for="p in off.local" :key="p.id" class="small" style="padding: 4px 12px">{{ p.name }} <span class="muted">· {{ p.brand?.name }}</span></div>
-      </div>
-      <div v-if="off.items.length" class="finder-list" style="max-height: none">
-        <div v-for="(s, i) in off.items" :key="s.barcode || i" class="picker-item" @click="$emit('pick', s)">
-          <span class="grow" style="min-width: 0"><span>{{ s.name }}</span>
-            <span class="tiny muted ellipsis" style="display: block">{{ offSub(s) }}</span></span>
-          <span class="muted small nowrap num">{{ offKcal(s) }}</span>
-        </div>
-      </div>
-      <div v-else-if="off.done && !off.error" class="small muted">Ничего не нашли — уточните запрос или заполните вручную.</div>
-    </Modal>`,
 };

@@ -155,6 +155,10 @@ export function gramsToBase(g, unit, pieceWeight) {
   return unit === "pcs" && n(pieceWeight) > 0 ? n(g) / n(pieceWeight) : n(g);
 }
 
+// Б/Ж/У для результатов поиска: до десятых, если меньше 10 («У 0,4»), иначе целые; нет — «—»
+export const fmtMacro = (v) => (v == null || v === "" ? "—" : fmt(v, n(v) % 1 && n(v) < 10 ? 1 : 0));
+export const bjuLine = (m) => `Б ${fmtMacro(m.proteins)} · Ж ${fmtMacro(m.fats)} · У ${fmtMacro(m.carbs)}`;
+
 // Упаковка товара → граммы (для порций): мл = г, штуки — через вес одной
 export function packageGrams(amount, unit, pieceWeight) {
   return unit === "pcs" ? n(amount) * n(pieceWeight) : n(amount);
