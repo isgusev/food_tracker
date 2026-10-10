@@ -6,7 +6,7 @@ import { ProductFinder, OffDraftCard, saveDraft, draftError, activeVariantOf } f
 import {
   state, toast, variantIndex, recipeById, recipeCategoryName, activeMembers, memberById,
 } from "../store.js";
-import { MEALS, MEAL_LABEL, fmt, fmtQty, grams, local, n, packageGrams, fmtWeekday, fmtDayMonth } from "../util.js";
+import { MEALS, MEAL_LABEL, bjuLine, fmt, fmtQty, grams, local, n, packageGrams, fmtWeekday, fmtDayMonth } from "../util.js";
 
 // ---------- помощники для отображения блюда ----------
 export const allEaten = (it) => it.portions.length > 0 && it.portions.every((p) => p.is_eaten);
@@ -78,6 +78,7 @@ export const AddItemModal = {
           id: r.id, label: r.name,
           group: recipeCategoryName.value[r.recipe_category_id] || "Без категории",
           right: `${fmt(r.calories_per_100g)} ккал/100 г`,
+          right2: bjuLine({ proteins: r.proteins_per_100g, fats: r.fats_per_100g, carbs: r.carbs_per_100g }),
         }))
         .sort((a, b) => a.group.localeCompare(b.group, "ru") || a.label.localeCompare(b.label, "ru"))
     );

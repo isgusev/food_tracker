@@ -1,106 +1,50 @@
 // Справочник продуктов: КБЖУ с версиями по производителям.
-import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
+import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { Modal, Macros, BarcodeScanner, KbjuInputs } from "../components.js";
-import { state, ensureCatalog, loadProducts, categoryName, toast, toastError } from "../store.js";
+import { state, ensureCatalog, loadProducts, categoryName, variantIndex, toast, toastError } from "../store.js";
 import { fmt, fuzzyScore, matches, n, packagesLabel } from "../util.js";
-import { OffSearchModal } from "../product-finder.js";
+import { ProductFinder, OffDraftCard, saveDraft, draftError } from "../product-finder.js";
 
+// Новый продукт — тот же поиск, что при добавлении в план: справочник → штрихкод/📷 →
+// Open Food Facts → «ввести вручную»; найденное или введённое проверяется в карточке
 const NewProductModal = {
-  components: { Modal, KbjuInputs, BarcodeScanner, OffSearchModal },
-  emits: ["close", "saved"],
+  components: { Modal, ProductFinder, OffDraftCard },
+  emits: ["close", "saved", "open"],
   setup(_, { emit }) {
-    const f = ref({ name: "", category: "", brand: "", manufacturer: "", kbju: { calories: "", proteins: "", fats: "", carbs: "" } });
+    const variantId = ref(null);
+    const draft = ref(null);
     const busy = ref(false);
     const error = ref("");
-    // Штрихкод: свой справочник → подсказка из Open Food Facts
-    const barcode = ref("");
-    const scanning = ref(false);
-    const hint = ref("");
-    const pkg = ref(null);   // упаковка из Open Food Facts: { unit, amount }
-    const searching = ref(false);  // поиск по названию в Open Food Facts
-    function fill(s) {
-      Object.assign(f.value, { name: s.name || f.value.name, brand: s.brand || f.value.brand, manufacturer: s.manufacturer || f.value.manufacturer });
-      f.value.kbju = { calories: s.calories ?? "", proteins: s.proteins ?? "", fats: s.fats ?? "", carbs: s.carbs ?? "" };
-      pkg.value = s.package_amount ? { unit: s.package_unit || "g", amount: n(s.package_amount) } : null;
-    }
-    function pickFound(s) {
-      searching.value = false;
-      fill(s);
-      if (s.barcode) barcode.value = s.barcode;
-      hint.value = "Заполнено из Open Food Facts — проверьте цифры с упаковки.";
-    }
-    async function lookup(code) {
-      scanning.value = false;
-      barcode.value = code;
-      hint.value = "Ищем…";
-      try {
-        const r = await api.get(`/products/barcode/${code}`);
-        if (r.source === "local") { hint.value = `Уже есть в справочнике: «${r.product.name}» (${r.product.brand?.name || "без бренда"})`; return; }
-        if (r.source === "none") { hint.value = "В Open Food Facts не нашли — заполните вручную, код сохранится."; return; }
-        fill(r.suggestion);
-        hint.value = "Заполнено из Open Food Facts — проверьте цифры с упаковки.";
-      } catch (e) { hint.value = e.message; }
-    }
+    // выбрали продукт, который уже есть в справочнике, — открываем его карточку
+    watch(variantId, (id) => {
+      const v = id && variantIndex.value[id];
+      if (v) emit("open", v.product);
+    });
     async function save() {
       error.value = "";
-      const v = f.value;
-      if (!v.name.trim() || !v.category.trim()) { error.value = "Укажите название и категорию"; return; }
+      if (!draft.value) { error.value = "Найдите продукт или нажмите «Ввести вручную»"; return; }
+      if ((error.value = draftError(draft.value))) return;
       busy.value = true;
       try {
-        await api.post("/products/with-category", {
-          category_name: v.category.trim(),
-          name: v.name.trim(),
-          brand_name: v.brand.trim() || "Без бренда",
-          barcode: /^\d{8,14}$/.test(barcode.value) ? barcode.value : null,
-          // упаковка с этикетки: сервер переведёт в единицу товара (бутылка → мл)
-          package_amount: pkg.value?.amount || null,
-          package_unit: pkg.value?.amount ? pkg.value.unit : null,
-          base_variant: {
-            manufacturer_name: v.manufacturer.trim() || v.brand.trim() || null,
-            calories: n(v.kbju.calories), proteins: n(v.kbju.proteins), fats: n(v.kbju.fats), carbs: n(v.kbju.carbs),
-          },
-        });
-        await loadProducts();
-        toast(`«${v.name}» добавлен`);
+        await saveDraft(draft.value, { reuse: false });
+        toast(`«${draft.value.name.trim()}» добавлен`);
         emit("saved");
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    return { f, busy, error, save, state, barcode, scanning, hint, lookup, pkg, searching, pickFound };
+    return { variantId, draft, busy, error, save };
   },
   template: `
     <Modal title="Новый продукт" @close="$emit('close')">
-      <label class="field"><span>Штрихкод (необязательно)</span>
-        <div class="row" style="flex-wrap: nowrap">
-          <input v-model="barcode" inputmode="numeric" placeholder="4600000000000" @keydown.enter="barcode && lookup(barcode)">
-          <button class="sm" @click="scanning = true" title="Сканировать камерой">📷</button>
-          <button class="sm" :disabled="!barcode" @click="lookup(barcode)">Найти</button>
-        </div>
-        <span v-if="hint" class="tiny">{{ hint }}</span>
-        <span v-if="pkg" class="tiny muted">Упаковка с этикетки: {{ pkg.amount }} {{ pkg.unit === 'ml' ? 'мл' : pkg.unit === 'pcs' ? 'шт' : 'г' }} — добавится к продукту{{ pkg.unit === 'pcs' ? ' (если товар учитывается в штуках)' : '' }}.</span>
-      </label>
-      <BarcodeScanner v-if="scanning" @close="scanning = false" @code="lookup" />
-      <div class="field"><span>Название</span>
-        <div class="row" style="flex-wrap: nowrap">
-          <input v-model="f.name" placeholder="Йогурт греческий 2%" @keydown.enter="f.name.trim().length >= 2 && (searching = true)">
-          <button class="sm" @click="searching = true" title="Найти по названию в Open Food Facts">🔎 Найти</button>
-        </div>
-        <span class="tiny muted">Можно найти по названию и бренду в Open Food Facts — КБЖУ, упаковка и штрихкод заполнятся сами.</span>
+      <div class="field"><span>Продукт</span>
+        <ProductFinder v-model="variantId" v-model:draft="draft" autofocus />
+        <span v-if="!draft" class="tiny muted">Название, бренд или штрихкод (📷 — камерой). Не нашли у нас — ищем в Open Food Facts; нет и там — «Ввести вручную».</span>
       </div>
-      <OffSearchModal v-if="searching" :initial="f.name" @close="searching = false" @pick="pickFound" />
-      <div class="grid-2">
-        <label class="field"><span>Категория</span>
-          <input v-model="f.category" list="cat-list" placeholder="Молочные продукты">
-          <datalist id="cat-list"><option v-for="c in state.productCategories" :key="c.id" :value="c.name" /></datalist>
-        </label>
-        <label class="field"><span>Бренд</span><input v-model="f.brand" placeholder="Без бренда"></label>
-      </div>
-      <label class="field"><span>Производитель (если отличается от бренда)</span><input v-model="f.manufacturer"></label>
-      <KbjuInputs v-model="f.kbju" />
+      <OffDraftCard v-if="draft" :draft="draft" />
       <div v-if="error" class="alert error">{{ error }}</div>
       <template #foot>
         <button @click="$emit('close')">Отмена</button>
-        <button class="primary" :disabled="busy" @click="save">Сохранить</button>
+        <button class="primary" :disabled="busy || !draft" @click="save">Сохранить</button>
       </template>
     </Modal>`,
 };
@@ -240,7 +184,7 @@ export const CatalogView = {
         return { p, v, makers: p.manufacturers.length, warn: actives.some((x) => x.wrong_nutrients) };
       })
       .sort((a, b) => (categoryName.value[a.p.category_id] || "").localeCompare(categoryName.value[b.p.category_id] || "", "ru") || a.p.name.localeCompare(b.p.name, "ru")));
-    return { q, cat, creating, opened, rows, state, categoryName, fmt, packagesLabel };
+    return { q, cat, creating, opened, rows, state, categoryName, fmt, packagesLabel, toast };
   },
   template: `
     <div>
@@ -274,7 +218,8 @@ export const CatalogView = {
         </table>
         <div v-if="!rows.length" class="empty">Ничего не найдено</div>
       </div>
-      <NewProductModal v-if="creating" @close="creating = false" @saved="creating = false" />
+      <NewProductModal v-if="creating" @close="creating = false" @saved="creating = false"
+        @open="(p) => { creating = false; opened = p; toast('Этот продукт уже есть в справочнике'); }" />
       <ProductModal v-if="opened" :product="opened" @close="opened = null" />
     </div>`,
 };

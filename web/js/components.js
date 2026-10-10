@@ -1,7 +1,7 @@
 // Переиспользуемые компоненты: модалка, поиск-выбор, КБЖУ, редактор ингредиентов.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { activeVariants, variantIndex } from "./store.js";
-import { fmt, grams, matches, n } from "./util.js";
+import { fmt, grams, matches, n, bjuLine } from "./util.js";
 
 // Закрывается только явно — ✕ или кнопкой в подвале: промах мышью мимо окна
 // не должен терять введённое. dismissible — разрешить закрытие по фону и Esc.
@@ -27,7 +27,8 @@ export const Modal = {
     </div>`,
 };
 
-// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right?, keys? }]
+// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right?, right2?, keys? }]
+// right2 — вторая строка справа (Б/Ж/У под калориями)
 // sub — вторая мелкая строка (бренд · производитель · упаковка), keys — скрытые поля поиска (штрихкод)
 export const Picker = {
   props: {
@@ -95,7 +96,8 @@ export const Picker = {
           <div v-else class="picker-item" :class="{ hl: r.idx === hl }" @mousedown.prevent="pick(r.item)">
             <span class="grow" style="min-width: 0"><span>{{ r.item.label }}</span>
               <span v-if="r.item.sub" class="tiny muted ellipsis" style="display: block">{{ r.item.sub }}</span></span>
-            <span v-if="r.item.right" class="muted small nowrap num">{{ r.item.right }}</span>
+            <span v-if="r.item.right" class="finder-right"><span>{{ r.item.right }}</span>
+              <span v-if="r.item.right2" class="tiny">{{ r.item.right2 }}</span></span>
           </div>
         </template>
       </div>
@@ -151,7 +153,7 @@ export const VariantPicker = {
   setup() {
     const items = computed(() => activeVariants.value.map((v) => ({
       id: v.id, label: v.name, sub: v.subFull, group: v.category || "Без категории",
-      right: `${fmt(v.calories)} ккал`, keys: v.product.barcode || "",
+      right: `${fmt(v.calories)} ккал`, right2: bjuLine(v), keys: v.product.barcode || "",
     })));
     return { items };
   },

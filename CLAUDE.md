@@ -18,16 +18,19 @@
   раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — `web/js/views/*.js`,
   общее состояние — `web/js/store.js`. PWA: `web/sw.js` (network-first), `manifest.webmanifest`.
 - Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone).
-- Поиск продукта: `web/js/product-finder.js` — `ProductFinder` (план: справочник → штрихкод/📷 →
-  Open Food Facts, выбранное из OFF = «черновик», сохраняется `saveDraft` при добавлении в план),
-  `OffSearchModal` (форма «Новый продукт»), `OffDraftCard`. Общие компоненты — `web/js/components.js`
+- Поиск продукта: `web/js/product-finder.js` — `ProductFinder` (справочник → штрихкод/📷 → Open Food Facts →
+  «ввести вручную»; выбранное из OFF или введённое = «черновик» `OffDraftCard`, сохраняется `saveDraft`).
+  Один и тот же поиск в плане («Готовый продукт», `reuse: true`) и в «Продукты → + Продукт»
+  (`reuse: false`; выбор существующего открывает его карточку). Смена названия у товара из поиска
+  сбрасывает его штрихкод (`searchName`/`searchBarcode` в черновике). В результатах справа — ккал и
+  Б/Ж/У (`bjuLine` в `web/js/util.js`, у `Picker` — поле `right2`). Общие компоненты — `web/js/components.js`
   (`Picker` с двухстрочными пунктами, `VariantPicker`, `KbjuInputs`, `BarcodeScanner`).
 - Open Food Facts на сервере: `app/services/barcode.py` — по штрихкоду (`fetch_off`, `api/v2/product`) и по
   названию (`search_off`): точный `cgi/search.pl` → если мало, он же без последнего слова → запасной
   `search.openfoodfacts.org`; всё ранжируется у себя (`rank_products`/`match_score`: целое слово > начало
   слова > опечатка). Кэш в памяти 10 мин. В вебе то же правило — `fuzzyScore` в `web/js/util.js`.
 - `Modal` закрывается только явно (✕ или кнопка в подвале); по фону и Esc — только с `dismissible`
-  (так у окон, где только результаты поиска, — `OffSearchModal`). Список результатов `ProductFinder`
+  (для окон, где только результаты поиска). Список результатов `ProductFinder`
   прячется по клику вне поиска (`pointerdown` на документе) и снова открывается фокусом/вводом в поле.
   Шапка и подвал модалки закреплены, прокручивается тело. Поле поиска с крестиком — обёртка `.clearable`.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
