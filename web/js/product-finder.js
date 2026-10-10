@@ -3,9 +3,9 @@
 // цифры с упаковки, и продукт сохраняется в справочник (saveDraft).
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
-import { BarcodeScanner, KbjuInputs } from "./components.js";
+import { BarcodeScanner, KbjuInputs, Macros } from "./components.js";
 import { state, activeVariants, variantIndex, loadProducts } from "./store.js";
-import { bjuLine, fmt, fmtQty, fuzzyScore, local, n } from "./util.js";
+import { bjuLine, fmt, fmtQty, fuzzyScore, grams, local, n } from "./util.js";
 
 const CODE_RE = /^\d{8,14}$/;
 const LAST_CATEGORY = "ft.lastProductCategory";
@@ -15,9 +15,10 @@ export function offSub(s) {
   const pkg = s.package_amount ? fmtQty(s.package_amount, s.package_unit || "g") : "100 г";
   return [s.brand, s.manufacturer, pkg].filter(Boolean).join(" · ");
 }
-const offKcal = (s) => (s.calories != null ? `${fmt(s.calories)} ккал` : "без КБЖУ");
+const hasBju = (s) => s.proteins != null || s.fats != null || s.carbs != null;
+const offKcal = (s) => (s.calories != null ? `${fmt(s.calories)} ккал` : hasBju(s) ? "— ккал" : "без КБЖУ");
 // Б/Ж/У под калориями; у подсказки OFF без КБЖУ строки нет
-const bjuOf = (m) => (m.calories == null && m.proteins == null ? "" : bjuLine(m));
+const bjuOf = (m) => (m.calories == null && !hasBju(m) ? "" : bjuLine(m));
 
 // Черновик продукта (поля формы): из подсказки Open Food Facts (source "off")
 // или пустой для ручного ввода (source "manual")
@@ -128,7 +129,7 @@ export const ProductFinder = {
 
     const selected = computed(() => (props.modelValue ? variantIndex.value[props.modelValue] : null));
     const chosen = computed(() => selected.value
-      ? { name: selected.value.name, sub: selected.value.subFull, source: "" }
+      ? { name: selected.value.name, sub: selected.value.subFull, source: selected.value.active ? "" : "старая версия КБЖУ" }
       : props.draft ? {
         name: props.draft.name || "Новый продукт",
         sub: props.draft.source === "manual" ? "заполните данные ниже" : offSub(props.draft),
@@ -325,3 +326,97 @@ export const OffDraftCard = {
       <BarcodeScanner v-if="scanning" @close="scanning = false" @code="onScan" />
     </div>`,
 };
+
+
+// ---------- Состав блюда: [{ variant_id, weight_g, draft? }] + итоговый вес/КБЖУ ----------
+// Каждый ингредиент ищется тем же поиском, что продукты в плане. Найденное в Open Food
+// Facts или введённое вручную — «черновик» строки; в справочник он попадает при
+// сохранении (рецепта, готовки, состава кастрюли) через resolveDraftIngredients.
+let rowSeq = 0;
+export const IngredientsEditor = {
+  components: { ProductFinder, OffDraftCard, Macros },
+  props: { modelValue: { type: Array, required: true }, cookedWeight: [Number, String] },
+  emits: ["update:modelValue"],
+  setup(props, { emit }) {
+    // стабильный ключ строки: иначе при вводе веса строка пересоздаётся и теряет фокус
+    watch(() => props.modelValue, (rows) => { for (const r of rows) if (!r._k) r._k = ++rowSeq; }, { immediate: true, deep: false });
+    const focusKey = ref(null);
+    function update(i, patch) {
+      emit("update:modelValue", props.modelValue.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    }
+    function add() {
+      const row = { variant_id: null, weight_g: 100, draft: null, _k: ++rowSeq };
+      focusKey.value = row._k;
+      emit("update:modelValue", [...props.modelValue, row]);
+    }
+    function remove(i) { emit("update:modelValue", props.modelValue.filter((_, j) => j !== i)); }
+    function per100Of(r) {
+      if (r.draft) {
+        const k = r.draft.kbju;
+        return { calories: n(k.calories), proteins: n(k.proteins), fats: n(k.fats), carbs: n(k.carbs) };
+      }
+      return variantIndex.value[r.variant_id] || null;
+    }
+    const totals = computed(() => {
+      const t = { raw: 0, calories: 0, proteins: 0, fats: 0, carbs: 0 };
+      for (const r of props.modelValue) {
+        const w = n(r.weight_g);
+        t.raw += w;
+        const v = per100Of(r);
+        if (!v) continue;
+        for (const key of ["calories", "proteins", "fats", "carbs"]) t[key] += (n(v[key]) * w) / 100;
+      }
+      return t;
+    });
+    const per100 = computed(() => {
+      const cw = n(props.cookedWeight);
+      if (!cw) return null;
+      const k = 100 / cw;
+      const t = totals.value;
+      return { calories: t.calories * k, proteins: t.proteins * k, fats: t.fats * k, carbs: t.carbs * k };
+    });
+    return { update, add, remove, totals, per100, grams, focusKey };
+  },
+  template: `
+    <div class="stack tight">
+      <div v-for="(r, i) in modelValue" :key="r._k" class="stack tight ingr">
+        <div class="ingr-row">
+          <div class="ingr-find">
+            <ProductFinder :modelValue="r.variant_id" :draft="r.draft" :autofocus="r._k === focusKey"
+              @update:modelValue="update(i, { variant_id: $event })" @update:draft="update(i, { draft: $event })" />
+          </div>
+          <div class="ingr-qty">
+            <input type="number" min="0.1" step="any" :value="r.weight_g"
+                   @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
+            <span class="muted small">г</span>
+            <button class="ghost icon" @click="remove(i)" title="Убрать ингредиент" aria-label="Убрать ингредиент">✕</button>
+          </div>
+        </div>
+        <OffDraftCard v-if="r.draft" :draft="r.draft" />
+      </div>
+      <div class="row between">
+        <button class="sm" @click="add">+ Ингредиент</button>
+        <span class="small muted">Сырой вес: <b class="num">{{ grams(totals.raw) }}</b></span>
+      </div>
+      <div class="small" v-if="per100"><span class="muted">На 100 г готового: </span><Macros :m="per100" :digits="1" /></div>
+    </div>`,
+};
+
+// Перед сохранением состава: черновики ингредиентов (из Open Food Facts или ручные) —
+// в справочник, строкам — их variant_id. Ошибка в черновике — с названием ингредиента.
+export async function resolveDraftIngredients(rows) {
+  for (const r of rows) {
+    if (!r.draft || r.variant_id) continue;
+    const err = draftError(r.draft);
+    if (err) throw new Error(`Ингредиент «${r.draft.name || "без названия"}»: ${err}`);
+  }
+  for (const r of rows) {
+    if (!r.draft || r.variant_id) continue;
+    const product = await saveDraft(r.draft);
+    const id = activeVariantOf(product, r.draft.manufacturer || r.draft.brand);
+    if (!id) throw new Error(`У продукта «${product.name}» нет активной версии КБЖУ`);
+    r.variant_id = id;
+    r.draft = null;
+  }
+  return rows;
+}

@@ -1,7 +1,7 @@
-// Переиспользуемые компоненты: модалка, поиск-выбор, КБЖУ, редактор ингредиентов.
+// Переиспользуемые компоненты: модалка, поиск-выбор, КБЖУ, сканер штрихкода.
+// Поиск продукта и редактор состава блюда — в product-finder.js.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
-import { activeVariants, variantIndex } from "./store.js";
-import { fmt, grams, matches, n, bjuLine } from "./util.js";
+import { fmt, fuzzyScore, matches, n } from "./util.js";
 
 // Закрывается только явно — ✕ или кнопкой в подвале: промах мышью мимо окна
 // не должен терять введённое. dismissible — разрешить закрытие по фону и Esc.
@@ -48,7 +48,8 @@ export const Picker = {
 
     const filtered = computed(() => {
       const q = open.value && selected.value && query.value === selected.value.label ? "" : query.value;
-      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""} ${i.keys || ""}`, q)).slice(0, 80);
+      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""} ${i.keys || ""}`, q)
+        || (q && fuzzyScore(q, `${i.label} ${i.sub || ""}`) >= 0.6)).slice(0, 80);
     });
     const rows = computed(() => {
       const out = [];
@@ -142,80 +143,6 @@ export const MacroMeters = {
           <span class="num"><b>{{ fmt(r.v) }}</b><span class="muted"> / {{ fmt(r.t) }} {{ r.unit }}</span></span></div>
         <div class="meter" :class="r.cls"><i :class="{ over: r.over }" :style="{ width: r.pct + '%' }"></i></div>
       </div>
-    </div>`,
-};
-
-// Выбор активной версии продукта
-export const VariantPicker = {
-  components: { Picker },
-  props: { modelValue: [Number, null], autofocus: Boolean, placeholder: String },
-  emits: ["update:modelValue", "pick"],
-  setup() {
-    const items = computed(() => activeVariants.value.map((v) => ({
-      id: v.id, label: v.name, sub: v.subFull, group: v.category || "Без категории",
-      right: `${fmt(v.calories)} ккал`, right2: bjuLine(v), keys: v.product.barcode || "",
-    })));
-    return { items };
-  },
-  template: `<Picker :items="items" :modelValue="modelValue" :autofocus="autofocus"
-               :placeholder="placeholder || 'Продукт…'"
-               @update:modelValue="$emit('update:modelValue', $event)" @pick="$emit('pick', $event)" />`,
-};
-
-// Редактор состава: [{ variant_id, weight_g }] + итоговый вес/КБЖУ
-export const IngredientsEditor = {
-  components: { VariantPicker, Macros },
-  props: { modelValue: { type: Array, required: true }, cookedWeight: [Number, String] },
-  emits: ["update:modelValue"],
-  setup(props, { emit }) {
-    const rows = computed(() => props.modelValue);
-    function update(i, patch) {
-      const next = props.modelValue.map((r, j) => (j === i ? { ...r, ...patch } : r));
-      emit("update:modelValue", next);
-    }
-    function add() { emit("update:modelValue", [...props.modelValue, { variant_id: null, weight_g: 100 }]); }
-    function remove(i) { emit("update:modelValue", props.modelValue.filter((_, j) => j !== i)); }
-    const totals = computed(() => {
-      const t = { raw: 0, calories: 0, proteins: 0, fats: 0, carbs: 0 };
-      for (const r of props.modelValue) {
-        const v = variantIndex.value[r.variant_id];
-        const w = n(r.weight_g);
-        t.raw += w;
-        if (!v) continue;
-        t.calories += (v.calories * w) / 100;
-        t.proteins += (v.proteins * w) / 100;
-        t.fats += (v.fats * w) / 100;
-        t.carbs += (v.carbs * w) / 100;
-      }
-      return t;
-    });
-    const per100 = computed(() => {
-      const cw = n(props.cookedWeight);
-      if (!cw) return null;
-      const k = 100 / cw;
-      const t = totals.value;
-      return { calories: t.calories * k, proteins: t.proteins * k, fats: t.fats * k, carbs: t.carbs * k };
-    });
-    const oldVersion = (id) => id && variantIndex.value[id] && !variantIndex.value[id].active;
-    return { rows, update, add, remove, totals, per100, grams, variantIndex, oldVersion };
-  },
-  template: `
-    <div class="stack tight">
-      <div v-for="(r, i) in rows" :key="i" class="row" style="flex-wrap: nowrap">
-        <div class="grow">
-          <VariantPicker :modelValue="r.variant_id" @update:modelValue="update(i, { variant_id: $event })"
-            :placeholder="oldVersion(r.variant_id) ? variantIndex[r.variant_id].label + ' (стар. версия)' : 'Продукт…'" />
-        </div>
-        <input type="number" min="0.1" step="any" style="width: 90px" :value="r.weight_g"
-               @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
-        <span class="muted small">г</span>
-        <button class="ghost icon" @click="remove(i)" title="Убрать">✕</button>
-      </div>
-      <div class="row between">
-        <button class="sm" @click="add">+ Ингредиент</button>
-        <span class="small muted">Сырой вес: <b class="num">{{ grams(totals.raw) }}</b></span>
-      </div>
-      <div class="small" v-if="per100"><span class="muted">На 100 г готового: </span><Macros :m="per100" :digits="1" /></div>
     </div>`,
 };
 
