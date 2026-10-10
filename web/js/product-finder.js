@@ -1,7 +1,7 @@
 // Поиск продукта: свой справочник → штрихкод (камера или цифры) → Open Food Facts.
 // Найденное в Open Food Facts становится «черновиком»: пользователь проверяет
 // цифры с упаковки, и продукт сохраняется в справочник (saveDraft).
-import { ref, reactive, computed, watch, nextTick, onMounted } from "../vendor/vue.esm-browser.prod.js";
+import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
 import { Modal, BarcodeScanner, KbjuInputs } from "./components.js";
 import { state, activeVariants, variantIndex, loadProducts } from "./store.js";
@@ -108,6 +108,13 @@ export const ProductFinder = {
   setup(props, { emit }) {
     const query = ref("");
     const input = ref(null);
+    // Список результатов — не форма: клик вне поиска его прячет (текст остаётся),
+    // фокус в поле или ввод — показывает снова
+    const root = ref(null);
+    const listOpen = ref(true);
+    const onOutside = (e) => { if (root.value && !root.value.contains(e.target)) listOpen.value = false; };
+    onMounted(() => document.addEventListener("pointerdown", onOutside));
+    onBeforeUnmount(() => document.removeEventListener("pointerdown", onOutside));
     const scanning = ref(false);
     const hint = ref("");
     const codeHit = ref(null);   // подсказка OFF, найденная по штрихкоду
@@ -145,6 +152,7 @@ export const ProductFinder = {
 
     let timer = null;
     watch(query, (q) => {
+      listOpen.value = true;
       clearTimeout(timer);
       reset(); hint.value = ""; codeHit.value = null;
       q = q.trim();
@@ -201,12 +209,12 @@ export const ProductFinder = {
     onMounted(() => { if (props.autofocus && !chosen.value) nextTick(() => input.value?.focus()); });
     return {
       query, input, scanning, hint, off, search, chosen, isCode, localRows, offRows, onScan, pickLocal, pickOff, change,
-      enterManually, clear,
+      enterManually, clear, root, listOpen,
       offSub, offKcal, fmt,
     };
   },
   template: `
-    <div class="stack tight">
+    <div class="stack tight" ref="root">
       <div v-if="chosen" class="finder-chosen">
         <span class="grow" style="min-width: 0">
           <b>{{ chosen.name }}</b> <span v-if="chosen.source" class="badge info">{{ chosen.source }}</span>
@@ -218,16 +226,18 @@ export const ProductFinder = {
         <div class="row" style="flex-wrap: nowrap">
           <div class="clearable">
             <input ref="input" v-model="query" placeholder="Название, бренд или штрихкод…" autocomplete="off" enterkeyhint="search"
+                   @focus="listOpen = true" @click="listOpen = true" @input="listOpen = true"
+                   @keydown.esc.stop="listOpen = false"
                    @keydown.enter.prevent="!isCode && query.trim().length >= 2 && search(query)">
             <button v-if="query" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="clear">✕</button>
           </div>
           <button class="sm" @click="scanning = true" title="Сканировать штрихкод камерой" aria-label="Сканировать штрихкод">📷</button>
         </div>
-        <div v-if="query.trim()" class="row between small" style="flex-wrap: nowrap">
+        <div v-if="query.trim() && listOpen" class="row between small" style="flex-wrap: nowrap">
           <span class="muted">{{ off.loading ? 'Ищем в Open Food Facts…' : 'Нет нужного?' }}</span>
           <button class="sm ghost finder-manual" @click="enterManually">✏️ {{ isCode ? 'Ввести со штрихкодом' : 'Ввести вручную' }}</button>
         </div>
-        <div v-if="query.trim()" class="finder-list">
+        <div v-if="query.trim() && listOpen" class="finder-list">
           <template v-if="localRows.length">
             <div class="picker-group">В приложении</div>
             <div v-for="v in localRows" :key="v.id" class="picker-item" @click="pickLocal(v)">
@@ -303,7 +313,7 @@ export const OffSearchModal = {
     return { q, input, off, search, offSub, offKcal, fmt };
   },
   template: `
-    <Modal title="Поиск в Open Food Facts" @close="$emit('close')">
+    <Modal title="Поиск в Open Food Facts" dismissible @close="$emit('close')">
       <div class="row" style="flex-wrap: nowrap">
         <div class="clearable">
           <input ref="input" v-model="q" placeholder="Название и бренд: творог простоквашино" enterkeyhint="search" @keydown.enter.prevent="search(q)">
