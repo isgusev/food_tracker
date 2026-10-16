@@ -167,7 +167,7 @@ function loadZxing() {
 const EAN_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
 export const BarcodeScanner = {
   components: { Modal },
-  props: { marks: Boolean, title: String, count: Number },
+  props: { marks: Boolean, qr: Boolean, title: String, count: Number },
   emits: ["close", "code"],
   setup(props, { emit }) {
     const video = ref(null);
@@ -195,9 +195,9 @@ export const BarcodeScanner = {
       video.value.srcObject = stream;
       await video.value.play();
       const supportedFormats = await window.BarcodeDetector.getSupportedFormats?.() || EAN_FORMATS;
-      const wanted = props.marks ? ["data_matrix", ...EAN_FORMATS] : EAN_FORMATS;
+      const wanted = props.qr ? ["qr_code"] : props.marks ? ["data_matrix", ...EAN_FORMATS] : EAN_FORMATS;
       const formats = wanted.filter((f) => supportedFormats.includes(f));
-      if (props.marks && !formats.includes("data_matrix")) throw new Error("no-datamatrix");
+      if ((props.marks && !formats.includes("data_matrix")) || (props.qr && !formats.length)) throw new Error("no-datamatrix");
       const detector = new window.BarcodeDetector({ formats });
       const timer = setInterval(async () => {
         try { const r = await detector.detect(video.value); for (const x of r) found(x.rawValue); } catch { /* кадр не готов */ }
@@ -209,6 +209,7 @@ export const BarcodeScanner = {
       const Z = await loadZxing();
       const formats = [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E];
       if (props.marks) formats.unshift(Z.BarcodeFormat.DATA_MATRIX);
+      if (props.qr) formats.splice(0, formats.length, Z.BarcodeFormat.QR_CODE);
       const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, formats]]);
       const reader = new Z.BrowserMultiFormatReader(hints, 300);
       stop = () => { try { reader.reset(); } catch { /* уже остановлен */ } };
@@ -220,7 +221,8 @@ export const BarcodeScanner = {
     async function start() {
       if (!supported) { status.value = "Камера доступна только по https — введите цифры под штрихкодом."; return; }
       try {
-        status.value = props.marks ? "Наведите камеру на квадратный код «Честного знака» — пачки можно сканировать подряд" : "Наведите камеру на штрихкод";
+        status.value = props.qr ? "Наведите камеру на QR-код внизу чека"
+          : props.marks ? "Наведите камеру на квадратный код «Честного знака» — пачки можно сканировать подряд" : "Наведите камеру на штрихкод";
         if ("BarcodeDetector" in window) {
           try { await withDetector(); } catch (e) { if (e?.message === "no-datamatrix") { stop(); await withZxing(); } else throw e; }
         } else await withZxing();
@@ -233,19 +235,20 @@ export const BarcodeScanner = {
     onMounted(start);
     onBeforeUnmount(() => stop());
     const submit = () => {
-      if (props.marks) { const c = manual.value.trim(); if (c.length >= 10) { found(c); manual.value = ""; } return; }
+      if (props.marks || props.qr) { const c = manual.value.trim(); if (c.length >= 10) { found(c); manual.value = ""; } return; }
       const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) found(c);
     };
     return { video, manual, status, supported, submit };
   },
   template: `
-    <Modal :title="title || (marks ? 'Код «Честного знака»' : 'Штрихкод')" @close="$emit('close')">
+    <Modal :title="title || (qr ? 'QR-код чека' : marks ? 'Код «Честного знака»' : 'Штрихкод')" @close="$emit('close')">
       <video v-if="supported" ref="video" playsinline muted autoplay style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
       <div class="small muted">{{ status }}</div>
       <div v-if="marks && count != null" class="small"><b>Отсканировано пачек: {{ count }}</b></div>
       <div class="row" style="flex-wrap: nowrap">
-        <input v-model="manual" :inputmode="marks ? 'text' : 'numeric'" :placeholder="marks ? 'код с упаковки, если камера не читает' : '4600000000000'" @keydown.enter="submit">
-        <button :class="marks ? '' : 'primary'" @click="submit">{{ marks ? 'Добавить' : 'Найти' }}</button>
+        <input v-model="manual" :inputmode="marks || qr ? 'text' : 'numeric'"
+               :placeholder="qr ? 't=…&s=…&fn=…&i=…&fp=…&n=1' : marks ? 'код с упаковки, если камера не читает' : '4600000000000'" @keydown.enter="submit">
+        <button :class="marks ? '' : 'primary'" @click="submit">{{ marks ? 'Добавить' : qr ? 'Загрузить' : 'Найти' }}</button>
       </div>
       <template v-if="marks" #foot><button class="primary" @click="$emit('close')">Готово</button></template>
     </Modal>`,

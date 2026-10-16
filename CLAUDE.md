@@ -43,6 +43,13 @@
   (для окон, где только результаты поиска). Список результатов `ProductFinder`
   прячется по клику вне поиска (`pointerdown` на документе) и снова открывается фокусом/вводом в поле.
   Шапка и подвал модалки закреплены, прокручивается тело. Поле поиска с крестиком — обёртка `.clearable`.
+- Чеки по QR: `app/services/receipt_client.py` (code-qr.ru: `POST /receipt/add-qr` → hash, `GET /receipt/info`;
+  ключ — заголовок `key`, из `CODEQR_API_KEY`; без ключа — 503 «не настроен»), `app/services/receipt.py`
+  (нормализация и сокращения чековых названий, размер упаковки и весовой товар, сопоставление: выученное
+  `ReceiptAlias` → строки активного списка → «не еда» → справочник, порог 0,6), модели `Receipt`/`ReceiptAlias`,
+  эндпоинты `/receipts` (POST, GET, GET/{id} — переспрашивает «ждём», POST/{id}/apply — через
+  `StockService.check`/`add_extra`/`add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
+  «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: в тестах сети нет, вручную — бережно.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
 
@@ -72,8 +79,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 81 тест, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0012)
+.venv/bin/python -m pytest -q              # 91 тест, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0013)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -109,6 +116,8 @@
 - Open Food Facts: классический поиск находит только ЦЕЛЫЕ слова и часто отвечает 503 (лимит,
   ~10 поисков/мин на IP; при проверках из терминала легко исчерпать — делать паузы); search-a-licious
   ищет «любое из слов», индекс неполный. Поэтому ранжирование — своё, а на 503 второй классический не ждём.
+- Внешние платные API (code-qr.ru) — не дёргать в циклах/тестах: каждый чек списывается из пакета Ивана.
+  Чек для проверки интерфейса можно положить прямо во временную базу (`receipts`, status `done`, items JSON).
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — относительно `date.today()` (`day()` в `tests/test_api.py`).
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)

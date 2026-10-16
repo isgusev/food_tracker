@@ -3,6 +3,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { Modal, Picker } from "../components.js";
+import { ReceiptModal } from "../receipts.js";
 import { state, ensureCatalog, toast, toastError } from "../store.js";
 import { addDays, fmt, fmtDayMonth, fmtQty, local, n, startOfWeek, today, UNIT_LABEL } from "../util.js";
 
@@ -52,7 +53,7 @@ const BoughtModal = {
 };
 
 export const ShoppingView = {
-  components: { BoughtModal, Picker },
+  components: { BoughtModal, Picker, ReceiptModal },
   props: { query: Object },
   setup(props) {
     const lst = ref(null);
@@ -183,7 +184,10 @@ export const ShoppingView = {
       catch { toast("Не удалось скопировать", "error"); }
     }
 
+    const receiptOpen = ref(false);
+    function onReceiptApplied() { receiptOpen.value = false; refresh(); }
     return {
+      receiptOpen, onReceiptApplied,
       lst, loading, start, end, editing, estimate, estTotal, queue, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
       generate, check, uncheck, remove, addExtra, close, preset, copy, pkgText, fmt, fmtQty, fmtDayMonth, n,
       onSaved: (res) => { lst.value = res; editing.value = null; },
@@ -193,9 +197,12 @@ export const ShoppingView = {
     <div>
       <div class="page-head">
         <h1>Покупки</h1>
-        <div class="row" v-if="lst">
+        <div class="row">
+          <button @click="receiptOpen = true" title="Загрузить покупки и цены из чека по QR-коду">🧾 Чек</button>
+          <template v-if="lst">
           <button @click="copy">📋 Копировать</button>
           <button @click="close">Закрыть список</button>
+          </template>
         </div>
       </div>
 
@@ -263,5 +270,6 @@ export const ShoppingView = {
       </template>
 
       <BoughtModal v-if="editing" :line="editing" @close="editing = null" @saved="onSaved" />
+      <ReceiptModal v-if="receiptOpen" @close="receiptOpen = false" @applied="onReceiptApplied" />
     </div>`,
 };
