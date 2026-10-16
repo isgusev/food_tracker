@@ -49,7 +49,11 @@
   `ReceiptAlias` → строки активного списка → «не еда» → справочник, порог 0,6), модели `Receipt`/`ReceiptAlias`,
   эндпоинты `/receipts` (POST, GET, GET/{id} — переспрашивает «ждём», POST/{id}/apply — через
   `StockService.check`/`add_extra`/`add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
-  «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: в тестах сети нет, вручную — бережно.
+  «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: тратит только add-qr (новый чек),
+  запрос статуса info — бесплатный. «Ждущие» чеки: окно само опрашивает (4 с первую минуту, 15 с до 3 мин),
+  дальше — фоновая задача в lifespan (`app/services/receipt_poller.py`, раз в `RECEIPT_POLL_MINUTES`=10,
+  только при заданном ключе, не в тестах); не дошёл за `RECEIPT_PENDING_DAYS`=3 дня — ошибка; ответ
+  «нет пакета» чек не портит. Значок «🧾 Чек · готов» в «Покупках» — расшифрованные, но не разобранные.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
 
@@ -79,7 +83,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 92 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 93 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0013)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/

@@ -30,6 +30,16 @@ class ReceiptRepository(BaseRepository[Receipt]):
             assert existing is not None
             return existing
 
+    async def pending_before(self, moment, limit: int = 50) -> list[Receipt]:
+        """«Ждущие» чеки ВСЕХ семей, заведённые раньше moment, — для фоновой проверки."""
+        stmt = (
+            select(Receipt)
+            .where(Receipt.status == "pending", Receipt.provider_hash.is_not(None), Receipt.created_at < moment)
+            .order_by(Receipt.id)
+            .limit(limit)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
     async def recent(self, household_id: int, limit: int = 20) -> list[Receipt]:
         stmt = (
             select(Receipt)

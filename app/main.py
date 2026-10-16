@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from app.api.error_handlers import register_error_handlers
 from app.api.v1.router import api_router, public_router
 from app.core.config import get_settings
 from app.db.session import SessionDep, init_db, set_session_factory
+from app.services.receipt_poller import run_poller
 
 # Веб-интерфейс (Vue 3 без сборки) раздаётся этим же процессом: один origin — без CORS
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -36,10 +38,16 @@ async def lifespan(app: FastAPI):
     settings.validate_runtime()
     # Никаких create_all в рантайме — схема живёт только в Alembic-миграциях.
     # Движок/пул соединений создаётся один раз на процесс.
-    init_db(settings)
+    factory = init_db(settings)
+    # «Ждущие» чеки переспрашиваем в фоне (только если импорт чеков настроен)
+    poller = None
+    if settings.codeqr_api_key and settings.receipt_poll_minutes > 0 and settings.environment != "test":
+        poller = asyncio.create_task(run_poller(factory, settings.receipt_poll_minutes, settings.receipt_pending_days))
     try:
         yield
     finally:
+        if poller is not None:
+            poller.cancel()
         set_session_factory(None)
 
 
