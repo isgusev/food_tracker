@@ -17,7 +17,14 @@
 - Frontend: `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`, Node на машине нет),
   раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — `web/js/views/*.js`,
   общее состояние — `web/js/store.js`. PWA: `web/sw.js` (network-first), `manifest.webmanifest`.
-- Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone).
+- Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone). `BarcodeScanner marks` —
+  режим «Честного знака»: читает DataMatrix, сканирует пачки подряд (каждый новый код — событие).
+- «Честный знак»: разбор кода GS1 — `app/services/marking.py` (`parse_mark`: 01 GTIN → EAN-13, 21 серийный,
+  17 / 7003 — «годен до»; без разделителей GS серийный подбирается по длине). Пачки — `StockMark`
+  (семья + GTIN + серийный уникальны: одну пачку дважды не добавить). `POST /stock/marks/parse`,
+  `POST /stock/lots/packs` (добавить по пачкам: один срок — одна партия, цена делится по пачкам),
+  `POST /stock/lots/{id}/packs` (разложить купленную партию по срокам; съеденное остаётся в исходной).
+  Веб: `web/js/marking.js` (`PacksEditor`), «Добавить в запасы → По пачкам», «📦 Сроки» у партии.
 - Поиск продукта: `web/js/product-finder.js` — `ProductFinder` (справочник → штрихкод/📷 → Open Food Facts →
   «ввести вручную»; выбранное из OFF или введённое = «черновик» `OffDraftCard`, сохраняется `saveDraft`).
   Один и тот же поиск в плане («Готовый продукт», `reuse: true`), в «Продукты → + Продукт»
@@ -36,6 +43,13 @@
   (для окон, где только результаты поиска). Список результатов `ProductFinder`
   прячется по клику вне поиска (`pointerdown` на документе) и снова открывается фокусом/вводом в поле.
   Шапка и подвал модалки закреплены, прокручивается тело. Поле поиска с крестиком — обёртка `.clearable`.
+- Чеки по QR: `app/services/receipt_client.py` (code-qr.ru: `POST /receipt/add-qr` → hash, `GET /receipt/info`;
+  ключ — заголовок `key`, из `CODEQR_API_KEY`; без ключа — 503 «не настроен»), `app/services/receipt.py`
+  (нормализация и сокращения чековых названий, размер упаковки и весовой товар, сопоставление: выученное
+  `ReceiptAlias` → строки активного списка → «не еда» → справочник, порог 0,6), модели `Receipt`/`ReceiptAlias`,
+  эндпоинты `/receipts` (POST, GET, GET/{id} — переспрашивает «ждём», POST/{id}/apply — через
+  `StockService.check`/`add_extra`/`add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
+  «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: в тестах сети нет, вручную — бережно.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
 
@@ -49,7 +63,8 @@
   `MealPortion` (член семьи или гость=NULL, вес, `is_eaten`, `eaten_from_pot_id`).
 - **Кастрюля** (`RecipeCookingLog`) резервирует несъеденные порции привязанных блюд;
   привязка с сегодняшнего дня по вместимости, освобождение поздних блюд при убывании.
-- **Запасы** сверяются по ТОВАРУ = `Product.search_name` (без бренда); партии `StockLot`,
+- **Запасы** — партии со своим сроком; пачки с кодом «Честного знака» с разным сроком — разные партии.
+  Сверяются по ТОВАРУ = `Product.search_name` (без бренда); партии `StockLot`,
   каждое изменение — `StockMovement` (отмены возвращают в те же партии). Готовка списывает
   состав кастрюли, «съел» — готовый продукт. «Базовые» товары не учитываются.
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
@@ -64,8 +79,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 76 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0011)
+.venv/bin/python -m pytest -q              # 92 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0013)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -101,6 +116,8 @@
 - Open Food Facts: классический поиск находит только ЦЕЛЫЕ слова и часто отвечает 503 (лимит,
   ~10 поисков/мин на IP; при проверках из терминала легко исчерпать — делать паузы); search-a-licious
   ищет «любое из слов», индекс неполный. Поэтому ранжирование — своё, а на 503 второй классический не ждём.
+- Внешние платные API (code-qr.ru) — не дёргать в циклах/тестах: каждый чек списывается из пакета Ивана.
+  Чек для проверки интерфейса можно положить прямо во временную базу (`receipts`, status `done`, items JSON).
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — относительно `date.today()` (`day()` в `tests/test_api.py`).
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)

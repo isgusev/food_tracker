@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import relationship
@@ -187,3 +188,27 @@ class ShoppingLine(Base):
     product = relationship("Product")
     variant = relationship("ProductVariant")
     lot = relationship("StockLot")
+
+
+class StockMark(Base):
+    """Отсканированная пачка с кодом «Честного знака»: к какой партии относится.
+
+    Один код — одна физическая пачка: (семья, GTIN, серийный номер) уникальны,
+    поэтому одну и ту же пачку нельзя добавить в запасы дважды.
+    """
+
+    __tablename__ = "stock_marks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lot_id = Column(Integer, ForeignKey("stock_lots.id", ondelete="CASCADE"), nullable=False, index=True)
+    gtin = Column(String(14), nullable=False)
+    serial = Column(String(64), nullable=False)
+    expires_on = Column(Date, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("household_id", "gtin", "serial", name="_stock_mark_uc"),
+    )

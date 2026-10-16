@@ -60,6 +60,7 @@ python3 -c "import secrets; print(''.join(secrets.choice('ABCDEFGHJKMNPQRSTUVWXY
 | `REGISTRATION_MODE` | `invite` | переменная |
 | `FIRST_INVITE_CODE` | из шага 2 | **секрет** |
 | `CORS_ORIGINS` | `[]` | переменная |
+| `CODEQR_API_KEY` | ключ из личного кабинета code-qr.ru (импорт чеков по QR; без него «🧾 Чек» отключён) | **секрет** |
 
    Переменные применяются после перезапуска контейнера; при сборке они недоступны — так и задумано.
 3. **HTTPS** — это не переменная, а домен с типом HTTPS:

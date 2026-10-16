@@ -31,6 +31,10 @@ class ForbiddenError(DomainError):
     """Аутентифицирован, но прав недостаточно (→ 403)."""
 
 
+class ServiceUnavailableError(DomainError):
+    """Внешний сервис недоступен или не настроен (→ 503)."""
+
+
 class TooManyRequestsError(DomainError):
     """Слишком много неудачных попыток (→ 429)."""
 

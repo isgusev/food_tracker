@@ -15,6 +15,7 @@ from app.models.stock import (
     ShoppingLine,
     ShoppingList,
     StockLot,
+    StockMark,
     StockMovement,
 )
 from app.repositories.base import BaseRepository
@@ -134,6 +135,24 @@ class StockRepository(BaseRepository[StockLot]):
             .limit(limit)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+    # --- пачки с кодами маркировки ---
+    async def product_by_barcode(self, barcode: str) -> Product | None:
+        stmt = select(Product).where(Product.barcode == barcode).options(selectinload(Product.packages))
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def mark_exists(self, household_id: int, gtin: str, serial: str) -> bool:
+        stmt = select(StockMark.id).where(
+            StockMark.household_id == household_id, StockMark.gtin == gtin, StockMark.serial == serial
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
+    def add_mark(self, mark: StockMark) -> None:
+        self._session.add(mark)
+
+    async def lot_of_household(self, household_id: int, lot_id: int) -> StockLot | None:
+        stmt = self._lots_query(household_id).where(StockLot.id == lot_id)
+        return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
     async def delete_obj(self, obj) -> None:
         await self._session.delete(obj)

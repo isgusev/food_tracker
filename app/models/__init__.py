@@ -24,11 +24,13 @@ from app.models.recipe import (
     RecipeCookingLog,
     RecipeTemplateIngredient,
 )
+from app.models.receipt import Receipt, ReceiptAlias
 from app.models.stock import (
     HouseholdProduct,
     ShoppingLine,
     ShoppingList,
     StockLot,
+    StockMark,
     StockMovement,
 )
 from app.models.user import AuthGroup, RegistrationInvite, User, UserGroup
@@ -52,12 +54,15 @@ __all__ = [
     "RecipeCategory",
     "RecipeCookingLog",
     "RecipeTemplateIngredient",
+    "Receipt",
+    "ReceiptAlias",
     "User",
     "RegistrationInvite",
     "HouseholdProduct",
     "ShoppingLine",
     "ShoppingList",
     "StockLot",
+    "StockMark",
     "StockMovement",
     "UserGroup",
 ]

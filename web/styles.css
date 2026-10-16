@@ -261,6 +261,16 @@ table.tbl { width: 100%; border-collapse: collapse; }
   .ingr-qty { justify-content: flex-end; }
 }
 
+/* Партия в карточке запасов: срок и остаток, ниже — покупка, бренд, цена */
+.lot-row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; }
+.lot-row + .lot-row { border-top: 1px solid var(--border); }
+.lot-expired { color: var(--danger); }
+
+/* Строка чека: название и сумма, ниже — с чем сопоставили и сколько */
+.receipt-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
+.receipt-row + .receipt-row { border-top: 1px solid var(--border); }
+.receipt-row.skipped > :first-child { opacity: .55; }
+
 /* Поле поиска с крестиком «очистить» внутри */
 .clearable { position: relative; flex: 1 1 auto; min-width: 0; }
 .clearable > input { padding-right: 34px; }

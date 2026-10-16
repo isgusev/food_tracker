@@ -10,6 +10,7 @@ from app.core.exceptions import (
     DomainError,
     ForbiddenError,
     NotFoundError,
+    ServiceUnavailableError,
     TooManyRequestsError,
     UnauthorizedError,
     ValidationError,
@@ -40,6 +41,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ValidationError)
     async def _validation(request: Request, exc: ValidationError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(ServiceUnavailableError)
+    async def _unavailable(request: Request, exc: ServiceUnavailableError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.exception_handler(TooManyRequestsError)
     async def _too_many(request: Request, exc: TooManyRequestsError) -> JSONResponse:
