@@ -96,7 +96,7 @@ export const ShoppingView = {
         toast("Список обновлён по плану и запасам");
       } catch (e) { toastError(e); } finally { loading.value = false; }
     }
-    const onVisible = () => { if (!document.hidden) refresh(); };
+    const onVisible = () => { if (!document.hidden) { refresh(); loadReceiptsReady(); } };
     onMounted(async () => {
       await refresh(false);
       // Пришли из плана с конкретным периодом — сразу формируем
@@ -185,9 +185,17 @@ export const ShoppingView = {
     }
 
     const receiptOpen = ref(false);
-    function onReceiptApplied() { receiptOpen.value = false; refresh(); }
+    // Чеки, которые расшифровались, но ещё не разобраны («готов к проверке»)
+    const receiptsReady = ref(0);
+    async function loadReceiptsReady() {
+      try { receiptsReady.value = (await api.get("/receipts")).filter((r) => r.status === "done").length; }
+      catch { receiptsReady.value = 0; }
+    }
+    onMounted(loadReceiptsReady);
+    function onReceiptApplied() { receiptOpen.value = false; refresh(); loadReceiptsReady(); }
+    function onReceiptClosed() { receiptOpen.value = false; loadReceiptsReady(); }
     return {
-      receiptOpen, onReceiptApplied,
+      receiptOpen, onReceiptApplied, onReceiptClosed, receiptsReady,
       lst, loading, start, end, editing, estimate, estTotal, queue, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
       generate, check, uncheck, remove, addExtra, close, preset, copy, pkgText, fmt, fmtQty, fmtDayMonth, n,
       onSaved: (res) => { lst.value = res; editing.value = null; },
@@ -198,7 +206,8 @@ export const ShoppingView = {
       <div class="page-head">
         <h1>Покупки</h1>
         <div class="row">
-          <button @click="receiptOpen = true" title="Загрузить покупки и цены из чека по QR-коду">🧾 Чек</button>
+          <button @click="receiptOpen = true" title="Загрузить покупки и цены из чека по QR-коду"
+                  :class="{ primary: receiptsReady }">🧾 Чек<template v-if="receiptsReady"> · готов{{ receiptsReady > 1 ? ' ' + receiptsReady : '' }}</template></button>
           <template v-if="lst">
           <button @click="copy">📋 Копировать</button>
           <button @click="close">Закрыть список</button>
@@ -270,6 +279,6 @@ export const ShoppingView = {
       </template>
 
       <BoughtModal v-if="editing" :line="editing" @close="editing = null" @saved="onSaved" />
-      <ReceiptModal v-if="receiptOpen" @close="receiptOpen = false" @applied="onReceiptApplied" />
+      <ReceiptModal v-if="receiptOpen" @close="onReceiptClosed" @applied="onReceiptApplied" />
     </div>`,
 };

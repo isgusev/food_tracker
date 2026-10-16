@@ -1,7 +1,7 @@
 // Чек по QR: строка QR → расшифровка (code-qr.ru → ФНС) → сопоставление строк чека
 // со списком покупок и справочником → проверка → «Сохранить покупки».
 // Чек доходит до налоговой с задержкой: «ждём» — нормальное состояние, чек сохранён.
-import { ref, computed, onMounted } from "../vendor/vue.esm-browser.prod.js";
+import { ref, computed, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
 import { Modal, Picker, BarcodeScanner } from "./components.js";
 import { state, toast, toastError } from "./store.js";
@@ -44,9 +44,37 @@ export const ReceiptModal = {
     }
     onMounted(loadContext);
 
-    function show(r) {
+    // Пока окно открыто, «ждущий» чек опрашиваем сами: первую минуту — каждые 4 с,
+    // потом до 3 минут — каждые 15 с; дальше его проверит сервер в фоне.
+    // Запрос статуса проверку из пакета не тратит.
+    const polling = ref(false);
+    const nextIn = ref(0);
+    let pollTimer = null, tickTimer = null, pollStarted = 0;
+    function stopPolling() {
+      clearTimeout(pollTimer); clearInterval(tickTimer);
+      pollTimer = tickTimer = null; polling.value = false;
+    }
+    function schedulePoll() {
+      const elapsed = Date.now() - pollStarted;
+      if (elapsed > 180000) { stopPolling(); return; }
+      const delay = elapsed < 60000 ? 4000 : 15000;
+      polling.value = true;
+      nextIn.value = Math.round(delay / 1000);
+      clearInterval(tickTimer);
+      tickTimer = setInterval(() => { nextIn.value = Math.max(0, nextIn.value - 1); }, 1000);
+      pollTimer = setTimeout(async () => {
+        if (!receipt.value) return stopPolling();
+        try { show(await api.get(`/receipts/${receipt.value.id}`), true); } catch { schedulePoll(); }
+      }, delay);
+    }
+    onBeforeUnmount(stopPolling);
+
+    function show(r, fromPoll = false) {
       receipt.value = r;
       rows.value = r.status === "done" ? r.items.map((it) => rowFrom(it, lines.value)) : [];
+      if (r.status !== "pending") { stopPolling(); return; }
+      if (!fromPoll) pollStarted = Date.now();
+      schedulePoll();
     }
     async function submit(text) {
       scanning.value = false;
@@ -62,7 +90,7 @@ export const ReceiptModal = {
       catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
     const refresh = () => open(receipt.value.id);
-    function back() { receipt.value = null; error.value = ""; loadContext(); }
+    function back() { stopPolling(); receipt.value = null; error.value = ""; loadContext(); }
 
     const productItems = computed(() => state.products.map((p) => ({ id: p.id, label: p.name, sub: p.brand?.name })));
     const lineById = computed(() => Object.fromEntries(lines.value.map((l) => [l.id, l])));
@@ -94,7 +122,7 @@ export const ReceiptModal = {
       } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
     return {
-      receipt, recent, lines, rows, qr, scanning, busy, error, submit, open, refresh, apply, back,
+      receipt, recent, lines, rows, qr, scanning, busy, error, submit, open, refresh, apply, back, polling, nextIn,
       productItems, lineById, unitOf, usedLines, chosen, chosenSum, SOURCE, fmt, fmtDateTime, fmtQty, n, UNIT_LABEL,
     };
   },
@@ -130,8 +158,10 @@ export const ReceiptModal = {
           <b class="num">{{ receipt.total != null ? fmt(receipt.total, 2) + ' ₽' : '' }}</b>
         </div>
         <div v-if="receipt.status === 'pending'" class="alert info">
-          Чек ещё не дошёл до налоговой — обычно это минуты, иногда несколько часов. Он сохранён:
-          откройте его позже из «Недавних чеков». <button class="sm" :disabled="busy" @click="refresh">Проверить снова</button>
+          <template v-if="polling">Расшифровываем чек… следующая проверка через {{ nextIn }} с.</template>
+          <template v-else>Чек ещё не дошёл до налоговой — так бывает, если у кассы не было связи (иногда часы).
+            Он сохранён, приложение само проверит его позже — в «Покупках» появится «🧾 Чек · готов».</template>
+          <button class="sm" :disabled="busy" @click="refresh">Проверить сейчас</button>
         </div>
         <div v-else-if="receipt.status === 'error'" class="alert error">{{ receipt.error || 'Сервис не смог расшифровать чек' }}</div>
         <div v-else-if="receipt.status === 'applied'" class="alert info">Этот чек уже сохранён в покупки.</div>

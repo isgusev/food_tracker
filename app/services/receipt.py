@@ -396,6 +396,8 @@ class ReceiptService:
     @staticmethod
     def _apply_info(receipt: Receipt, data: dict) -> None:
         if not data.get("success"):
+            if "пакет" in str(data.get("message") or "").lower():
+                return  # «нет активного пакета» — беда аккаунта, а не чека: ждём, пока продлят
             receipt.status = "error"
             receipt.error = str(data.get("message") or "Чек не найден")[:500]
             return

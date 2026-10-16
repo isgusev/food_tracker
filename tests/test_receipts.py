@@ -334,3 +334,43 @@ def test_real_codeqr_payload_vkusvill_weighed():
     pack = R.parse_pack(items[0]["name"], items[0]["quantity"])
     assert pack.weighed and pack.unit == "g" and pack.amount * Decimal(str(items[0]["quantity"])) == Decimal("575.000")
     assert not R.is_non_food(items[0]["name"])
+
+
+async def test_background_poller_refreshes_pending(client, monkeypatch, session_factory):
+    """Фоновая проверка: «ждущий» чек становится готовым; «нет пакета» его не портит;
+    чек, не дошедший до ФНС за 3 дня, помечается ошибкой."""
+    from datetime import datetime, timedelta, timezone
+
+    def utcnow():
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
+    from app.models.receipt import Receipt
+    from app.services.receipt_poller import EXPIRED_MESSAGE, refresh_pending_once
+
+    h = await register_and_login(client, "rpoll", "rpoll@test.com")
+    fake = FakeProvider(monkeypatch)
+    pending = {"success": True, "status": "process"}
+    qr3 = QR1.replace("n=1", "n=3")
+    fake.answers[QR1] = [pending]
+    fake.answers[qr3] = [pending]
+    r1 = (await client.post("/api/v1/receipts", json={"qr": QR1}, headers=h)).json()
+    r3 = (await client.post("/api/v1/receipts", json={"qr": qr3}, headers=h)).json()
+    assert r1["status"] == r3["status"] == "pending"
+    # второй чек «заведён 4 дня назад»
+    async with session_factory() as s:
+        (await s.get(Receipt, r3["id"])).created_at = utcnow() - timedelta(days=4)
+        await s.commit()
+
+    later = utcnow() + timedelta(minutes=5)
+    # сервис отвечает не про чек («нет пакета») — ждём дальше, ничего не ломаем
+    fake.answers[QR1] = [{"success": False, "message": "Нет активного пакета доступа к API проверки чеков"}]
+    assert await refresh_pending_once(session_factory, now=later) == 0
+    assert (await client.get(f"/api/v1/receipts/{r1['id']}", headers=h)).json()["status"] == "pending"
+
+    # потом ФНС чек отдала
+    fake.answers[QR1] = [done(ITEMS2)]
+    assert await refresh_pending_once(session_factory, now=later) == 1
+    brief = {r["id"]: r for r in (await client.get("/api/v1/receipts", headers=h)).json()}
+    assert brief[r1["id"]]["status"] == "done" and brief[r1["id"]]["items_count"] == 1
+    old = (await client.get(f"/api/v1/receipts/{r3['id']}", headers=h)).json()
+    assert old["status"] == "error" and old["error"] == EXPIRED_MESSAGE
