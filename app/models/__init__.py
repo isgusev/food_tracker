@@ -24,6 +24,7 @@ from app.models.recipe import (
     RecipeCookingLog,
     RecipeTemplateIngredient,
 )
+from app.models.receipt import Receipt, ReceiptAlias
 from app.models.stock import (
     HouseholdProduct,
     ShoppingLine,
@@ -53,6 +54,8 @@ __all__ = [
     "RecipeCategory",
     "RecipeCookingLog",
     "RecipeTemplateIngredient",
+    "Receipt",
+    "ReceiptAlias",
     "User",
     "RegistrationInvite",
     "HouseholdProduct",

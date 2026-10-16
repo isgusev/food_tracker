@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     login_max_failures: int = 10
     login_window_minutes: int = 15
 
+    # --- Импорт кассовых чеков по QR (code-qr.ru → ФНС) ---
+    # Ключ выдаётся в личном кабинете code-qr.ru; без него импорт чеков отключён
+    codeqr_api_key: str | None = None
+    codeqr_base_url: str = "https://code-qr.ru/api"
+
     def validate_runtime(self) -> None:
         """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""
         if self.postgres_ssl not in (None, "", "require", "prefer", "disable", "verify-ca", "verify-full"):
