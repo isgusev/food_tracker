@@ -19,21 +19,26 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import UNITS, grams_to_base, pick_packages, quantize
 from app.models.plan import MealItem, MealPortion
 from app.models.product import Product
 from app.models.recipe import RecipeCookingLog
-from app.models.stock import ShoppingLine, ShoppingList, StockLot, StockMovement
+from app.models.stock import ShoppingLine, ShoppingList, StockLot, StockMark, StockMovement
 from app.repositories.plan import PlanRepository, remaining_weight
 from app.repositories.recipe import RecipeRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
+from app.services.marking import MarkInfo, parse_mark
 from app.schemas.stock import (
     LineCheck,
     LineUpdate,
     LotAdd,
     LotResponse,
+    MarkParsed,
     MovementResponse,
+    PackIn,
+    PacksAdd,
+    PacksSplit,
     ShoppingItem,
     ShoppingLineResponse,
     ShoppingListOut,
@@ -277,6 +282,114 @@ class StockService:
         ))
         await self._stock.flush()
         return lot
+
+    # --- Пачки с кодами «Честного знака»: срок годности у каждой пачки свой ---
+    async def parse_code(self, household_id: int, code: str) -> MarkParsed:
+        """Прочитать код маркировки: штрихкод, срок, есть ли товар в справочнике и пачка в запасах."""
+        info = parse_mark(code)
+        if info is None:
+            raise ValidationError("Это не код «Честного знака» — сканируйте квадратный код DataMatrix на упаковке")
+        product = await self._stock.product_by_barcode(info.barcode)
+        return MarkParsed(
+            gtin=info.gtin, barcode=info.barcode, serial=info.serial, expires_on=info.expires_on,
+            product_id=product.id if product else None, product_name=product.name if product else None,
+            already_registered=await self._stock.mark_exists(household_id, info.gtin, info.serial),
+        )
+
+    async def _packs_by_expiry(
+        self, household_id: int, product: Product, packs: list[PackIn]
+    ) -> list[tuple[date | None, list[MarkInfo], int]]:
+        """Пачки → группы по сроку: [(срок, [коды…], сколько пачек)]. Срок из кода важнее введённого.
+        Проверяет: код читается, он от этого товара, пачку ещё не добавляли."""
+        groups: dict[date | None, tuple[list[MarkInfo], int]] = {}
+        seen: set[tuple[str, str]] = set()
+        for p in packs:
+            info = parse_mark(p.code) if p.code else None
+            if p.code and info is None:
+                raise ValidationError("Один из кодов не читается как код «Честного знака»")
+            expires = p.expires_on
+            if info is not None:
+                if product.barcode and info.barcode != product.barcode:
+                    raise ValidationError(
+                        f"Код от другого товара (штрихкод {info.barcode}), а выбран «{product.name}»"
+                    )
+                if (info.gtin, info.serial) in seen or await self._stock.mark_exists(household_id, info.gtin, info.serial):
+                    raise ConflictError("Эта пачка уже добавлена в запасы (код сканировали раньше)")
+                seen.add((info.gtin, info.serial))
+                expires = info.expires_on or expires
+                if not product.barcode:
+                    # штрихкода у товара ещё не было — запомним его по коду маркировки
+                    if await self._stock.product_by_barcode(info.barcode) is None:
+                        product.barcode = info.barcode
+            marks, count = groups.get(expires, ([], 0))
+            groups[expires] = (marks + ([info] if info else []), count + 1)
+        return [(exp, marks, count) for exp, (marks, count) in groups.items()]
+
+    def _attach_marks(self, household_id: int, lot: StockLot, marks: list[MarkInfo]) -> None:
+        for m in marks:
+            self._stock.add_mark(StockMark(
+                household_id=household_id, lot_id=lot.id, gtin=m.gtin, serial=m.serial, expires_on=lot.expires_on,
+            ))
+
+    async def add_packs(
+        self, household_id: int, user_id: int | None, data: PacksAdd, *, source: str, today: date
+    ) -> list[StockLot]:
+        """Покупка по пачкам: пачки с одним сроком — одна партия, с разными — разные.
+        Цена делится между партиями пропорционально числу пачек."""
+        product = await self._product(data.product_id)
+        groups = await self._packs_by_expiry(household_id, product, data.packs)
+        total_packs = sum(count for _, _, count in groups)
+        lots, price_left = [], data.price
+        for i, (expires, marks, count) in enumerate(groups):
+            price = None
+            if data.price is not None:
+                last = i == len(groups) - 1
+                price = price_left if last else (data.price * count / total_packs).quantize(Decimal("0.01"))
+                price_left -= price
+            lot = await self.add_lot(household_id, user_id, LotAdd(
+                product_id=product.id, variant_id=data.variant_id, quantity=quantize(data.pack_amount * count),
+                price=price, purchased_on=data.purchased_on, expires_on=expires,
+            ), source=source, today=today)
+            self._attach_marks(household_id, lot, marks)
+            lots.append(lot)
+        await self._stock.flush()
+        return lots
+
+    async def split_lot(self, household_id: int, lot_id: int, data: PacksSplit) -> None:
+        """Разложить купленную партию по пачкам: пачки с другим сроком уходят в свои партии
+        (с долей цены). Съеденное из партии остаётся в ней — отмены вернутся туда же."""
+        lot = await self._stock.lot_of_household(household_id, lot_id)
+        if lot is None:
+            raise NotFoundError("Партия не найдена")
+        groups = await self._packs_by_expiry(household_id, lot.product, data.packs)
+        total = quantize(data.pack_amount * sum(count for _, _, count in groups))
+        if total > quantize(_d(lot.remaining)):
+            raise ValidationError(
+                f"Пачек больше, чем осталось в партии: {total} > {quantize(_d(lot.remaining))}"
+            )
+        for i, (expires, marks, count) in enumerate(groups):
+            qty = quantize(data.pack_amount * count)
+            last = i == len(groups) - 1
+            if last and qty == quantize(_d(lot.remaining)):
+                # оставшиеся пачки — это и есть партия: просто ставим ей срок
+                lot.expires_on = expires
+                self._attach_marks(household_id, lot, marks)
+                continue
+            share = None
+            if lot.price is not None and _d(lot.quantity) > 0:
+                share = (_d(lot.price) * qty / _d(lot.quantity)).quantize(Decimal("0.01"))
+                lot.price = _d(lot.price) - share
+            lot.quantity = _d(lot.quantity) - qty
+            lot.remaining = _d(lot.remaining) - qty
+            part = StockLot(
+                household_id=household_id, product_id=lot.product_id, variant_id=lot.variant_id,
+                quantity=qty, remaining=qty, price=share, purchased_on=lot.purchased_on,
+                expires_on=expires, source=lot.source, created_by_user_id=lot.created_by_user_id,
+            )
+            self._stock.add(part)
+            await self._stock.flush()
+            self._attach_marks(household_id, part, marks)
+        await self._stock.flush()
 
     async def write_off(
         self, household_id: int, user_id: int | None, product_id: int, qty: Decimal, note: str | None, today: date

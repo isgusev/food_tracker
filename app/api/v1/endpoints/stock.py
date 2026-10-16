@@ -7,7 +7,18 @@ import datetime as dt
 from fastapi import APIRouter
 
 from app.api.deps import CurrentMemberDep, CurrentUserDep, StockServiceDep
-from app.schemas.stock import Inventory, ItemFlags, LotAdd, MovementResponse, StockItem, WriteOff
+from app.schemas.stock import (
+    Inventory,
+    ItemFlags,
+    LotAdd,
+    MarkParsed,
+    MarkParseIn,
+    MovementResponse,
+    PacksAdd,
+    PacksSplit,
+    StockItem,
+    WriteOff,
+)
 
 router = APIRouter(prefix="/stock", tags=["Запасы"])
 
@@ -22,6 +33,26 @@ async def summary(service: StockServiceDep, me: CurrentMemberDep):
 async def add_lot(payload: LotAdd, service: StockServiceDep, me: CurrentMemberDep, user: CurrentUserDep):
     """Добавить в запасы мимо списка покупок."""
     await service.add_lot(me.household_id, user.id, payload, source="manual", today=dt.date.today())
+    return await service.summary(me.household_id, dt.date.today())
+
+
+@router.post("/marks/parse", response_model=MarkParsed)
+async def parse_mark(payload: MarkParseIn, service: StockServiceDep, me: CurrentMemberDep):
+    """Прочитать код «Честного знака»: штрихкод, срок годности, товар справочника, сканировали ли пачку."""
+    return await service.parse_code(me.household_id, payload.code)
+
+
+@router.post("/lots/packs", response_model=list[StockItem], status_code=201)
+async def add_packs(payload: PacksAdd, service: StockServiceDep, me: CurrentMemberDep, user: CurrentUserDep):
+    """Добавить в запасы по пачкам: разные сроки — разные партии; коды пачек запоминаются."""
+    await service.add_packs(me.household_id, user.id, payload, source="manual", today=dt.date.today())
+    return await service.summary(me.household_id, dt.date.today())
+
+
+@router.post("/lots/{lot_id}/packs", response_model=list[StockItem])
+async def split_lot(lot_id: int, payload: PacksSplit, service: StockServiceDep, me: CurrentMemberDep):
+    """Указать сроки по пачкам у уже купленной партии (например, отмеченной в списке покупок)."""
+    await service.split_lot(me.household_id, lot_id, payload)
     return await service.summary(me.household_id, dt.date.today())
 
 

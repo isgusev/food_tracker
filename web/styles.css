@@ -261,6 +261,11 @@ table.tbl { width: 100%; border-collapse: collapse; }
   .ingr-qty { justify-content: flex-end; }
 }
 
+/* Партия в карточке запасов: срок и остаток, ниже — покупка, бренд, цена */
+.lot-row { display: flex; gap: 10px; align-items: center; padding: 8px 12px; }
+.lot-row + .lot-row { border-top: 1px solid var(--border); }
+.lot-expired { color: var(--danger); }
+
 /* Поле поиска с крестиком «очистить» внутри */
 .clearable { position: relative; flex: 1 1 auto; min-width: 0; }
 .clearable > input { padding-right: 34px; }

@@ -162,32 +162,54 @@ function loadZxing() {
   return zxingLoading;
 }
 
+// marks — режим «Честного знака»: читаем и квадратные коды DataMatrix, сканируем подряд
+// (каждый новый код — событие code; один и тот же код повторно не шлём), «Готово» закрывает.
+const EAN_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
 export const BarcodeScanner = {
   components: { Modal },
+  props: { marks: Boolean, title: String, count: Number },
   emits: ["close", "code"],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     const video = ref(null);
     const manual = ref("");
     const status = ref("");
     const supported = !!navigator.mediaDevices?.getUserMedia && window.isSecureContext;
     let stop = () => {};
     let done = false;
-    const found = (code) => { if (done) return; done = true; stop(); emit("code", String(code)); };
+    const seen = new Set();
+    const found = (code) => {
+      code = String(code);
+      if (props.marks) {
+        if (seen.has(code)) return;          // та же пачка ещё в кадре
+        seen.add(code);
+        navigator.vibrate?.(60);
+        emit("code", code);
+        return;
+      }
+      if (done) return;
+      done = true; stop(); emit("code", code);
+    };
 
     async function withDetector() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
       video.value.srcObject = stream;
       await video.value.play();
-      const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+      const supportedFormats = await window.BarcodeDetector.getSupportedFormats?.() || EAN_FORMATS;
+      const wanted = props.marks ? ["data_matrix", ...EAN_FORMATS] : EAN_FORMATS;
+      const formats = wanted.filter((f) => supportedFormats.includes(f));
+      if (props.marks && !formats.includes("data_matrix")) throw new Error("no-datamatrix");
+      const detector = new window.BarcodeDetector({ formats });
       const timer = setInterval(async () => {
-        try { const r = await detector.detect(video.value); if (r.length) found(r[0].rawValue); } catch { /* кадр не готов */ }
+        try { const r = await detector.detect(video.value); for (const x of r) found(x.rawValue); } catch { /* кадр не готов */ }
       }, 300);
       stop = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); };
     }
 
     async function withZxing() {
       const Z = await loadZxing();
-      const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E]]]);
+      const formats = [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E];
+      if (props.marks) formats.unshift(Z.BarcodeFormat.DATA_MATRIX);
+      const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, formats]]);
       const reader = new Z.BrowserMultiFormatReader(hints, 300);
       stop = () => { try { reader.reset(); } catch { /* уже остановлен */ } };
       await reader.decodeFromConstraints({ video: { facingMode: "environment" } }, video.value, (result) => {
@@ -198,9 +220,10 @@ export const BarcodeScanner = {
     async function start() {
       if (!supported) { status.value = "Камера доступна только по https — введите цифры под штрихкодом."; return; }
       try {
-        status.value = "Наведите камеру на штрихкод";
-        if ("BarcodeDetector" in window) await withDetector();
-        else await withZxing();
+        status.value = props.marks ? "Наведите камеру на квадратный код «Честного знака» — пачки можно сканировать подряд" : "Наведите камеру на штрихкод";
+        if ("BarcodeDetector" in window) {
+          try { await withDetector(); } catch (e) { if (e?.message === "no-datamatrix") { stop(); await withZxing(); } else throw e; }
+        } else await withZxing();
       } catch (e) {
         status.value = e?.name === "NotAllowedError"
           ? "Нет разрешения на камеру — разрешите доступ в настройках браузера или введите цифры."
@@ -209,17 +232,22 @@ export const BarcodeScanner = {
     }
     onMounted(start);
     onBeforeUnmount(() => stop());
-    const submit = () => { const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) found(c); };
+    const submit = () => {
+      if (props.marks) { const c = manual.value.trim(); if (c.length >= 10) { found(c); manual.value = ""; } return; }
+      const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) found(c);
+    };
     return { video, manual, status, supported, submit };
   },
   template: `
-    <Modal title="Штрихкод" @close="$emit('close')">
+    <Modal :title="title || (marks ? 'Код «Честного знака»' : 'Штрихкод')" @close="$emit('close')">
       <video v-if="supported" ref="video" playsinline muted autoplay style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
       <div class="small muted">{{ status }}</div>
+      <div v-if="marks && count != null" class="small"><b>Отсканировано пачек: {{ count }}</b></div>
       <div class="row" style="flex-wrap: nowrap">
-        <input v-model="manual" inputmode="numeric" placeholder="4600000000000" @keydown.enter="submit">
-        <button class="primary" @click="submit">Найти</button>
+        <input v-model="manual" :inputmode="marks ? 'text' : 'numeric'" :placeholder="marks ? 'код с упаковки, если камера не читает' : '4600000000000'" @keydown.enter="submit">
+        <button :class="marks ? '' : 'primary'" @click="submit">{{ marks ? 'Добавить' : 'Найти' }}</button>
       </div>
+      <template v-if="marks" #foot><button class="primary" @click="$emit('close')">Готово</button></template>
     </Modal>`,
 };
 

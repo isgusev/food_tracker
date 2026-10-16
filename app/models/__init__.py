@@ -29,6 +29,7 @@ from app.models.stock import (
     ShoppingLine,
     ShoppingList,
     StockLot,
+    StockMark,
     StockMovement,
 )
 from app.models.user import AuthGroup, RegistrationInvite, User, UserGroup
@@ -58,6 +59,7 @@ __all__ = [
     "ShoppingLine",
     "ShoppingList",
     "StockLot",
+    "StockMark",
     "StockMovement",
     "UserGroup",
 ]

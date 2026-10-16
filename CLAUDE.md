@@ -17,7 +17,14 @@
 - Frontend: `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`, Node на машине нет),
   раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — `web/js/views/*.js`,
   общее состояние — `web/js/store.js`. PWA: `web/sw.js` (network-first), `manifest.webmanifest`.
-- Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone).
+- Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone). `BarcodeScanner marks` —
+  режим «Честного знака»: читает DataMatrix, сканирует пачки подряд (каждый новый код — событие).
+- «Честный знак»: разбор кода GS1 — `app/services/marking.py` (`parse_mark`: 01 GTIN → EAN-13, 21 серийный,
+  17 / 7003 — «годен до»; без разделителей GS серийный подбирается по длине). Пачки — `StockMark`
+  (семья + GTIN + серийный уникальны: одну пачку дважды не добавить). `POST /stock/marks/parse`,
+  `POST /stock/lots/packs` (добавить по пачкам: один срок — одна партия, цена делится по пачкам),
+  `POST /stock/lots/{id}/packs` (разложить купленную партию по срокам; съеденное остаётся в исходной).
+  Веб: `web/js/marking.js` (`PacksEditor`), «Добавить в запасы → По пачкам», «📦 Сроки» у партии.
 - Поиск продукта: `web/js/product-finder.js` — `ProductFinder` (справочник → штрихкод/📷 → Open Food Facts →
   «ввести вручную»; выбранное из OFF или введённое = «черновик» `OffDraftCard`, сохраняется `saveDraft`).
   Один и тот же поиск в плане («Готовый продукт», `reuse: true`), в «Продукты → + Продукт»
@@ -49,7 +56,8 @@
   `MealPortion` (член семьи или гость=NULL, вес, `is_eaten`, `eaten_from_pot_id`).
 - **Кастрюля** (`RecipeCookingLog`) резервирует несъеденные порции привязанных блюд;
   привязка с сегодняшнего дня по вместимости, освобождение поздних блюд при убывании.
-- **Запасы** сверяются по ТОВАРУ = `Product.search_name` (без бренда); партии `StockLot`,
+- **Запасы** — партии со своим сроком; пачки с кодом «Честного знака» с разным сроком — разные партии.
+  Сверяются по ТОВАРУ = `Product.search_name` (без бренда); партии `StockLot`,
   каждое изменение — `StockMovement` (отмены возвращают в те же партии). Готовка списывает
   состав кастрюли, «съел» — готовый продукт. «Базовые» товары не учитываются.
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
@@ -64,8 +72,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 76 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0011)
+.venv/bin/python -m pytest -q              # 81 тест, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0012)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)

@@ -157,3 +157,45 @@ class ShoppingListOut(BaseModel):
     status: str
     updated_at: Optional[datetime] = None
     lines: list[ShoppingLineResponse]
+
+
+# --- Пачки с кодами «Честного знака» ---
+class PackIn(BaseModel):
+    """Одна пачка: срок годности (из кода или введённый) и код маркировки, если сканировали."""
+
+    expires_on: Optional[date] = None
+    code: Optional[str] = Field(default=None, max_length=300)
+
+
+class PacksAdd(BaseModel):
+    """Добавить в запасы по пачкам: пачки с разным сроком станут разными партиями."""
+
+    product_id: int
+    variant_id: Optional[int] = None
+    pack_amount: Decimal = Qty               # сколько в одной пачке, в базовой единице
+    price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))  # за все пачки
+    purchased_on: Optional[date] = None
+    packs: list[PackIn] = Field(min_length=1, max_length=200)
+
+
+class PacksSplit(BaseModel):
+    """Разложить уже купленную партию по пачкам со своими сроками."""
+
+    pack_amount: Decimal = Qty
+    packs: list[PackIn] = Field(min_length=1, max_length=200)
+
+
+class MarkParseIn(BaseModel):
+    code: str = Field(min_length=10, max_length=300)
+
+
+class MarkParsed(BaseModel):
+    """Что удалось прочитать из кода маркировки."""
+
+    gtin: str
+    barcode: str                             # EAN-13, как в справочнике
+    serial: str
+    expires_on: Optional[date] = None
+    product_id: Optional[int] = None         # товар справочника с этим штрихкодом
+    product_name: Optional[str] = None
+    already_registered: bool = False         # эта пачка уже в запасах
