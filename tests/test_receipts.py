@@ -315,3 +315,22 @@ def test_qr_as_string_or_url():
     for qr in (real, f"  {real}\n", f"https://check.example/receipt?{real}"):
         f = parse_qr(qr)
         assert (f["t"], f["s"], f["fn"], f["fp"]) == ("20261015T2145", "100.63", "7380440903750419", "52085185")
+
+
+def test_real_codeqr_payload_vkusvill_weighed():
+    """Настоящий ответ code-qr.ru (ВкусВилл): сумма числом, дата «ДД.ММ.ГГГГ ЧЧ:ММ», «Апельсины,кг» — весовой."""
+    from datetime import datetime
+    from decimal import Decimal
+
+    from app.services import receipt as R
+
+    raw = {"success": True, "fn": 7380440903750419, "i": 8489, "fp": 52085185, "t": "15.10.2026 21:45",
+           "s": 100.63, "status": "done", "error": "",
+           "result": {"user": "АКЦИОНЕРНОЕ ОБЩЕСТВО \"ВКУСВИЛЛ\"", "user_inn": "7734443270",
+                      "items": [{"name": "Апельсины,кг", "quantity": 0.575, "price": 175, "sum": 100.63}]}}
+    assert R._parse_dt(raw["t"]) == datetime(2026, 10, 15, 21, 45)
+    assert R._money(raw["s"]) == Decimal("100.63")
+    items = R.normalize_items(raw["result"]["items"])
+    pack = R.parse_pack(items[0]["name"], items[0]["quantity"])
+    assert pack.weighed and pack.unit == "g" and pack.amount * Decimal(str(items[0]["quantity"])) == Decimal("575.000")
+    assert not R.is_non_food(items[0]["name"])
