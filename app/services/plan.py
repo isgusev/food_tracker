@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from app.core import clock
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain import (
     ITEM_IN_FRIDGE,
@@ -278,7 +279,7 @@ class PlanService:
         await self._plan.flush()
         if portion.is_eaten and item.variant_id is not None:
             await self._stock.revert(portion_id=portion.id)
-            await self._stock.consume_portion(item, portion, date.today())
+            await self._stock.consume_portion(item, portion, clock.today())
         await self._release(portion.eaten_from_pot_id)
         await self._release(item.cooking_log_id)
         return await self.response(item.id)
@@ -336,7 +337,7 @@ class PlanService:
             portion.eaten_from_pot_id = pot.id if pot is not None else None
         await self._plan.flush()
         for portion, _ in todo:
-            await self._stock.consume_portion(item, portion, date.today())
+            await self._stock.consume_portion(item, portion, clock.today())
         if pot is not None:
             # съели больше плана — поздним блюдам может уже не хватить
             await self._release(pot.id)

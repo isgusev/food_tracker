@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
     ZERO,
@@ -489,6 +490,6 @@ class RecipeService:
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
         await self._stock.adjust_pot(
-            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, date.today()
+            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, clock.today()
         )
         return full

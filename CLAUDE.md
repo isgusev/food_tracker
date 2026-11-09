@@ -54,6 +54,9 @@
   дальше — фоновая задача в lifespan (`app/services/receipt_poller.py`, раз в `RECEIPT_POLL_MINUTES`=10,
   только при заданном ключе, не в тестах); не дошёл за `RECEIPT_PENDING_DAYS`=3 дня — ошибка; ответ
   «нет пакета» чек не портит. Значок «🧾 Чек · готов» в «Покупках» — расшифрованные, но не разобранные.
+- Время: «сегодня» для учёта — только `app/core/clock.today()` (пояс семьи `APP_TIMEZONE`, по умолчанию
+  `Europe/Moscow`; сервер на Amvera в UTC). Метки времени в базе — UTC без пояса (`clock.utc_now()`);
+  выборка за местные дни — `clock.utc_bounds(start, end)` (полуинтервал). `date.today()` в коде не использовать.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
 
@@ -85,7 +88,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 94 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 96 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0014)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
@@ -125,7 +128,8 @@
 - Внешние платные API (code-qr.ru) — не дёргать в циклах/тестах: каждый чек списывается из пакета Ивана.
   Чек для проверки интерфейса можно положить прямо во временную базу (`receipts`, status `done`, items JSON).
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
-- Тесты с датами — относительно `date.today()` (`day()` в `tests/test_api.py`).
+- Тесты с датами — через `day()` в `tests/test_api.py` (он берёт `clock.today()`): с 00:00 до 03:00 МСК
+  серверное UTC-«сегодня» — вчера, на CI машина в UTC. Проверка: `TZ=UTC .venv/bin/python -m pytest -q`.
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)
   требуют подтверждения Ивана.
 
