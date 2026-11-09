@@ -7,6 +7,7 @@ import datetime as dt
 from fastapi import APIRouter, Query, Response
 
 from app.api.deps import CurrentMemberDep, CurrentUserDep, StockServiceDep
+from app.core import clock
 from app.schemas.stock import (
     ExtraLine,
     LineCheck,
@@ -27,7 +28,7 @@ async def preview(
     end_date: dt.date = Query(),
 ):
     """Что купить на период: потребность плана минус свободные запасы (без сохранения)."""
-    items = await service.to_buy(me.household_id, start_date, end_date, dt.date.today())
+    items = await service.to_buy(me.household_id, start_date, end_date, clock.today())
     return ShoppingPreview(start_date=start_date, end_date=end_date, items=items)
 
 
@@ -40,7 +41,7 @@ async def active_list(service: StockServiceDep, me: CurrentMemberDep):
 @router.post("/shopping-lists", response_model=ShoppingListOut)
 async def generate(payload: ListGenerate, service: StockServiceDep, me: CurrentMemberDep):
     """Сформировать или обновить активный список: отмеченное и добавленное вручную остаётся."""
-    return await service.generate(me.household_id, payload.start_date, payload.end_date, dt.date.today())
+    return await service.generate(me.household_id, payload.start_date, payload.end_date, clock.today())
 
 
 @router.post("/shopping-lists/{list_id}/close", status_code=204)
@@ -61,7 +62,7 @@ async def check(
 ):
     """«Куплено» — товар сразу попадает в запасы (количество по умолчанию — предложенные упаковки)."""
     lst, line = await service.get_owned_line(line_id, me.household_id)
-    return await service.check(lst, line, payload, user.id, dt.date.today())
+    return await service.check(lst, line, payload, user.id, clock.today())
 
 
 @router.post("/shopping-lists/lines/{line_id}/uncheck", response_model=ShoppingListOut)

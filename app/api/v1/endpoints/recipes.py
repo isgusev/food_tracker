@@ -1,12 +1,12 @@
 """Эндпоинты рецептов и «холодильника»."""
 from __future__ import annotations
 
-import datetime as dt
 from decimal import Decimal
 
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentMemberDep, CurrentUserDep, RecipeServiceDep
+from app.core import clock
 from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
@@ -106,7 +106,7 @@ async def cook_recipe_instance(
     me: CurrentMemberDep,
     current_user: CurrentUserDep,
 ):
-    return await service.cook(me.household_id, current_user.id, recipe_id, log_in, today=dt.date.today())
+    return await service.cook(me.household_id, current_user.id, recipe_id, log_in, today=clock.today())
 
 
 @router.get("/cooking-logs/{log_id}/usage", response_model=PotUsageResponse)
@@ -115,7 +115,7 @@ async def get_cooking_log_usage(
 ):
     """Даты, в которых кастрюля учтена в дневнике (прошлые / текущий+будущие)."""
     pot = await service.get_owned_pot(log_id, me.household_id)
-    usage = await service.pot_diary_usage(pot, dt.date.today())
+    usage = await service.pot_diary_usage(pot, clock.today())
     return PotUsageResponse(past_dates=usage["past"], current_future_dates=usage["current_future"])
 
 
@@ -135,7 +135,7 @@ async def delete_cooking_log(
     409, если блюдо учтено в дневнике за прошедшие даты (список дат в ответе).
     """
     pot = await service.get_owned_pot(log_id, me.household_id)
-    await service.delete_pot_safe(pot, remove_from_diary, dt.date.today())
+    await service.delete_pot_safe(pot, remove_from_diary, clock.today())
 
 
 @router.get("/cooking-logs/archive", response_model=list[PotArchiveItem])

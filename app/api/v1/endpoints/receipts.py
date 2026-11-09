@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 
-import datetime as dt
-
 from fastapi import APIRouter
 
 from app.api.deps import CurrentMemberDep, CurrentUserDep, ReceiptServiceDep
+from app.core import clock
 from app.schemas.receipt import ReceiptApply, ReceiptBrief, ReceiptCreate, ReceiptOut
 
 router = APIRouter(prefix="/receipts", tags=["Чеки"])
@@ -36,4 +35,4 @@ async def apply(
     receipt_id: int, payload: ReceiptApply, service: ReceiptServiceDep, me: CurrentMemberDep, user: CurrentUserDep
 ):
     """Разнести чек: list — «Куплено» строке списка, extra — покупка вне списка, skip — пропуск."""
-    return await service.apply(me.household_id, user.id, receipt_id, payload, dt.date.today())
+    return await service.apply(me.household_id, user.id, receipt_id, payload, clock.today())

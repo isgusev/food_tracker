@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 
+from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.household import Household, HouseholdMember
 from app.models.user import User
@@ -53,7 +54,7 @@ def _profile(member: HouseholdMember) -> BodyProfile:
 
 
 def calc_member_targets(data: TargetsCalcIn) -> TargetsCalcOut:
-    age = date.today().year - data.birth_year
+    age = clock.today().year - data.birth_year
     r = calc_targets(data.sex, age, data.height_cm, data.weight_kg, data.activity, data.goal)
     return TargetsCalcOut(
         targets=Targets(calories=r.calories, proteins=r.proteins, fats=r.fats, carbs=r.carbs),

@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     login_max_failures: int = 10
     login_window_minutes: int = 15
 
+    # Часовой пояс семьи: «сегодня» для учёта (сервер на хостинге живёт в UTC)
+    app_timezone: str = "Europe/Moscow"
+
     # --- Импорт кассовых чеков по QR (code-qr.ru → ФНС) ---
     # Ключ выдаётся в личном кабинете code-qr.ru; без него импорт чеков отключён
     codeqr_api_key: str | None = None

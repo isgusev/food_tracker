@@ -18,6 +18,7 @@ const RecipeModal = {
       name: r?.name || "",
       recipe_category_id: r?.recipe_category_id || state.recipeCategories[0]?.id || null,
       default_servings: r?.default_servings || 4,
+      allow_half: !!r?.allow_half,
       cooking_time_minutes: r?.cooking_time_minutes ?? null,
       estimated_cooked_weight: n(r?.estimated_cooked_weight) || null,
       instructions: r?.instructions || "",
@@ -53,6 +54,7 @@ const RecipeModal = {
         name: f.name.trim(),
         recipe_category_id: f.recipe_category_id,
         default_servings: Number(f.default_servings) || 1,
+        allow_half: !!f.allow_half,
         cooking_time_minutes: f.cooking_time_minutes === "" || f.cooking_time_minutes == null ? null : Number(f.cooking_time_minutes),
         estimated_cooked_weight: n(f.estimated_cooked_weight) || rawTotal.value,
         instructions: f.instructions || null,
@@ -86,6 +88,7 @@ const RecipeModal = {
           <span>{{ r.default_servings }} порц.</span>
           <span>· выход {{ grams(r.estimated_cooked_weight) }} (порция ≈ {{ grams(n(r.estimated_cooked_weight) / r.default_servings) }})</span>
           <span v-if="r.cooking_time_minutes">· {{ r.cooking_time_minutes }} мин</span>
+          <span v-if="r.allow_half">· можно половиной</span>
         </div>
         <div class="small"><span class="muted">На 100 г: </span>
           <Macros :m="{ calories: r.calories_per_100g, proteins: r.proteins_per_100g, fats: r.fats_per_100g, carbs: r.carbs_per_100g }" :digits="1" /></div>
@@ -119,6 +122,8 @@ const RecipeModal = {
           <label class="field"><span>Время, мин</span><input type="number" min="0" v-model="form.cooking_time_minutes"></label>
         </div>
         <div class="tiny muted">Выход ≠ сырой вес: крупы развариваются, мясо ужаривается. Если пусто — возьмём сырой вес.</div>
+        <label class="row small" style="gap: 8px; cursor: pointer"><input type="checkbox" v-model="form.allow_half">
+          <span>Можно готовить половиной <span class="muted">— в покупки пойдёт половина закладки, если на план её хватает</span></span></label>
         <label class="field"><span>Как готовить</span><textarea v-model="form.instructions"></textarea></label>
       </template>
 

@@ -350,3 +350,33 @@ async def test_lots_expiring_before_period_are_not_stock(client):
     await add_lot(client, h, yogurt["id"], 500, expires_on=day(1))
     await plan(client, h, date_day=day(3), variant_id=yogurt_v, meal="snack", portions=[{"member_id": await me_id(client, h), "weight_g": 200}])
     assert float((await preview(client, h, day(3)))[YOGURT]["to_buy"]) == 200
+
+
+# --- ЦЕЛЫЕ ЗАКЛАДКИ РЕЦЕПТА И КРАТНОСТЬ УПАКОВКИ ---
+
+
+async def test_recipe_bought_by_whole_batches_or_halves(client):
+    """Кастрюлю варят целиком: 1 порция из рецепта — в покупки вся закладка;
+    «можно половиной» — шаг полкастрюли. Потребность за период суммируется по рецепту."""
+    h = await register_and_login(client, "batch", "batch@test.com")
+    oats_v, recipe_id = await build_recipe_stack(client, h)       # каша: 60 г овсянки на 300 г готового
+    me = await me_id(client, h)
+    await plan(client, h, recipe_id=recipe_id, meal="breakfast", portions=[{"member_id": me, "weight_g": 100}])
+    item = (await preview(client, h))[OATS]
+    assert float(item["need"]) == 60 and float(item["to_buy"]) == 60      # 1/3 кастрюли → целая
+
+    # ещё 300 г в другой день: всего 400 г = 1,33 закладки → 2 целых
+    await plan(client, h, date_day=day(1), recipe_id=recipe_id, meal="breakfast", portions=[{"member_id": me, "weight_g": 300}])
+    assert float((await preview(client, h, TODAY, day(1)))[OATS]["need"]) == 120
+
+    # можно половиной: 1,33 → 1,5 закладки
+    r = await client.patch(f"/api/v1/recipes/{recipe_id}", json={"allow_half": True}, headers=h)
+    assert r.status_code == 200 and r.json()["allow_half"] is True
+    assert float((await preview(client, h, TODAY, day(1)))[OATS]["need"]) == 90
+    assert float((await preview(client, h))[OATS]["need"]) == 30           # 1/3 → половина
+
+    # упаковка есть — покупка всегда целыми упаковками
+    oats = await product_of_variant(client, h, oats_v)
+    await client.post(f"/api/v1/products/{oats['id']}/packages", json={"amount": 500}, headers=h)
+    item = (await preview(client, h, TODAY, day(1)))[OATS]
+    assert item["package_amount"] == "500.0" and item["package_count"] == 1

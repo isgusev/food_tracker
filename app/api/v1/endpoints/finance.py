@@ -7,6 +7,7 @@ import datetime as dt
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentMemberDep, FinanceServiceDep
+from app.core import clock
 from app.schemas.finance import BudgetIn, FinanceSummary, ItemPrice, PotCost, RecipeCost
 
 router = APIRouter(prefix="/finance", tags=["Финансы"])
@@ -20,7 +21,7 @@ async def summary(
     end_date: dt.date = Query(),
 ):
     """Потрачено, ушло в еду, выброшено, траты по категориям, прогноз покупок по плану."""
-    return await service.summary(me.household_id, start_date, end_date, dt.date.today())
+    return await service.summary(me.household_id, start_date, end_date, clock.today())
 
 
 @router.put("/budget", status_code=204)
