@@ -48,6 +48,7 @@ class RecipeCreate(BaseModel):
     instructions: Optional[str] = None
     created_by_user: str = "system"
     default_servings: int = Field(default=1, ge=1, le=100)
+    allow_half: bool = False
     estimated_cooked_weight: Decimal = Field(gt=0, le=Decimal("99999.9"))
     ingredients: list[IngredientLine] = Field(min_length=1)
 
@@ -68,6 +69,7 @@ class RecipeUpdate(BaseModel):
     cooking_time_minutes: Optional[int] = Field(default=None, ge=0)
     instructions: Optional[str] = None
     default_servings: Optional[int] = Field(default=None, ge=1, le=100)
+    allow_half: Optional[bool] = None
     estimated_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999.9"))
     ingredients: Optional[list[IngredientLine]] = Field(default=None, min_length=1)
 
@@ -97,6 +99,7 @@ class RecipeResponse(ORMModel):
     instructions: Optional[str]
     created_by_user: str
     default_servings: int
+    allow_half: bool = False
     total_raw_weight: Decimal
     estimated_cooked_weight: Decimal
     calories_per_100g: Decimal

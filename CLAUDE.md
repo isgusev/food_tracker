@@ -74,7 +74,9 @@
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
   производители с версиями КБЖУ, упаковки `ProductPackage` в единице товара (г/мл/шт).
   `POST /products/with-category` с `reuse_existing` и `package_amount/unit` — сохранение из OFF без дублей.
-- **Покупки** = потребность периода − (запасы − съедим до начала периода); общий
+- **Покупки** = потребность периода − (запасы − съедим до начала периода); рецепт — целыми закладками
+  за период (`Recipe.allow_half` — шаг полкастрюли), затем всегда до целых упаковок (упаковки — по всем
+  брендам товара; нет упаковки — в списке «📦 Упаковка?», добавили — список пересчитывается); общий
   `ShoppingList` (один активный на семью), «куплено» сразу создаёт партию.
 - **Финансы** — из цен партий (`app/services/finance.py`).
 - **Регистрация** только по одноразовым приглашениям (`RegistrationInvite`), первый
@@ -83,8 +85,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 93 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0013)
+.venv/bin/python -m pytest -q              # 94 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0014)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)

@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.domain import UNITS, grams_to_base, pick_packages, quantize
+from app.domain import UNITS, _ceil, grams_to_base, pick_packages, quantize
 from app.models.plan import MealItem, MealPortion
 from app.models.product import Product
 from app.models.recipe import RecipeCookingLog
@@ -493,7 +493,6 @@ class StockService:
         if start > end:
             return needs
         items = await self._plan.list_in_range(household_id, start, end, only_unbought=True)
-        recipes: dict[int, object] = {}
         products: dict[int, Product | None] = {}
 
         async def product_of(variant_id: int) -> Product | None:
@@ -501,23 +500,28 @@ class StockService:
                 products[variant_id] = await self._stock.product_for_variant(variant_id)
             return products[variant_id]
 
+        # Рецепт готовят целой кастрюлей: за период складываем недоеденное по рецепту
+        # и округляем вверх до целых закладок (1 порция из 4 — всё равно вся закладка;
+        # остаток ляжет в холодильник и закроет следующие планы)
+        recipe_need: dict[int, Decimal] = {}
         for item in items:
             need = remaining_weight(item)
             if need <= 0:
                 continue
             if item.variant_id is not None:
                 needs.add(await product_of(item.variant_id), item.variant_id, need)
-                continue
-            if item.recipe_id is None:
-                continue
-            if item.recipe_id not in recipes:
-                recipes[item.recipe_id] = await self._recipes.get_full(item.recipe_id)
-            recipe = recipes[item.recipe_id]
+            elif item.recipe_id is not None:
+                recipe_need[item.recipe_id] = recipe_need.get(item.recipe_id, ZERO) + need
+        for recipe_id, need in recipe_need.items():
+            recipe = await self._recipes.get_full(recipe_id)
             if recipe is None or _d(recipe.estimated_cooked_weight) <= 0:
                 continue
-            factor = need / _d(recipe.estimated_cooked_weight)
+            portions = quantize(need / _d(recipe.estimated_cooked_weight), "0.001")
+            # «можно половиной» — шаг полкастрюли, иначе — целая
+            step = Decimal("0.5") if recipe.allow_half else Decimal(1)
+            batches = Decimal(_ceil(portions / step)) * step
             for ing in recipe.template_ingredients:
-                needs.add(await product_of(ing.variant_id), ing.variant_id, _d(ing.weight_g) * factor)
+                needs.add(await product_of(ing.variant_id), ing.variant_id, _d(ing.weight_g) * batches)
         return needs
 
     async def to_buy(self, household_id: int, start: date, end: date, today: date) -> list[ShoppingItem]:

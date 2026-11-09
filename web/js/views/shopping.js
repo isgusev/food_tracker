@@ -17,6 +17,34 @@ function pkgText(l) {
   return l.needed ? fmtQty(l.needed, l.unit) : "";
 }
 
+// У товара нет упаковки — округлять покупку не до чего: спросим, сколько в пачке
+const PackageModal = {
+  components: { Modal },
+  props: { line: Object },
+  emits: ["close", "saved"],
+  setup(props, { emit }) {
+    const amount = ref("");
+    const busy = ref(false);
+    async function save() {
+      if (!(n(amount.value) > 0)) { toast("Укажите, сколько в одной упаковке", "error"); return; }
+      busy.value = true;
+      try {
+        await api.post(`/products/${props.line.product_id}/packages`, { amount: n(amount.value) });
+        emit("saved");
+      } catch (e) { toastError(e); } finally { busy.value = false; }
+    }
+    return { amount, busy, save, UNIT_LABEL, fmtQty, n };
+  },
+  template: `
+    <Modal :title="'Упаковка: ' + line.product_name" @close="$emit('close')">
+      <div class="small muted">Сейчас нужно {{ fmtQty(line.needed, line.unit) }}. Укажите, сколько в одной упаковке, —
+        покупка округлится до целых упаковок (для всех брендов этого товара).</div>
+      <label class="field"><span>В одной упаковке, {{ UNIT_LABEL[line.unit] }}</span>
+        <input type="number" min="0.1" step="any" v-model="amount" placeholder="930" autofocus @keydown.enter="save"></label>
+      <template #foot><button @click="$emit('close')">Отмена</button><button class="primary" :disabled="busy" @click="save">Сохранить и пересчитать</button></template>
+    </Modal>`,
+};
+
 // Позиция после «куплено»: количество, цена, срок
 const BoughtModal = {
   components: { Modal },
@@ -53,7 +81,7 @@ const BoughtModal = {
 };
 
 export const ShoppingView = {
-  components: { BoughtModal, Picker, ReceiptModal },
+  components: { BoughtModal, Picker, ReceiptModal, PackageModal },
   props: { query: Object },
   setup(props) {
     const lst = ref(null);
@@ -184,6 +212,16 @@ export const ShoppingView = {
       catch { toast("Не удалось скопировать", "error"); }
     }
 
+    // Упаковка добавлена — пересчитываем список за тот же период (отмеченное сохранится)
+    const packaging = ref(null);
+    async function onPackageSaved() {
+      packaging.value = null;
+      try {
+        lst.value = await api.post("/shopping-lists", { start_date: lst.value.start_date, end_date: lst.value.end_date });
+        toast("Упаковка сохранена — список пересчитан");
+      } catch (e) { toastError(e); }
+    }
+    const needsPackage = (l) => !l.package_amount && !l.is_staple && l.unit !== "pcs";
     const receiptOpen = ref(false);
     // Чеки, которые расшифровались, но ещё не разобраны («готов к проверке»)
     const receiptsReady = ref(0);
@@ -195,7 +233,7 @@ export const ShoppingView = {
     function onReceiptApplied() { receiptOpen.value = false; refresh(); loadReceiptsReady(); }
     function onReceiptClosed() { receiptOpen.value = false; loadReceiptsReady(); }
     return {
-      receiptOpen, onReceiptApplied, onReceiptClosed, receiptsReady,
+      receiptOpen, onReceiptApplied, onReceiptClosed, receiptsReady, packaging, onPackageSaved, needsPackage,
       lst, loading, start, end, editing, estimate, estTotal, queue, extraOpen, extraProduct, extraQty, groups, bought, spent, productItems,
       generate, check, uncheck, remove, addExtra, close, preset, copy, pkgText, fmt, fmtQty, fmtDayMonth, n,
       onSaved: (res) => { lst.value = res; editing.value = null; },
@@ -256,7 +294,9 @@ export const ShoppingView = {
                 <span v-if="l.is_extra" class="badge">вне плана</span>
                 <span v-if="l.brand" class="tiny muted"> · {{ l.brand }}</span></span>
               <span class="nowrap" style="text-align: right"><b class="num">{{ pkgText(l) }}</b>
-                <div v-if="estimate(l) != null" class="tiny muted num">≈ {{ fmt(estimate(l)) }} ₽</div></span>
+                <div v-if="estimate(l) != null" class="tiny muted num">≈ {{ fmt(estimate(l)) }} ₽</div>
+                <button v-if="needsPackage(l)" class="sm ghost" style="padding: 0 4px" @click="packaging = l"
+                        title="У товара нет упаковки — укажите, и покупка округлится до целых пачек">📦 Упаковка?</button></span>
               <button class="ghost icon sm" @click="remove(l)" title="Убрать из списка">✕</button>
             </div>
           </template>
@@ -279,6 +319,7 @@ export const ShoppingView = {
       </template>
 
       <BoughtModal v-if="editing" :line="editing" @close="editing = null" @saved="onSaved" />
+      <PackageModal v-if="packaging" :line="packaging" @close="packaging = null" @saved="onPackageSaved" />
       <ReceiptModal v-if="receiptOpen" @close="onReceiptClosed" @applied="onReceiptApplied" />
     </div>`,
 };

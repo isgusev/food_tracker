@@ -290,8 +290,9 @@ async def test_new_item_reserves_existing_pot_only_when_it_fits(client):
     too_much = await plan(client, h, date_day=day(2), recipe_id=recipe_id, portions=[{"member_id": me, "weight_g": 150}])
     assert fits["state"] == "in_fridge" and fits["cooking_log_id"] == pot_id
     assert too_much["state"] == "to_cook" and too_much["fridge_enough"] is False
-    # в покупки — только то, что не помещается: 150 из 300 → 30 г овсянки
-    assert (await shopping(client, h, day(1), day(2)))[vid] == 30.0
+    # в покупки — только то, что не помещается (150 г), но кастрюлю варят целиком:
+    # целая закладка → 60 г овсянки
+    assert (await shopping(client, h, day(1), day(2)))[vid] == 60.0
 
 
 async def test_manual_remainder_releases_items(client):
