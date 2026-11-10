@@ -110,9 +110,14 @@ def _ceil(x: Decimal) -> int:
     return int(Decimal(x).to_integral_value(rounding=ROUND_CEILING))
 
 
-def pick_packages(need: Decimal, amounts: list[Decimal], base_unit: str) -> tuple[Decimal | None, int | None]:
+def pick_packages(
+    need: Decimal, amounts: list[Decimal], base_unit: str, tolerance: Decimal = Decimal("0")
+) -> tuple[Decimal | None, int | None]:
     """Сколько упаковок взять, чтобы покрыть потребность с наименьшим излишком.
 
+    tolerance (доля 0…1) — допуск семьи: можно взять на упаковку меньше, если
+    недобор не больше tolerance от потребности (400 г при пачке 360 г и 15 % →
+    одна пачка, а не две). Тогда выбираем самое близкое к потребности.
     Нет упаковок: штучное — округляем до целых штук (пакет «1 шт»), остальное —
     как есть (None). При равном излишке — меньше упаковок.
     """
@@ -128,9 +133,11 @@ def pick_packages(need: Decimal, amounts: list[Decimal], base_unit: str) -> tupl
         if a <= 0:
             continue
         count = _ceil(need / a)
-        waste = count * a - need
-        if best is None or (waste, count) < (best[2], best[1]):
-            best = (a, count, waste)
+        if tolerance > 0 and count > 1 and (count - 1) * a >= need * (1 - tolerance):
+            count -= 1  # недобор в пределах допуска — лишнюю упаковку не берём
+        off = abs(count * a - need)
+        if best is None or (off, count) < (best[2], best[1]):
+            best = (a, count, off)
     if best is None:
         return None, None
     return best[0], best[1]

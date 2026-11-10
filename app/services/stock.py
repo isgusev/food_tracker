@@ -563,6 +563,7 @@ class StockService:
         # «обычно берёте» — по последней покупке; иначе — продукт из плана/рецепта
         usual = await self._stock.usual_products(household_id, item_keys)
         used_by_exact: dict[str, Decimal] = {}
+        tolerance = await self._stock.tolerance(household_id)
 
         out: list[ShoppingItem] = []
         # сначала «именно этот вариант»: берут только из партий своего продукта,
@@ -594,9 +595,10 @@ class StockService:
                 have = max(ZERO, stock.get(item_key, ZERO) - used_by_exact.get(item_key, ZERO))
             free = max(ZERO, have - before_q)
             buy = max(ZERO, need_q - free)
-            if buy <= 0:
+            # недостаёт немного (в пределах допуска семьи) того, что уже есть, — не покупаем
+            if buy <= 0 or (free > 0 and buy <= need_q * tolerance):
                 continue
-            pkg_amount, pkg_count = pick_packages(buy, amounts, unit)
+            pkg_amount, pkg_count = pick_packages(buy, amounts, unit, tolerance)
             shown = product if exact else (by_id.get(usual.get(item_key)) or product)
             out.append(self._item(shown, need if exact or shown is product else None, unit, need_q, free, buy,
                                   pkg_amount, pkg_count, exact=exact))

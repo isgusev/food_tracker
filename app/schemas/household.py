@@ -94,17 +94,20 @@ class HouseholdResponse(ORMModel):
     name: str
     invite_code: str
     monthly_budget: Optional[Decimal] = None
+    portion_tolerance: int = 15
     me_member_id: int
     members: list[MemberResponse]
 
 
 class HouseholdUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    # допуск кастрюли и упаковок, % (0 — строго по плану)
+    portion_tolerance: Optional[int] = Field(default=None, ge=0, le=30)
 
     @field_validator("name")
     @classmethod
-    def _strip(cls, v: str) -> str:
-        return _clean_name(v)
+    def _strip(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_name(v) if v is not None else v
 
 
 class JoinRequest(BaseModel):

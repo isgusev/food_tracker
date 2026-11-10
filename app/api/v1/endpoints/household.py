@@ -27,8 +27,9 @@ async def get_household(me: CurrentMemberDep, service: HouseholdServiceDep):
 
 
 @router.patch("", response_model=HouseholdResponse)
-async def rename_household(payload: HouseholdUpdate, me: CurrentMemberDep, service: HouseholdServiceDep):
-    return await service.rename(me, payload.name)
+async def update_household(payload: HouseholdUpdate, me: CurrentMemberDep, service: HouseholdServiceDep):
+    """Название семьи, допуск кастрюли и упаковок (%)."""
+    return await service.update(me, payload)
 
 
 @router.post("/members", response_model=HouseholdResponse, status_code=201)

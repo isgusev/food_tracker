@@ -342,7 +342,8 @@ class PlanService:
             await self._stock.consume_portion(item, portion, clock.today())
         if pot is not None:
             # съели больше плана — поздним блюдам может уже не хватить
-            await self._release(pot.id)
+            # (в пределах допуска их порции просто уменьшаются)
+            await self._release(pot.id, shrink=True)
 
     async def uneat_portion(self, item: MealItem, portion: MealPortion) -> MealItemResponse:
         """Отменить «съедено»: вес возвращается в кастрюлю, порция снова в плане."""
@@ -377,12 +378,16 @@ class PlanService:
             if pot is not None and not pot.is_discarded:
                 self._set_remaining(pot, _d(pot.current_remaining_weight) + _d(portion.weight_g))
 
-    async def _release(self, pot_id: int | None) -> None:
+    async def _release(self, pot_id: int | None, shrink: bool = False) -> None:
+        """Отвязать блюда, которым не хватает кастрюли. shrink — событие самой кастрюли
+        (съели из неё): тогда в пределах допуска порции уменьшаются. Правки плана
+        (вес порции, новая порция) — без допуска: заданный вес не меняем."""
         if pot_id is None:
             return
         pot = await self._cooking_logs.get(pot_id)
         if pot is not None:
-            await self._plan.release_overbooked(pot.id, _d(pot.current_remaining_weight))
+            tolerance = await self._plan.tolerance(pot.household_id) if shrink else ZERO
+            await self._plan.release_overbooked(pot.id, _d(pot.current_remaining_weight), tolerance)
 
     async def pot_status(
         self, household_id: int, recipe_id: int, portion_g: Decimal | None
