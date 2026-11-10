@@ -19,7 +19,8 @@ def _load(filename: str):
 
 migration = _load("0018_base_catalog.py")
 more = _load("0019_base_catalog_more.py")
-ALL = migration.CATALOG + more.CATALOG
+extra = _load("0020_base_catalog_extra.py")
+ALL = migration.CATALOG + more.CATALOG + extra.CATALOG
 
 
 def test_catalog_values_pass_calorie_check():
@@ -38,4 +39,4 @@ def test_catalog_names_unique_and_units_valid():
         assert all(0 <= x <= 900 for x in row[2:6])
         if len(row) > 6:
             assert row[6] in ("g", "ml", "pcs") and (row[6] != "pcs" or row[7])
-    assert len(migration.CATALOG) >= 80 and len(more.CATALOG) >= 15
+    assert len(migration.CATALOG) >= 80 and len(more.CATALOG) >= 15 and len(extra.CATALOG) >= 60

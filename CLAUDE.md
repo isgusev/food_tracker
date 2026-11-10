@@ -89,7 +89,8 @@
   рыба, яйца, крупы, базовая молочка, масла, сахар/соль/мёд, орехи; КБЖУ по Скурихину, `created_by_user =
   'base_catalog'`). Идемпотентна: есть такой «Без бренда» — пропуск; есть товар с тем же названием — встаёт в него
   с его единицей. Новые базовые продукты — новой миграцией (не правкой 0018): `0019_base_catalog_more` — говядина
-  по жирности, фарш, молоко/кефир/творог/сливки разной жирности (98 всего). Данные проверяет `tests/test_base_catalog.py`.
+  по жирности, фарш, молоко/кефир/творог/сливки разной жирности; `0020_base_catalog_extra` — сметана, свинина по
+  частям, птица и субпродукты, овощи, фрукты, ягоды, сухофрукты, орехи, крупы, рыба (166 всего). Данные проверяет `tests/test_base_catalog.py`.
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
   производители с версиями КБЖУ, упаковки `ProductPackage` в единице товара (г/мл/шт).
   `POST /products/with-category` с `reuse_existing` и `package_amount/unit` — сохранение из OFF без дублей.
@@ -113,7 +114,7 @@
 
 ```bash
 .venv/bin/python -m pytest -q              # 105 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0019)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0020)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
