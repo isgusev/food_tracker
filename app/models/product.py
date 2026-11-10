@@ -75,6 +75,9 @@ class Product(Base):
     piece_weight_g = Column(Numeric(7, 1), nullable=True)
     # Штрихкод упаковки (EAN): один код — один продукт конкретного бренда
     barcode = Column(String(32), nullable=True, unique=True)
+    # КБЖУ ещё не внесены (продукт завели из чека / внеплановой покупки «на потом»):
+    # активная версия — заглушка с нулями; первая настоящая версия снимает флаг
+    kbju_missing = Column(Boolean, default=False, nullable=False, server_default="false")
     # Товар (базовое наименование), по которому идут запасы и покупки
     item_key = Column(
         String(255), ForeignKey("items.key", ondelete="RESTRICT"), nullable=False, index=True

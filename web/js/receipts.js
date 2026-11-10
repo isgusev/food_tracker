@@ -4,12 +4,35 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
 import { api } from "./api.js";
 import { Modal, Picker, BarcodeScanner } from "./components.js";
-import { state, toast, toastError } from "./store.js";
-import { fmt, fmtDateTime, fmtQty, n, UNIT_LABEL } from "./util.js";
+import { state, loadProducts, toast, toastError } from "./store.js";
+import { fmt, fmtDateTime, fmtQty, fuzzyScore, local, n, UNIT_LABEL } from "./util.js";
+
+const LAST_CATEGORY = "ft.lastProductCategory";
+const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(кг|гр|г|мл|л)(?![а-яa-z])/gi;
+
+// Название для нового продукта из строки чека: без размера, «,кг», «вес», лишних пробелов
+function cleanName(name) {
+  const s = name.replace(SIZE_RE, " ").replace(/[,;]\s*(кг|шт|вес)\.?\s*$/i, " ").replace(/(?<![а-яё])вес(?![а-яё])\.?/gi, " ")
+    .replace(/\s+/g, " ").replace(/[\s,.;:-]+$/, "").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : name.trim();
+}
+// Упаковка из названия («930мл» → 930 мл); у весового товара упаковки нет
+function packOf(item) {
+  if (n(item.quantity) % 1 || /(?<![а-яё])вес(?![а-яё])|,\s*кг\s*$/i.test(item.name)) return null;
+  const all = [...item.name.matchAll(SIZE_RE)];
+  if (!all.length) return null;
+  const [, num, u] = all[all.length - 1];
+  const v = Number(num.replace(",", ".")), unit = u.toLowerCase();
+  if (!(v > 0)) return null;
+  if (unit === "кг") return { amount: v * 1000, unit: "g" };
+  if (unit === "л") return { amount: v * 1000, unit: "ml" };
+  return { amount: v, unit: unit === "мл" ? "ml" : "g" };
+}
 
 const SOURCE = { alias: "запомнено", list: "из списка", catalog: "похоже", none: "" };
 
-// Строка чека → редактируемое решение: choice = "skip" | "line:<id>" | "product"
+// Строка чека → редактируемое решение: choice = "skip" | "line:<id>" | "product" | "new"
+// ("new" — продукта нет в справочнике: заводим по названию, КБЖУ внесут при использовании)
 function rowFrom(item, lines) {
   const s = item.suggestion || { action: "skip", source: "none" };
   let choice = "skip";
@@ -19,6 +42,7 @@ function rowFrom(item, lines) {
     index: item.index, item, source: s.source, confidence: s.confidence || 0,
     choice, product_id: s.product_id || null,
     quantity: s.quantity != null ? n(s.quantity) : "", qtyEdited: false,
+    newName: cleanName(item.name), newCategory: local.get(LAST_CATEGORY, "") || "Прочее",
   };
 }
 
@@ -96,8 +120,18 @@ export const ReceiptModal = {
     const lineById = computed(() => Object.fromEntries(lines.value.map((l) => [l.id, l])));
     function unitOf(r) {
       if (r.choice.startsWith("line:")) return lineById.value[Number(r.choice.slice(5))]?.unit || "g";
+      if (r.choice === "new") return packOf(r.item)?.unit || "g";
       return state.products.find((p) => p.id === r.product_id)?.base_unit || r.item.suggestion?.unit || "g";
     }
+    // «Новый продукт»: сначала покажем похожие из справочника — вдруг он уже есть
+    function similar(r) {
+      const name = (r.newName || "").trim();
+      if (name.length < 3) return [];
+      return state.products
+        .map((p) => ({ p, s: Math.max(fuzzyScore(name, `${p.name} ${p.brand?.name || ""}`), fuzzyScore(p.name, name)) }))
+        .filter((x) => x.s >= 0.6).sort((a, b) => b.s - a.s).slice(0, 3).map((x) => x.p);
+    }
+    function useExisting(r, p) { r.choice = "product"; r.product_id = p.id; }
     // одна строка списка — одной строке чека
     const usedLines = computed(() => new Set(rows.value.filter((r) => r.choice.startsWith("line:")).map((r) => r.choice)));
     const chosen = computed(() => rows.value.filter((r) => r.choice !== "skip"));
@@ -105,6 +139,25 @@ export const ReceiptModal = {
 
     async function apply() {
       error.value = "";
+      const noProduct = rows.value.find((r) => r.choice === "product" && !r.product_id);
+      if (noProduct) { error.value = `Выберите продукт для «${noProduct.item.name}» или пропустите строку`; return; }
+      const noName = rows.value.find((r) => r.choice === "new" && !(r.newName.trim() && r.newCategory.trim()));
+      if (noName) { error.value = `Укажите название и категорию нового продукта для «${noName.item.name}»`; return; }
+      busy.value = true;
+      try {
+        // новые продукты — в справочник без КБЖУ (тот же по названию не задвоится)
+        let created = false;
+        for (const r of rows.value.filter((x) => x.choice === "new")) {
+          const pk = packOf(r.item);
+          const p = await api.post("/products/with-category", {
+            category_name: r.newCategory.trim(), name: r.newName.trim(), reuse_existing: true,
+            package_amount: pk?.amount || null, package_unit: pk ? pk.unit : null,
+          });
+          local.set(LAST_CATEGORY, r.newCategory.trim());
+          r.product_id = p.id; r.choice = "product"; created = true;
+        }
+        if (created) await loadProducts();
+      } catch (e) { error.value = e.message; busy.value = false; return; }
       const body = rows.value.map((r) => {
         if (r.choice === "skip") return { index: r.index, action: "skip" };
         const line = { index: r.index, price: n(r.item.sum) };
@@ -112,9 +165,6 @@ export const ReceiptModal = {
         if (r.choice.startsWith("line:")) return { ...line, action: "list", shopping_line_id: Number(r.choice.slice(5)) };
         return { ...line, action: "extra", product_id: r.product_id };
       });
-      const noProduct = rows.value.find((r) => r.choice === "product" && !r.product_id);
-      if (noProduct) { error.value = `Выберите продукт для «${noProduct.item.name}» или пропустите строку`; return; }
-      busy.value = true;
       try {
         await api.post(`/receipts/${receipt.value.id}/apply`, { lines: body });
         toast(`Чек сохранён, покупок: ${chosen.value.length}`);
@@ -123,7 +173,7 @@ export const ReceiptModal = {
     }
     return {
       receipt, recent, lines, rows, qr, scanning, busy, error, submit, open, refresh, apply, back, polling, nextIn,
-      productItems, lineById, unitOf, usedLines, chosen, chosenSum, SOURCE, fmt, fmtDateTime, fmtQty, n, UNIT_LABEL,
+      productItems, lineById, unitOf, usedLines, similar, useExisting, state, chosen, chosenSum, SOURCE, fmt, fmtDateTime, fmtQty, n, UNIT_LABEL,
     };
   },
   template: `
@@ -166,6 +216,7 @@ export const ReceiptModal = {
         <div v-else-if="receipt.status === 'error'" class="alert error">{{ receipt.error || 'Сервис не смог расшифровать чек' }}</div>
         <div v-else-if="receipt.status === 'applied'" class="alert info">Этот чек уже сохранён в покупки.</div>
 
+        <datalist id="receipt-cat-list"><option v-for="c in state.productCategories" :key="c.id" :value="c.name" /></datalist>
         <div v-if="receipt.status === 'done'" class="stack tight">
           <div v-for="r in rows" :key="r.index" class="receipt-row" :class="{ skipped: r.choice === 'skip' }">
             <div class="row between small" style="flex-wrap: nowrap; align-items: flex-start">
@@ -179,14 +230,27 @@ export const ReceiptModal = {
                   <option v-for="l in lines" :key="l.id" :value="'line:' + l.id"
                           :disabled="usedLines.has('line:' + l.id) && r.choice !== 'line:' + l.id">{{ l.product_name }}</option>
                 </optgroup>
-                <option value="product">Продукт не из списка…</option>
+                <option value="product">Другой продукт из справочника…</option>
+                <option value="new">Новый продукт — нет в справочнике…</option>
               </select>
               <template v-if="r.choice !== 'skip'">
                 <input type="number" min="0.1" step="any" v-model="r.quantity" @input="r.qtyEdited = true" style="width: 84px" placeholder="авто" aria-label="Количество">
                 <span class="small muted">{{ UNIT_LABEL[unitOf(r)] }}</span>
               </template>
             </div>
-            <Picker v-if="r.choice === 'product'" :items="productItems" v-model="r.product_id" placeholder="Какой продукт…" />
+            <Picker v-if="r.choice === 'product'" :items="productItems" v-model="r.product_id" placeholder="Найти в справочнике…" />
+            <div v-if="r.choice === 'new'" class="stack tight">
+              <div class="row" style="flex-wrap: nowrap">
+                <input v-model="r.newName" class="grow" style="min-width: 0" placeholder="Название продукта" aria-label="Название нового продукта">
+                <input v-model="r.newCategory" list="receipt-cat-list" style="width: 40%" placeholder="Категория" aria-label="Категория">
+              </div>
+              <div v-if="similar(r).length" class="tiny">
+                <span class="muted">Похожие уже есть: </span>
+                <button v-for="p in similar(r)" :key="p.id" class="sm ghost" style="padding: 0 6px" @click="useExisting(r, p)"
+                        title="Взять этот продукт вместо нового">{{ p.name }}<template v-if="p.brand && p.brand.name !== 'Без бренда'"> · {{ p.brand.name }}</template></button>
+              </div>
+              <span class="tiny muted">Сохранится в справочник без КБЖУ — внесёте, когда добавите продукт в план или рецепт.</span>
+            </div>
             <span v-if="r.choice !== 'skip' && SOURCE[r.source]" class="tiny muted">{{ SOURCE[r.source] }}{{ r.source !== 'alias' ? ' · ' + Math.round(r.confidence * 100) + '%' : '' }}</span>
           </div>
         </div>

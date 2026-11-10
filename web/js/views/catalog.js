@@ -218,6 +218,7 @@ export const CatalogView = {
           <tbody>
             <tr v-for="r in rows" :key="r.p.id" style="cursor: pointer" @click="opened = r.p">
               <td><b>{{ r.p.name }}</b> <span v-if="r.warn" class="badge warn" title="Калории не сходятся с БЖУ">⚠</span>
+                <span v-if="r.p.kbju_missing" class="badge warn" title="Продукт добавлен из чека или покупок — внесите КБЖУ: откройте его и нажмите «Новые КБЖУ»">нет КБЖУ</span>
                 <div class="tiny muted"><span v-if="r.p.item && r.p.item.name !== r.p.name">{{ r.p.item.name }} · </span>{{ r.p.brand?.name }}<span v-if="r.makers > 1"> · {{ r.makers }} производителя</span> · {{ packagesLabel(r.p.packages, r.p.base_unit) }}</div></td>
               <td class="small muted">{{ categoryName[r.p.category_id] }}</td>
               <td class="r num">{{ fmt(r.v.calories) }}</td><td class="r num">{{ fmt(r.v.proteins, 1) }}</td>

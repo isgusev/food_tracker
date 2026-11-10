@@ -73,7 +73,7 @@ def display_name(variant, variant_id: int) -> str:
     m_name = manufacturer.name or ""
     # производитель — только если отличается от бренда: «Творог (Простоквашино)»
     parts = [brand_name] + ([m_name] if m_name and m_name.lower() != brand_name.lower() else [])
-    parts = [x for x in parts if x]
+    parts = [x for x in parts if x and x.lower() != "без бренда"]
     return f"{product.name} ({' / '.join(parts)})" if parts else product.name
 
 

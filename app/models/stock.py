@@ -175,6 +175,8 @@ class ShoppingLine(Base):
     is_extra = Column(Boolean, default=False, nullable=False)    # добавлено вручную
     is_staple = Column(Boolean, default=False, nullable=False)   # «базовый, заканчивается»
     is_exact = Column(Boolean, default=False, nullable=False, server_default="false")  # именно этот бренд
+    # Добавлено вручную поверх расчёта по плану («ещё йогурт»): переживает «Пересчитать»
+    added = Column(Numeric(9, 1), nullable=True)
     is_checked = Column(Boolean, default=False, nullable=False)
     checked_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True

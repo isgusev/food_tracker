@@ -606,7 +606,7 @@ class ReceiptService:
         lst = await self._lists.active(household_id)
         if lst is not None:
             # видно в списке как покупка «вне плана», дальше — обычное «Куплено»
-            await self._stock.add_extra(lst, product.id, qty)
+            await self._stock.add_extra(lst, product.id, qty, merge=False)
             line = max(
                 (x for x in lst.lines if x.is_extra and not x.is_checked and x.product_id == product.id),
                 key=lambda x: x.id,

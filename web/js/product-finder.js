@@ -39,9 +39,15 @@ export function draftFrom(s, source = "off") {
   };
 }
 
-export function draftError(d) {
+const KBJU_KEYS = ["calories", "proteins", "fats", "carbs"];
+const kbjuEmpty = (k) => KBJU_KEYS.every((key) => k[key] === "" || k[key] == null);
+
+// kbjuOptional — КБЖУ можно не вносить вовсе (покупки, чек): продукт сохранится «без КБЖУ»,
+// цифры спросим при первом использовании в плане или рецепте
+export function draftError(d, { kbjuOptional = false } = {}) {
   if (!d.name.trim() || !d.category.trim()) return "Укажите название и категорию";
-  if (["calories", "proteins", "fats", "carbs"].some((k) => d.kbju[k] === "" || d.kbju[k] == null)) {
+  if (kbjuOptional && kbjuEmpty(d.kbju)) return "";
+  if (KBJU_KEYS.some((k) => d.kbju[k] === "" || d.kbju[k] == null)) {
     return "Заполните КБЖУ на 100 г — с упаковки";
   }
   return "";
@@ -58,7 +64,8 @@ export async function saveDraft(d, { reuse = true } = {}) {
     package_amount: d.package_amount || null,
     package_unit: d.package_amount ? d.package_unit : null,
     reuse_existing: reuse,
-    base_variant: {
+    // КБЖУ не внесены — продукт сохраняется «на потом» (kbju_missing)
+    base_variant: kbjuEmpty(d.kbju) ? null : {
       manufacturer_name: d.manufacturer.trim() || d.brand.trim() || null,
       calories: n(d.kbju.calories), proteins: n(d.kbju.proteins), fats: n(d.kbju.fats), carbs: n(d.kbju.carbs),
     },
@@ -109,8 +116,9 @@ function useOffSearch() {
 // ---------- Поиск продукта для плана ----------
 // v-model — variant_id своего продукта; v-model:draft — черновик из Open Food Facts
 export const ProductFinder = {
-  components: { BarcodeScanner },
-  props: { modelValue: [Number, null], draft: Object, autofocus: Boolean },
+  components: { BarcodeScanner, KbjuInputs },
+  // kbjuPrompt — там, где КБЖУ нужны (план, рецепт): у продукта «без КБЖУ» спросить их сразу
+  props: { modelValue: [Number, null], draft: Object, autofocus: Boolean, kbjuPrompt: Boolean },
   emits: ["update:modelValue", "update:draft"],
   setup(props, { emit }) {
     const query = ref("");
@@ -136,6 +144,28 @@ export const ProductFinder = {
         source: props.draft.source === "manual" ? "вручную" : "Open Food Facts",
       } : null);
     const isCode = computed(() => CODE_RE.test(query.value.trim()));
+
+    // Продукт завели без КБЖУ (из чека) — вносим цифры здесь: появится новая версия,
+    // и выбор переключится на неё
+    const fill = ref({ calories: "", proteins: "", fats: "", carbs: "" });
+    const fillBusy = ref(false);
+    const fillError = ref("");
+    const needsKbju = computed(() => props.kbjuPrompt && !!selected.value?.kbjuMissing);
+    async function saveKbju() {
+      fillError.value = "";
+      const k = fill.value;
+      if (KBJU_KEYS.some((key) => k[key] === "" || k[key] == null)) { fillError.value = "Заполните все четыре поля — с упаковки"; return; }
+      fillBusy.value = true;
+      try {
+        const v = await api.post(`/products/${selected.value.product.id}/variants`, {
+          manufacturer_name: selected.value.manufacturer.name || null,
+          calories: n(k.calories), proteins: n(k.proteins), fats: n(k.fats), carbs: n(k.carbs),
+        });
+        await loadProducts();
+        emit("update:modelValue", v.id);
+        fill.value = { calories: "", proteins: "", fats: "", carbs: "" };
+      } catch (e) { fillError.value = e.message; } finally { fillBusy.value = false; }
+    }
 
     const localRows = computed(() => {
       const q = query.value.trim();
@@ -216,7 +246,7 @@ export const ProductFinder = {
     onMounted(() => { if (props.autofocus && !chosen.value) nextTick(() => input.value?.focus()); });
     return {
       query, input, scanning, hint, off, search, chosen, isCode, localRows, offRows, onScan, pickLocal, pickOff, change,
-      enterManually, clear, root, listOpen,
+      enterManually, clear, root, listOpen, fill, fillBusy, fillError, needsKbju, saveKbju,
       offSub, offKcal, bjuOf, fmt,
     };
   },
@@ -229,7 +259,13 @@ export const ProductFinder = {
         </span>
         <button class="sm" @click="change">Изменить</button>
       </div>
-      <template v-else>
+      <div v-if="needsKbju" class="card stack tight">
+        <div class="small"><b>У этого продукта ещё нет КБЖУ</b> <span class="muted">— его добавили из чека или покупок. Внесите цифры с упаковки, на 100 г.</span></div>
+        <KbjuInputs v-model="fill" />
+        <div v-if="fillError" class="small" style="color: var(--warn)">{{ fillError }}</div>
+        <div class="row"><span class="grow"></span><button class="sm primary" :disabled="fillBusy" @click="saveKbju">Сохранить КБЖУ</button></div>
+      </div>
+      <template v-if="!chosen">
         <div class="row" style="flex-wrap: nowrap">
           <div class="clearable">
             <input ref="input" v-model="query" placeholder="Название, бренд или штрихкод…" autocomplete="off" enterkeyhint="search"
@@ -250,7 +286,8 @@ export const ProductFinder = {
             <div v-for="v in localRows" :key="v.id" class="picker-item" @click="pickLocal(v)">
               <span class="grow" style="min-width: 0"><span>{{ v.name }}</span>
                 <span class="tiny muted ellipsis" style="display: block">{{ v.subFull }}</span></span>
-              <span class="finder-right"><span>{{ fmt(v.calories) }} ккал</span><span class="tiny">{{ bjuOf(v) }}</span></span>
+              <span v-if="v.kbjuMissing" class="finder-right"><span>нет КБЖУ</span></span>
+              <span v-else class="finder-right"><span>{{ fmt(v.calories) }} ккал</span><span class="tiny">{{ bjuOf(v) }}</span></span>
             </div>
           </template>
           <div v-else-if="!isCode" class="picker-item muted small">В приложении не нашли</div>
@@ -277,7 +314,8 @@ export const ProductFinder = {
 // ---------- Черновик из Open Food Facts: проверить и дополнить перед сохранением ----------
 export const OffDraftCard = {
   components: { KbjuInputs, BarcodeScanner },
-  props: { draft: { type: Object, required: true } },
+  // kbjuOptional — КБЖУ можно оставить пустыми (покупки): спросим при первом использовании
+  props: { draft: { type: Object, required: true }, kbjuOptional: Boolean },
   setup(props) {
     const unitLabel = { g: "г", ml: "мл", pcs: "шт" };
     const scanning = ref(false);
@@ -309,6 +347,7 @@ export const OffDraftCard = {
       </div>
       <label class="field"><span>Производитель (если отличается от бренда)</span><input v-model="draft.manufacturer"></label>
       <KbjuInputs v-model="draft.kbju" />
+      <div v-if="kbjuOptional" class="tiny muted">КБЖУ можно не заполнять сейчас — спросим, когда добавите продукт в план или рецепт.</div>
       <div class="row small">
         <span class="muted">Упаковка</span>
         <input type="number" min="0" step="any" v-model.number="draft.package_amount" placeholder="—" style="width: 90px">
@@ -364,7 +403,7 @@ export const IngredientsEditor = {
       if (r.draft) return { name: r.draft.name || "Новый продукт", sub: r.draft.source === "manual" ? "новый, заполните данные" : "из Open Food Facts" };
       const v = variantIndex.value[r.variant_id];
       if (!v) return { name: "Продукт не выбран", sub: "", empty: true };
-      return { name: v.name, sub: [v.sub, v.active ? "" : "старая версия КБЖУ"].filter(Boolean).join(" · ") };
+      return { name: v.name, sub: [v.sub, v.active ? "" : "старая версия КБЖУ", v.kbjuMissing ? "нет КБЖУ — нажмите «Изменить»" : ""].filter(Boolean).join(" · ") };
     }
     function per100Of(r) {
       if (r.draft) {
@@ -409,7 +448,7 @@ export const IngredientsEditor = {
         <div v-else class="stack tight">
           <div class="ingr-row">
             <div class="ingr-find">
-              <ProductFinder :modelValue="r.variant_id" :draft="r.draft" :autofocus="r._k === focusKey"
+              <ProductFinder :modelValue="r.variant_id" :draft="r.draft" :autofocus="r._k === focusKey" kbjuPrompt
                 @update:modelValue="update(i, { variant_id: $event })" @update:draft="update(i, { draft: $event })" />
             </div>
             <div class="ingr-qty">
@@ -438,6 +477,10 @@ export const IngredientsEditor = {
 // Перед сохранением состава: черновики ингредиентов (из Open Food Facts или ручные) —
 // в справочник, строкам — их variant_id. Ошибка в черновике — с названием ингредиента.
 export async function resolveDraftIngredients(rows) {
+  for (const r of rows) {
+    const v = r.variant_id && variantIndex.value[r.variant_id];
+    if (v?.kbjuMissing) throw new Error(`Ингредиент «${v.name}»: у продукта нет КБЖУ — откройте его («Изменить») и внесите цифры`);
+  }
   for (const r of rows) {
     if (!r.draft || r.variant_id) continue;
     const err = draftError(r.draft);

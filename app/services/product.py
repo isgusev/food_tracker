@@ -119,7 +119,12 @@ class ProductService:
         self._products.add(product)
         await self._products.flush()  # получаем product.id внутри той же транзакции
 
-        await self.create_variant(product.id, data.base_variant)
+        if data.base_variant is None:
+            # КБЖУ внесут позже: версия-заглушка с нулями, продукт помечен
+            product.kbju_missing = True
+            await self.create_variant(product.id, ProductVariantCreate(calories=0, proteins=0, fats=0, carbs=0), placeholder=True)
+        else:
+            await self.create_variant(product.id, data.base_variant)
         full = await self._products.get_full(product.id)
         assert full is not None
         return full
@@ -314,7 +319,7 @@ class ProductService:
         return manufacturer
 
     async def create_variant(
-        self, product_id: int, data: ProductVariantCreate
+        self, product_id: int, data: ProductVariantCreate, *, placeholder: bool = False
     ) -> ProductVariant:
         product = await self._products.get(product_id)
         if product is None:
@@ -347,6 +352,10 @@ class ProductService:
         await self._variants.flush()
         if current_active is not None:
             await self._retarget(current_active.id, variant.id)
+            # настоящие цифры заменили заглушку — продукт больше не «без КБЖУ»
+            if product.kbju_missing and not placeholder:
+                product.kbju_missing = False
+                await self._products.flush()
         return variant
 
     async def _retarget(self, old_variant_id: int, new_variant_id: int) -> None:

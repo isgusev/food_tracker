@@ -118,3 +118,29 @@ async def test_move_product_to_new_item_and_rename(client):
     r = await client.put(f"/api/v1/items/products/{b['id']}", json={"item_key": a["item_key"]}, headers=h)
     assert r.status_code == 200 and len(r.json()["products"]) == 2
     assert "Сыр плавленый" not in {i["name"] for i in (await client.get("/api/v1/items", headers=h)).json()}
+
+
+async def test_product_without_kbju_then_filled(client):
+    """Продукт «на потом» (из чека): без КБЖУ, помечен; первые настоящие цифры снимают пометку,
+    и рецепты/планы переходят на новую версию."""
+    h = await register_and_login(client, "item5", "item5@test.com")
+    r = await client.post("/api/v1/products/with-category", headers=h, json={
+        "category_name": "Фрукты", "name": "Апельсины", "reuse_existing": True,
+        "package_amount": 1000, "package_unit": "g"})
+    assert r.status_code == 201, r.text
+    p = r.json()
+    assert p["kbju_missing"] is True and p["brand"]["name"] == "Без бренда"
+    placeholder = p["manufacturers"][0]["variants"][0]
+    assert float(placeholder["calories"]) == 0 and placeholder["is_active"]
+    # повтор — тот же продукт, без дублей
+    again = await client.post("/api/v1/products/with-category", headers=h, json={
+        "category_name": "Фрукты", "name": "апельсины", "reuse_existing": True})
+    assert again.status_code == 201 and again.json()["id"] == p["id"]
+
+    r = await client.post(f"/api/v1/products/{p['id']}/variants", headers=h,
+                          json={"calories": 43, "proteins": 0.9, "fats": 0.2, "carbs": 8.1})
+    assert r.status_code == 201, r.text
+    fresh = next(x for x in (await client.get("/api/v1/products/", params={"q": "апельсин"}, headers=h)).json())
+    assert fresh["kbju_missing"] is False
+    active = [v for m in fresh["manufacturers"] for v in m["variants"] if v["is_active"]]
+    assert len(active) == 1 and float(active[0]["calories"]) == 43

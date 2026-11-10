@@ -58,7 +58,9 @@ def _now() -> datetime:
 
 
 def brand_of(product: Product | None) -> str | None:
-    return product.brand.name if product is not None and product.brand else None
+    """Бренд для показа; служебный «Без бренда» — это отсутствие бренда."""
+    name = product.brand.name if product is not None and product.brand else None
+    return None if name and name.lower() == "без бренда" else name
 
 
 @dataclass
@@ -86,7 +88,11 @@ class Needs:
 
 def exact_key(product: Product) -> str:
     """Ключ «именно этот вариант»: товар + продукт («кефир 3,2%#17»)."""
-    return f"{product.item_key}#{product.id}"
+    return exact_key_of(product.item_key, product.id)
+
+
+def exact_key_of(item_key: str, product_id: int) -> str:
+    return f"{item_key}#{product_id}"
 
 
 class StockService:
@@ -625,25 +631,52 @@ class StockService:
     async def generate(
         self, household_id: int, start: date, end: date, today: date
     ) -> ShoppingListOut:
-        """Сформировать/обновить активный список: отмеченное и добавленное вручную
-        остаётся, расчётные неотмеченные строки пересчитываются с учётом запасов."""
+        """Сформировать/обновить активный список: отмеченное остаётся, расчётные строки
+        пересчитываются с учётом запасов, а добавленное вручную («ещё йогурт») сохраняется
+        и прибавляется к строке того же товара — одна строка на товар."""
         items = await self.to_buy(household_id, start, end, today)
         lst = await self._lists.active(household_id)
         if lst is None:
             lst = await self._lists.create_active(household_id, start, end)
         lst.start_date, lst.end_date = start, end
+        # ручные добавки неотмеченных строк: ключ товара → (количество, продукт)
+        manual: dict[str, tuple[Decimal, int]] = {}
         for line in list(lst.lines):
-            if not line.is_checked and not line.is_extra:
-                lst.lines.remove(line)
+            if line.is_checked:
+                continue
+            extra = _d(line.needed) if line.is_extra else _d(line.added)
+            if extra > 0:
+                key = exact_key(line.product) if line.is_exact else line.product.item_key
+                qty, pid = manual.get(key, (ZERO, line.product_id))
+                manual[key] = (qty + extra, pid if not line.is_extra else line.product_id)
+            lst.lines.remove(line)
         for it in items:
+            key = exact_key_of(it.item_key, it.product_id) if it.is_exact else it.item_key
+            add, _ = manual.pop(key, (ZERO, None))
+            needed, pkg_amount, pkg_count = it.to_buy, it.package_amount, it.package_count
+            if add > 0:
+                needed = _d(needed) + add
+                pkg_amount, pkg_count = await self._packages_for(it.product_id, needed)
             lst.lines.append(ShoppingLine(
-                product_id=it.product_id, variant_id=it.variant_id, needed=it.to_buy,
-                package_amount=it.package_amount, package_count=it.package_count,
+                product_id=it.product_id, variant_id=it.variant_id, needed=needed,
+                package_amount=pkg_amount, package_count=pkg_count, added=add or None,
                 is_staple=it.is_staple, is_extra=False, is_checked=False, is_exact=it.is_exact,
+            ))
+        for key, (qty, pid) in manual.items():
+            pkg_amount, pkg_count = await self._packages_for(pid, qty)
+            lst.lines.append(ShoppingLine(
+                product_id=pid, needed=qty, package_amount=pkg_amount, package_count=pkg_count,
+                is_extra=True, is_checked=False, is_staple=False, is_exact="#" in key,
             ))
         lst.updated_at = _now()
         await self._lists.flush()
         return self._list_out(await self._lists.get_full(lst.id))
+
+    async def _packages_for(self, product_id: int, qty: Decimal) -> tuple[Decimal | None, int | None]:
+        """Упаковки под количество — по всем брендам товара (как в расчёте покупок)."""
+        product = await self._product(product_id)
+        amounts = sorted({_d(pk.amount) for p in await self._stock.products_by_keys({product.item_key}) for pk in p.packages})
+        return pick_packages(qty, amounts, product.base_unit)
 
     async def get_owned_list(self, list_id: int, household_id: int) -> ShoppingList:
         lst = await self._lists.get_full(list_id)
@@ -658,14 +691,33 @@ class StockService:
         lst = await self.get_owned_list(line.list_id, household_id)
         return lst, next(x for x in lst.lines if x.id == line_id)
 
-    async def add_extra(self, lst: ShoppingList, product_id: int, qty: Decimal | None) -> ShoppingListOut:
+    async def add_extra(
+        self, lst: ShoppingList, product_id: int, qty: Decimal | None, *, merge: bool = True
+    ) -> ShoppingListOut:
+        """Внеплановая покупка. Товар уже есть в списке (неотмеченным) — прибавляем к его
+        строке, а не плодим вторую; иначе — строка «вне плана». Без количества — одна упаковка.
+        merge=False — всегда отдельной строкой (чек: её сразу отметят купленной)."""
         product = await self._product(product_id)
-        amounts = sorted(_d(p.amount) for p in product.packages)
-        pkg_amount, pkg_count = pick_packages(qty, amounts, product.base_unit) if qty else (None, None)
-        lst.lines.append(ShoppingLine(
-            product_id=product.id, needed=qty, package_amount=pkg_amount, package_count=pkg_count,
-            is_extra=True, is_checked=False, is_staple=False,
-        ))
+        if not qty:
+            qty, _ = await self._packages_for(product.id, Decimal("0.1"))
+            if not qty:
+                raise ValidationError("Укажите, сколько купить")
+        same = None if not merge else next((
+            ln for ln in lst.lines
+            if not ln.is_checked and not ln.is_staple and ln.product.item_key == product.item_key
+            and (not ln.is_exact or ln.product_id == product.id)
+        ), None)
+        if same is not None:
+            same.needed = _d(same.needed) + qty
+            if not same.is_extra:
+                same.added = _d(same.added) + qty
+            same.package_amount, same.package_count = await self._packages_for(same.product_id, _d(same.needed))
+        else:
+            pkg_amount, pkg_count = await self._packages_for(product.id, qty)
+            lst.lines.append(ShoppingLine(
+                product_id=product.id, needed=qty, package_amount=pkg_amount, package_count=pkg_count,
+                is_extra=True, is_checked=False, is_staple=False,
+            ))
         lst.updated_at = _now()
         await self._lists.flush()
         return self._list_out(await self._lists.get_full(lst.id))
@@ -816,6 +868,7 @@ class StockService:
                 product_name=(p.item.name if p and p.item and not (line.is_exact or line.is_extra)
                               else p.name if p else f"Продукт #{line.product_id}"),
                 is_exact=line.is_exact,
+                added=line.added,
                 brand=brand_of(p),
                 category_name=p.category.name if p and p.category else None,
                 unit=p.base_unit if p else "g",

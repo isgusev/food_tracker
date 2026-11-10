@@ -185,6 +185,7 @@ export const AddItemModal = {
         body.recipe_id = recipeId.value;
       } else {
         if (!variantId.value && !draft.value) { error.value = "Выберите продукт"; return; }
+        if (variantIndex.value[variantId.value]?.kbjuMissing) { error.value = "Сначала внесите КБЖУ продукта — поля выше"; return; }
         if (draft.value && (error.value = draftError(draft.value))) return;
         body.variant_id = variantId.value;
         body.exact = exact.value;
@@ -231,7 +232,7 @@ export const AddItemModal = {
         <span v-else-if="portionHint" class="tiny">Стандартная порция ≈ {{ fmt(portionHint) }} г</span>
       </label>
       <div class="field" v-else><span>Продукт из магазина</span>
-        <ProductFinder v-model="variantId" v-model:draft="draft" autofocus />
+        <ProductFinder v-model="variantId" v-model:draft="draft" autofocus kbjuPrompt />
         <span v-if="!variantId && !draft" class="tiny muted">Сначала ищем в справочнике, не нашли — в Open Food Facts. 📷 — штрихкод камерой.</span>
       </div>
       <OffDraftCard v-if="kind === 'product' && draft" :draft="draft" />
