@@ -341,16 +341,31 @@ export const IngredientsEditor = {
   setup(props, { emit }) {
     // стабильный ключ строки: иначе при вводе веса строка пересоздаётся и теряет фокус
     watch(() => props.modelValue, (rows) => { for (const r of rows) if (!r._k) r._k = ++rowSeq; }, { immediate: true, deep: false });
+    // Открыт для правки один ингредиент (аккордеон): остальные — компактной строкой.
+    // Сразу открыт первый незаполненный (новый рецепт начинается с пустой строки).
+    const openKey = ref(props.modelValue.find((r) => !r.variant_id && !r.draft)?._k ?? null);
     const focusKey = ref(null);
     function update(i, patch) {
       emit("update:modelValue", props.modelValue.map((r, j) => (j === i ? { ...r, ...patch } : r)));
     }
     function add() {
       const row = { variant_id: null, weight_g: 100, draft: null, _k: ++rowSeq };
-      focusKey.value = row._k;
+      focusKey.value = openKey.value = row._k;
       emit("update:modelValue", [...props.modelValue, row]);
     }
-    function remove(i) { emit("update:modelValue", props.modelValue.filter((_, j) => j !== i)); }
+    function remove(i) {
+      if (props.modelValue[i]._k === openKey.value) openKey.value = null;
+      emit("update:modelValue", props.modelValue.filter((_, j) => j !== i));
+    }
+    const open = (r) => { openKey.value = r._k; };
+    const close = () => { openKey.value = null; };
+    // компактная строка: что выбрано и с какой подписью
+    function title(r) {
+      if (r.draft) return { name: r.draft.name || "Новый продукт", sub: r.draft.source === "manual" ? "новый, заполните данные" : "из Open Food Facts" };
+      const v = variantIndex.value[r.variant_id];
+      if (!v) return { name: "Продукт не выбран", sub: "", empty: true };
+      return { name: v.name, sub: [v.sub, v.active ? "" : "старая версия КБЖУ"].filter(Boolean).join(" · ") };
+    }
     function per100Of(r) {
       if (r.draft) {
         const k = r.draft.kbju;
@@ -376,31 +391,45 @@ export const IngredientsEditor = {
       const t = totals.value;
       return { calories: t.calories * k, proteins: t.proteins * k, fats: t.fats * k, carbs: t.carbs * k };
     });
-    return { update, add, remove, totals, per100, grams, focusKey };
+    return { update, add, remove, open, close, title, totals, per100, grams, fmt, n, focusKey, openKey };
   },
   template: `
     <div class="stack tight">
-      <div v-for="(r, i) in modelValue" :key="r._k" class="stack tight ingr">
-        <div class="ingr-row">
-          <div class="ingr-find">
-            <ProductFinder :modelValue="r.variant_id" :draft="r.draft" :autofocus="r._k === focusKey"
-              @update:modelValue="update(i, { variant_id: $event })" @update:draft="update(i, { draft: $event })" />
-          </div>
-          <div class="ingr-qty">
-            <input type="number" min="0.1" step="any" :value="r.weight_g"
-                   @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
-            <span class="muted small">г</span>
-            <button v-if="exactToggle" type="button" class="sm" :class="r.exact ? 'primary' : 'ghost'" style="padding: 2px 6px"
-                    :title="r.exact ? 'Покупать именно этот бренд' : 'Подойдёт любой бренд этого товара — нажмите, если важен именно этот'"
-                    @click="update(i, { exact: !r.exact })">🎯</button>
-            <button class="ghost icon" @click="remove(i)" title="Убрать ингредиент" aria-label="Убрать ингредиент">✕</button>
-          </div>
+      <div v-for="(r, i) in modelValue" :key="r._k" class="ingr" :class="{ open: r._k === openKey }">
+        <div v-if="r._k !== openKey" class="ingr-line" @click="open(r)">
+          <span class="grow" style="min-width: 0">
+            <span :class="{ muted: title(r).empty }">{{ title(r).name }}</span>
+            <span v-if="r.exact" title="Покупать именно этот бренд"> 🎯</span>
+            <span v-if="title(r).sub" class="tiny muted ellipsis" style="display: block">{{ title(r).sub }}</span>
+          </span>
+          <b class="num nowrap">{{ fmt(r.weight_g, n(r.weight_g) % 1 ? 1 : 0) }} г</b>
+          <button class="sm" @click.stop="open(r)">Изменить</button>
+          <button class="ghost icon" @click.stop="remove(i)" title="Убрать ингредиент" aria-label="Убрать ингредиент">✕</button>
         </div>
-        <OffDraftCard v-if="r.draft" :draft="r.draft" />
+        <div v-else class="stack tight">
+          <div class="ingr-row">
+            <div class="ingr-find">
+              <ProductFinder :modelValue="r.variant_id" :draft="r.draft" :autofocus="r._k === focusKey"
+                @update:modelValue="update(i, { variant_id: $event })" @update:draft="update(i, { draft: $event })" />
+            </div>
+            <div class="ingr-qty">
+              <input type="number" min="0.1" step="any" :value="r.weight_g"
+                     @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
+              <span class="muted small">г</span>
+              <button v-if="exactToggle" type="button" class="sm" :class="r.exact ? 'primary' : 'ghost'" style="padding: 2px 6px"
+                      :title="r.exact ? 'Покупать именно этот бренд' : 'Подойдёт любой бренд этого товара — нажмите, если важен именно этот'"
+                      @click="update(i, { exact: !r.exact })">🎯</button>
+              <button class="ghost icon" @click="remove(i)" title="Убрать ингредиент" aria-label="Убрать ингредиент">✕</button>
+            </div>
+          </div>
+          <OffDraftCard v-if="r.draft" :draft="r.draft" />
+          <div class="row"><span class="grow"></span><button class="sm primary" @click="close">Готово</button></div>
+        </div>
       </div>
-      <div class="row between">
-        <button class="sm" @click="add">+ Ингредиент</button>
-        <span class="small muted">Сырой вес: <b class="num">{{ grams(totals.raw) }}</b></span>
+      <button type="button" class="ingr-add" @click="add">+ Добавить ингредиент</button>
+      <div class="row between small">
+        <span class="muted">{{ modelValue.length }} ингр.</span>
+        <span class="muted">Сырой вес: <b class="num">{{ grams(totals.raw) }}</b></span>
       </div>
       <div class="small" v-if="per100"><span class="muted">На 100 г готового: </span><Macros :m="per100" :digits="1" /></div>
     </div>`,

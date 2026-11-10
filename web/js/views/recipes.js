@@ -123,7 +123,7 @@ const RecipeModal = {
           <label class="field"><span>Время, мин</span><input type="number" min="0" v-model="form.cooking_time_minutes"></label>
         </div>
         <div class="tiny muted">Выход ≠ сырой вес: крупы развариваются, мясо ужаривается. Если пусто — возьмём сырой вес.</div>
-        <label class="row small" style="gap: 8px; cursor: pointer"><input type="checkbox" v-model="form.allow_half">
+        <label class="row small" style="gap: 8px; cursor: pointer; flex-wrap: nowrap; align-items: flex-start"><input type="checkbox" v-model="form.allow_half">
           <span>Можно готовить половиной <span class="muted">— в покупки пойдёт половина закладки, если на план её хватает</span></span></label>
         <label class="field"><span>Как готовить</span><textarea v-model="form.instructions"></textarea></label>
       </template>
