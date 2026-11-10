@@ -101,6 +101,7 @@ export const variantIndex = computed(() => {
           label: [p.name, brand].filter(Boolean).join(" · "),
           category: categoryName.value[p.category_id] || "",
           active: v.is_active,
+          kbjuMissing: !!p.kbju_missing,   // КБЖУ ещё не внесены (продукт из чека «на потом»)
           version: v.version,
           calories: n(v.calories),
           proteins: n(v.proteins),

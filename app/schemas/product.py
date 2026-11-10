@@ -32,7 +32,8 @@ class ProductWithCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     brand_name: Optional[str] = None
     barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
-    base_variant: ProductVariantCreate
+    # нет КБЖУ — продукт создаётся «на потом» (kbju_missing), цифры вносятся при первом использовании
+    base_variant: Optional[ProductVariantCreate] = None
     # Упаковка с этикетки (например, из Open Food Facts): 930 мл, 300 г
     package_amount: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("9999999.9"))
     package_unit: Optional[str] = None
@@ -86,7 +87,8 @@ class ProductCreate(ORMModel):
     brand_id: Optional[int] = None
     brand_name: Optional[str] = None
     barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
-    base_variant: ProductVariantCreate
+    # нет КБЖУ — продукт создаётся «на потом» (kbju_missing), цифры вносятся при первом использовании
+    base_variant: Optional[ProductVariantCreate] = None
 
     @field_validator("name")
     @classmethod
@@ -125,6 +127,7 @@ class ProductResponse(ORMModel):
     base_unit: str = "g"
     piece_weight_g: Optional[Decimal] = None
     barcode: Optional[str] = None
+    kbju_missing: bool = False
     item_key: str
     item: Optional[ItemBrief] = None
     packages: list[PackageResponse] = []

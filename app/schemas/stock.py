@@ -147,6 +147,7 @@ class ShoppingLineResponse(BaseModel):
     is_extra: bool
     is_staple: bool
     is_exact: bool = False
+    added: Optional[Decimal] = None       # из них добавлено вручную (поверх плана)
     is_checked: bool
     checked_at: Optional[datetime] = None
     bought_quantity: Optional[Decimal] = None

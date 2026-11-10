@@ -177,11 +177,12 @@ async def test_shared_list_check_creates_lot_and_survives_regeneration(client):
     assert YOGURT not in await stock(client, ivan)
 
     # внеплановая покупка, удаление строки, закрытие списка
+    # (йогурт уже есть в списке строкой из плана — добавка идёт в неё: 350 + 700 = 3 упаковки)
     r = await client.post(f"/api/v1/shopping-lists/{lst['id']}/lines", json={"product_id": yogurt["id"], "quantity": 700}, headers=ivan)
-    extra = next(x for x in r.json()["lines"] if x["is_extra"])
-    assert extra["package_count"] == 2
-    r = await client.delete(f"/api/v1/shopping-lists/lines/{extra['id']}", headers=ivan)
-    assert all(not x["is_extra"] for x in r.json()["lines"])
+    [merged] = r.json()["lines"]
+    assert merged["id"] == line["id"] and merged["package_count"] == 3 and float(merged["added"]) == 700
+    r = await client.delete(f"/api/v1/shopping-lists/lines/{merged['id']}", headers=ivan)
+    assert r.json()["lines"] == []
     assert (await client.post(f"/api/v1/shopping-lists/{lst['id']}/close", headers=ivan)).status_code == 204
     assert (await client.get("/api/v1/shopping-lists/active", headers=ivan)).json() is None
 
@@ -380,3 +381,38 @@ async def test_recipe_bought_by_whole_batches_or_halves(client):
     await client.post(f"/api/v1/products/{oats['id']}/packages", json={"amount": 500}, headers=h)
     item = (await preview(client, h, TODAY, day(1)))[OATS]
     assert item["package_amount"] == "500.0" and item["package_count"] == 1
+
+
+# --- ВНЕПЛАНОВЫЕ ПОКУПКИ: ОДНА СТРОКА НА ТОВАР ---
+
+
+async def test_extra_purchase_merges_and_survives_regeneration(client):
+    h = await register_and_login(client, "extra", "extra@test.com")
+    yogurt_v = await create_ready_product(client, h)
+    yogurt = await product_of_variant(client, h, yogurt_v)
+    await client.post(f"/api/v1/products/{yogurt['id']}/packages", json={"amount": 140}, headers=h)
+    me = await me_id(client, h)
+    await plan(client, h, variant_id=yogurt_v, meal="snack", portions=[{"member_id": me, "weight_g": 140}])
+    lst = (await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()
+    assert [(float(l["needed"]), l["is_extra"]) for l in lst["lines"]] == [(140.0, False)]
+
+    # «ещё йогурт» без количества — одна упаковка, к той же строке, а не новой
+    r = await client.post(f"/api/v1/shopping-lists/{lst['id']}/lines", json={"product_id": yogurt["id"]}, headers=h)
+    assert r.status_code == 201, r.text
+    ls = r.json()["lines"]
+    assert len(ls) == 1 and float(ls[0]["needed"]) == 280 and ls[0]["package_count"] == 2 and float(ls[0]["added"]) == 140
+    r = await client.post(f"/api/v1/shopping-lists/{lst['id']}/lines", json={"product_id": yogurt["id"], "quantity": 140}, headers=h)
+    assert len(r.json()["lines"]) == 1 and r.json()["lines"][0]["package_count"] == 3
+
+    # «Пересчитать» — ручная добавка сохраняется
+    ls = (await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()["lines"]
+    assert [(float(l["needed"]), l["package_count"]) for l in ls] == [(420.0, 3)]
+
+    # из плана йогурт ушёл — остаётся ручная часть строкой «вне плана»
+    item_id = (await client.get("/api/v1/plan", params={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()[0]["id"]
+    await client.delete(f"/api/v1/plan/{item_id}", headers=h)
+    ls = (await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=h)).json()["lines"]
+    assert [(float(l["needed"]), l["is_extra"]) for l in ls] == [(280.0, True)]
+    # вне плана + ещё раз — та же строка
+    ls = (await client.post(f"/api/v1/shopping-lists/{lst['id']}/lines", json={"product_id": yogurt["id"], "quantity": 140}, headers=h)).json()["lines"]
+    assert [(float(l["needed"]), l["is_extra"]) for l in ls] == [(420.0, True)]
