@@ -191,6 +191,9 @@ export const FamilyView = {
     const busy = ref(false);
     const theme = ref(local.get("ft.theme", "auto"));
     watch(() => state.household?.name, (v) => { hhName.value = v || ""; });
+    // Допуск кастрюли и упаковок, %
+    const tolerance = ref(state.household?.portion_tolerance ?? 15);
+    watch(() => state.household?.portion_tolerance, (v) => { tolerance.value = v ?? 15; });
 
     // Приглашения на регистрацию в приложении (одноразовые коды)
     const invites = ref([]);
@@ -220,6 +223,8 @@ export const FamilyView = {
       finally { busy.value = false; }
     }
     const rename = () => run(() => api.patch("/household", { name: hhName.value }), "Название сохранено");
+    const saveTolerance = () => run(
+      () => api.patch("/household", { portion_tolerance: Math.round(Number(tolerance.value) || 0) }), "Допуск сохранён");
     const newCode = () => {
       if (!confirm("Выпустить новый код? Старый перестанет работать.")) return;
       run(() => api.post("/household/invite-code"), "Новый код готов");
@@ -249,7 +254,7 @@ export const FamilyView = {
       if (v === "auto") document.documentElement.removeAttribute("data-theme");
       else document.documentElement.setAttribute("data-theme", v);
     }
-    return { state, hhName, newMember, joinCode, busy, theme, rename, newCode, copyCode, addMember, join, setTheme, fmt,
+    return { state, hhName, tolerance, saveTolerance, newMember, joinCode, busy, theme, rename, newCode, copyCode, addMember, join, setTheme, fmt,
       invites, intoFamily, createInvite, revokeInvite, copyLink, inviteLink };
   },
   template: `
@@ -272,6 +277,21 @@ export const FamilyView = {
           <button class="sm ghost" :disabled="busy" @click="newCode">Новый код</button>
         </div>
         <div class="tiny muted">Второй взрослый регистрируется, открывает «Семья» и вводит этот код — и видит всё то же, что и вы.</div>
+      </div>
+
+      <div class="card stack">
+        <h3>Допуск по весу</h3>
+        <div class="row">
+          <input type="number" min="0" max="30" step="1" v-model="tolerance" style="width: 90px">
+          <span>%</span>
+          <button class="sm" :disabled="busy || Number(tolerance) === state.household.portion_tolerance || tolerance === '' || tolerance < 0 || tolerance > 30"
+                  @click="saveTolerance">Сохранить</button>
+        </div>
+        <div class="tiny muted">
+          Блюдо вышло меньше плана не больше чем на столько — оно всё равно «в холодильнике», а несъеденные порции
+          уменьшаются пропорционально (доли каждого сохраняются). В покупках — не берём лишнюю упаковку ради
+          недобора в эти проценты (400 г при пачке 360 г — одна пачка). 0 — строго по плану.
+        </div>
       </div>
 
       <h2>Кто ест</h2>

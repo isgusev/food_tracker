@@ -20,6 +20,9 @@ class Household(Base):
     invite_code = Column(String(16), unique=True, nullable=False)
     # Бюджет на продукты в месяц, ₽ (необязательно)
     monthly_budget = Column(Numeric(10, 2), nullable=True)
+    # Допуск, %: кастрюля вышла меньше плана не больше чем на него — порции уменьшаются
+    # пропорционально, а не «не хватает»; в покупках — недобор до целой упаковки
+    portion_tolerance = Column(Integer, nullable=False, default=15, server_default="15")
     created_at = Column(DateTime, server_default=func.now())
 
     members = relationship(

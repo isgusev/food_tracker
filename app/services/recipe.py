@@ -295,8 +295,10 @@ class RecipeService:
 
         # Блюда плана по этому рецепту резервируются в свежей кастрюле —
         # начиная с сегодняшнего дня и только сколько влезает в выход блюда
+        # (вышло чуть меньше плана — в пределах допуска семьи порции уменьшаются пропорционально)
         await self._plan.attach_to_new_pot(
-            household_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight
+            household_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight,
+            tolerance=await self._plan.tolerance(household_id),
         )
 
         full = await self._cooking_logs.get_full(pot.id)
@@ -385,8 +387,11 @@ class RecipeService:
         pot.current_remaining_weight = remainder
         pot.is_finished = remainder <= ZERO
         await self._cooking_logs.flush()
-        # остатка стало меньше — поздние блюда, которым не хватает, снова «надо приготовить»
-        await self._plan.release_overbooked(pot.id, remainder)
+        # остатка стало меньше: в пределах допуска — порции уменьшаются пропорционально,
+        # иначе поздние блюда, которым не хватает, снова «надо приготовить»
+        await self._plan.release_overbooked(
+            pot.id, remainder, tolerance=await self._plan.tolerance(pot.household_id)
+        )
         return pot
 
     # --- АРХИВ ХОЛОДИЛЬНИКА ---

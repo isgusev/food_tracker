@@ -20,6 +20,7 @@ from datetime import date
 from app.schemas.household import (
     BodyProfile,
     HouseholdResponse,
+    HouseholdUpdate,
     MemberCreate,
     MemberResponse,
     MemberUpdate,
@@ -107,6 +108,7 @@ class HouseholdService:
             name=household.name,
             invite_code=household.invite_code,
             monthly_budget=household.monthly_budget,
+            portion_tolerance=household.portion_tolerance if household.portion_tolerance is not None else 15,
             me_member_id=me.id,
             members=[self.member_response(m, me) for m in household.members],
         )
@@ -124,9 +126,13 @@ class HouseholdService:
             profile=_profile(m),
         )
 
-    async def rename(self, me: HouseholdMember, name: str) -> HouseholdResponse:
+    async def update(self, me: HouseholdMember, data: HouseholdUpdate) -> HouseholdResponse:
+        """Название семьи и/или допуск кастрюли и упаковок."""
         household = await self._households.get(me.household_id)
-        household.name = name
+        if data.name is not None:
+            household.name = data.name
+        if data.portion_tolerance is not None:
+            household.portion_tolerance = data.portion_tolerance
         await self._households.flush()
         return await self.get(me)
 

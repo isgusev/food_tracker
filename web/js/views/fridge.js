@@ -21,6 +21,7 @@ export const CookModal = {
     // Запасы: чего не хватит для этой готовки (списание всё равно пройдёт — с пометкой)
     const stock = ref(null);
     api.get("/stock").then((r) => { stock.value = Object.fromEntries(r.map((i) => [i.item_key, i])); }).catch(() => {});
+    const tolerance = computed(() => (state.household?.portion_tolerance ?? 15) / 100);
     const shortages = computed(() => {
       if (!stock.value) return [];
       const need = new Map();
@@ -38,7 +39,8 @@ export const CookModal = {
         const s = stock.value[key];
         if (s?.is_staple) continue;
         const have = n(s?.remaining);
-        if (have < x.qty) out.push({ ...x, have });
+        // недобор в пределах допуска семьи — не «не хватает» (пачка 360 г на 400 г)
+        if (have < x.qty * (1 - tolerance.value)) out.push({ ...x, have });
       }
       return out;
     });
@@ -114,7 +116,9 @@ const PotModal = {
     const saveRemaining = () => run(
       () => api.patch(`/recipes/cooking-logs/${props.pot.id}`, { current_remaining_weight: n(remaining.value) }),
       n(remaining.value) < n(props.pot.planned_g)
-        ? "Остаток обновлён. Планам, которым не хватит, — снова «надо приготовить»"
+        ? (n(remaining.value) >= n(props.pot.planned_g) * (1 - (state.household?.portion_tolerance ?? 15) / 100)
+          ? "Остаток обновлён. Порции в плане уменьшены пропорционально"
+          : "Остаток обновлён. Планам, которым не хватит, — снова «надо приготовить»")
         : "Остаток обновлён"
     );
     const saveIngredients = () => run(async () => {
