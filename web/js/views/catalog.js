@@ -3,8 +3,9 @@ import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.pr
 import { api } from "../api.js";
 import { Modal, Macros, BarcodeScanner, KbjuInputs } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, variantIndex, toast, toastError } from "../store.js";
-import { fmt, fuzzyScore, matches, n, packagesLabel } from "../util.js";
+import { fmt, fuzzyScore, local, matches, n, packagesLabel } from "../util.js";
 import { ProductFinder, OffDraftCard, saveDraft, draftError } from "../product-finder.js";
+import { ItemsPanel } from "./items.js";
 
 // Новый продукт — тот же поиск, что при добавлении в план: справочник → штрихкод/📷 →
 // Open Food Facts → «ввести вручную»; найденное или введённое проверяется в карточке
@@ -169,8 +170,10 @@ const ProductModal = {
 };
 
 export const CatalogView = {
-  components: { NewProductModal, ProductModal },
+  components: { NewProductModal, ProductModal, ItemsPanel },
   setup() {
+    const tab = ref(local.get("ft.catalogTab", "products"));   // products | items
+    const setTab = (t) => { tab.value = t; local.set("ft.catalogTab", t); };
     const q = ref("");
     const cat = ref(0);
     const creating = ref(false);
@@ -184,7 +187,7 @@ export const CatalogView = {
         return { p, v, makers: p.manufacturers.length, warn: actives.some((x) => x.wrong_nutrients) };
       })
       .sort((a, b) => (categoryName.value[a.p.category_id] || "").localeCompare(categoryName.value[b.p.category_id] || "", "ru") || a.p.name.localeCompare(b.p.name, "ru")));
-    return { q, cat, creating, opened, rows, state, categoryName, fmt, packagesLabel, toast };
+    return { tab, setTab, q, cat, creating, opened, rows, state, categoryName, fmt, packagesLabel, toast };
   },
   template: `
     <div>
@@ -192,6 +195,12 @@ export const CatalogView = {
         <h1>Продукты</h1>
         <button class="primary" @click="creating = true">+ Продукт</button>
       </div>
+      <div class="segmented" style="margin-bottom: 12px">
+        <button :class="{ on: tab === 'products' }" @click="setTab('products')">Продукты</button>
+        <button :class="{ on: tab === 'items' }" @click="setTab('items')">Товары</button>
+      </div>
+      <ItemsPanel v-if="tab === 'items'" />
+      <template v-else>
       <div class="row" style="margin-bottom: 12px">
         <div class="clearable" style="max-width: 320px">
           <input v-model="q" placeholder="Поиск по названию, бренду, штрихкоду…">
@@ -209,7 +218,7 @@ export const CatalogView = {
           <tbody>
             <tr v-for="r in rows" :key="r.p.id" style="cursor: pointer" @click="opened = r.p">
               <td><b>{{ r.p.name }}</b> <span v-if="r.warn" class="badge warn" title="Калории не сходятся с БЖУ">⚠</span>
-                <div class="tiny muted">{{ r.p.brand?.name }}<span v-if="r.makers > 1"> · {{ r.makers }} производителя</span> · {{ packagesLabel(r.p.packages, r.p.base_unit) }}</div></td>
+                <div class="tiny muted"><span v-if="r.p.item && r.p.item.name !== r.p.name">{{ r.p.item.name }} · </span>{{ r.p.brand?.name }}<span v-if="r.makers > 1"> · {{ r.makers }} производителя</span> · {{ packagesLabel(r.p.packages, r.p.base_unit) }}</div></td>
               <td class="small muted">{{ categoryName[r.p.category_id] }}</td>
               <td class="r num">{{ fmt(r.v.calories) }}</td><td class="r num">{{ fmt(r.v.proteins, 1) }}</td>
               <td class="r num">{{ fmt(r.v.fats, 1) }}</td><td class="r num">{{ fmt(r.v.carbs, 1) }}</td>
@@ -218,6 +227,7 @@ export const CatalogView = {
         </table>
         <div v-if="!rows.length" class="empty">Ничего не найдено</div>
       </div>
+      </template>
       <NewProductModal v-if="creating" @close="creating = false" @saved="creating = false"
         @open="(p) => { creating = false; opened = p; toast('Этот продукт уже есть в справочнике'); }" />
       <ProductModal v-if="opened" :product="opened" @close="opened = null" />

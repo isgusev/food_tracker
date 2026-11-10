@@ -173,6 +173,7 @@ class PlanService:
             kind=kind,
             recipe_id=item.recipe_id,
             variant_id=item.variant_id,
+            exact=bool(item.exact),
             name=name,
             state=state,
             cooking_log_id=item.cooking_log_id,
@@ -220,6 +221,7 @@ class PlanService:
             meal_type=data.meal_type,
             recipe_id=data.recipe_id,
             variant_id=data.variant_id,
+            exact=bool(data.exact and data.variant_id),
             created_by_user_id=user_id,
             portions=[MealPortion(member_id=p.member_id, weight_g=p.weight_g) for p in data.portions],
         )
@@ -420,6 +422,7 @@ class PlanService:
                 "meal_type": it.meal_type,
                 "recipe_id": it.recipe_id,
                 "variant_id": it.variant_id,
+                "exact": bool(it.exact),
                 "portions": [{"member_id": p.member_id, "weight_g": str(p.weight_g)} for p in it.portions],
             }
             for it in items
@@ -465,6 +468,7 @@ class PlanService:
                 meal_type=it["meal_type"],
                 recipe_id=it.get("recipe_id"),
                 variant_id=it.get("variant_id"),
+                exact=bool(it.get("exact")),
                 portions=portions,
             )
             try:

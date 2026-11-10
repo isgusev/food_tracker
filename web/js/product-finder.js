@@ -335,7 +335,8 @@ export const OffDraftCard = {
 let rowSeq = 0;
 export const IngredientsEditor = {
   components: { ProductFinder, OffDraftCard, Macros },
-  props: { modelValue: { type: Array, required: true }, cookedWeight: [Number, String] },
+  // exactToggle — показывать «🎯 именно этот вариант» (в шаблоне рецепта; в готовке не нужен)
+  props: { modelValue: { type: Array, required: true }, cookedWeight: [Number, String], exactToggle: Boolean },
   emits: ["update:modelValue"],
   setup(props, { emit }) {
     // стабильный ключ строки: иначе при вводе веса строка пересоздаётся и теряет фокус
@@ -389,6 +390,9 @@ export const IngredientsEditor = {
             <input type="number" min="0.1" step="any" :value="r.weight_g"
                    @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
             <span class="muted small">г</span>
+            <button v-if="exactToggle" type="button" class="sm" :class="r.exact ? 'primary' : 'ghost'" style="padding: 2px 6px"
+                    :title="r.exact ? 'Покупать именно этот бренд' : 'Подойдёт любой бренд этого товара — нажмите, если важен именно этот'"
+                    @click="update(i, { exact: !r.exact })">🎯</button>
             <button class="ghost icon" @click="remove(i)" title="Убрать ингредиент" aria-label="Убрать ингредиент">✕</button>
           </div>
         </div>

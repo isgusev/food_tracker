@@ -94,6 +94,7 @@ class ShoppingItem(BaseModel):
     package_amount: Optional[Decimal] = None
     package_count: Optional[int] = None
     is_staple: bool = False
+    is_exact: bool = False                # «именно этот вариант» — строка с брендом
 
 
 class ShoppingPreview(BaseModel):
@@ -119,6 +120,8 @@ class LineCheck(BaseModel):
     price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))
     variant_id: Optional[int] = None
     expires_on: Optional[date] = None
+    # купили другой бренд того же товара (строка «Кефир 3,2%» — взяли «Простоквашино»)
+    product_id: Optional[int] = None
 
 
 class LineUpdate(BaseModel):
@@ -126,6 +129,7 @@ class LineUpdate(BaseModel):
     price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))
     variant_id: Optional[int] = None
     expires_on: Optional[date] = None
+    product_id: Optional[int] = None      # какой бренд товара купили на самом деле
 
 
 class ShoppingLineResponse(BaseModel):
@@ -142,6 +146,7 @@ class ShoppingLineResponse(BaseModel):
     package_count: Optional[int] = None
     is_extra: bool
     is_staple: bool
+    is_exact: bool = False
     is_checked: bool
     checked_at: Optional[datetime] = None
     bought_quantity: Optional[Decimal] = None

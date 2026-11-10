@@ -82,6 +82,8 @@ class RecipeTemplateIngredient(Base):
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
     )
     weight_g = Column(Numeric(7, 1), nullable=False)
+    # «Именно этот вариант»: в покупки — этот продукт с брендом, а не любой того же товара
+    exact = Column(Boolean, default=False, nullable=False, server_default="false")
 
     recipe = relationship("Recipe", back_populates="template_ingredients")
     variant = relationship("ProductVariant")

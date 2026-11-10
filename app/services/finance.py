@@ -87,7 +87,7 @@ class FinanceService:
         )
         out: dict[str, ItemPrice] = {}
         for lot in (await self._s.execute(stmt)).unique().scalars():
-            key = lot.product.search_name
+            key = lot.product.item_key
             if key in out:
                 continue
             up = unit_price(lot)
@@ -150,7 +150,7 @@ class FinanceService:
                 all_g += g
                 if product is None:
                     continue
-                p = prices.get(product.search_name)
+                p = prices.get(product.item_key)
                 if p is None:
                     continue
                 total += grams_to_base(g, product.base_unit, product.piece_weight_g) * p.unit_price

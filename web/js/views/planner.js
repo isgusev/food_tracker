@@ -159,7 +159,7 @@ export const PlannerView = {
           await api.post("/plan", {
             date_day: addDays(it.date_day, 7),
             meal_type: it.meal_type,
-            ...(it.kind === "product" ? { variant_id: it.variant_id } : { recipe_id: it.recipe_id }),
+            ...(it.kind === "product" ? { variant_id: it.variant_id, exact: !!it.exact } : { recipe_id: it.recipe_id }),
             portions: it.portions.map((p) => ({ member_id: p.member_id, weight_g: n(p.weight_g) })),
           });
         }

@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.household import Household, HouseholdMember
 from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.product import (
+    Item,
     Brand,
     Product,
     ProductCategory,
@@ -36,6 +37,7 @@ from app.models.stock import (
 from app.models.user import AuthGroup, RegistrationInvite, User, UserGroup
 
 __all__ = [
+    "Item",
     "Base",
     "AuthGroup",
     "Brand",

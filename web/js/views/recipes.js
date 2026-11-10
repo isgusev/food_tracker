@@ -22,7 +22,7 @@ const RecipeModal = {
       cooking_time_minutes: r?.cooking_time_minutes ?? null,
       estimated_cooked_weight: n(r?.estimated_cooked_weight) || null,
       instructions: r?.instructions || "",
-      ingredients: r ? r.template_ingredients.map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })) : [{ variant_id: null, weight_g: 100 }],
+      ingredients: r ? r.template_ingredients.map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g), exact: !!i.exact })) : [{ variant_id: null, weight_g: 100 }],
     });
     const newCat = ref("");
     const busy = ref(false);
@@ -48,7 +48,7 @@ const RecipeModal = {
       catch (e) { error.value = e.message; busy.value = false; return; }
       busy.value = false;
       const ingredients = f.ingredients.filter((i) => i.variant_id && n(i.weight_g) > 0)
-        .map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) }));
+        .map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g), exact: !!i.exact }));
       if (!ingredients.length) { error.value = "Добавьте ингредиенты"; return; }
       const body = {
         name: f.name.trim(),
@@ -94,7 +94,7 @@ const RecipeModal = {
           <Macros :m="{ calories: r.calories_per_100g, proteins: r.proteins_per_100g, fats: r.fats_per_100g, carbs: r.carbs_per_100g }" :digits="1" /></div>
         <div class="card flush">
           <table class="tbl"><tbody>
-            <tr v-for="i in r.template_ingredients" :key="i.id"><td>{{ variantLabel(i.variant_id) }}</td><td class="r num">{{ grams(i.weight_g) }}</td></tr>
+            <tr v-for="i in r.template_ingredients" :key="i.id"><td>{{ variantLabel(i.variant_id) }}<span v-if="i.exact" title="Именно этот бренд"> 🎯</span></td><td class="r num">{{ grams(i.weight_g) }}</td></tr>
           </tbody></table>
         </div>
         <div v-if="r.instructions" style="white-space: pre-wrap">{{ r.instructions }}</div>
@@ -113,7 +113,8 @@ const RecipeModal = {
           </label>
         </div>
         <h3>Состав (на всю кастрюлю)</h3>
-        <IngredientsEditor v-model="form.ingredients" :cookedWeight="form.estimated_cooked_weight || rawTotal" />
+        <IngredientsEditor v-model="form.ingredients" :cookedWeight="form.estimated_cooked_weight || rawTotal" exactToggle />
+        <div class="tiny muted">🎯 — в покупки именно этот бренд; без отметки подойдёт любой бренд того же товара («Кефир 3,2%»).</div>
         <div class="grid-4">
           <label class="field"><span>Выход готового, г</span>
             <input type="number" min="1" step="any" v-model="form.estimated_cooked_weight" :placeholder="fmt(rawTotal)">

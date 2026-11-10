@@ -2,7 +2,7 @@
 
 Правила:
 - запасы и потребность сверяются по ТОВАРУ (продукт без бренда, ключ —
-  Product.search_name); партия помнит конкретный продукт, бренд и цену;
+  Product.item_key); партия помнит конкретный продукт, бренд и цену;
 - расход: готовка списывает фактический состав кастрюли, «съел» готовый
   продукт — порцию; порядок партий: тот же бренд → тот же продукт →
   непросроченные с ближайшим сроком → самые старые;
@@ -68,17 +68,25 @@ class Need:
     grams: Decimal = ZERO
     product: Product | None = None
     variant_id: int | None = None
+    exact: bool = False          # «именно этот вариант»: этот продукт, а не любой того же товара
 
 
 @dataclass
 class Needs:
     by_key: dict[str, Need] = field(default_factory=dict)
 
-    def add(self, product: Product | None, variant_id: int, grams: Decimal) -> None:
+    def add(self, product: Product | None, variant_id: int, grams: Decimal, exact: bool = False) -> None:
+        """Обычная потребность — по товару (любой бренд), «точная» — по товару и продукту."""
         if product is None or grams <= 0:
             return
-        need = self.by_key.setdefault(product.search_name, Need(product=product, variant_id=variant_id))
+        key = exact_key(product) if exact else product.item_key
+        need = self.by_key.setdefault(key, Need(product=product, variant_id=variant_id, exact=exact))
         need.grams += grams
+
+
+def exact_key(product: Product) -> str:
+    """Ключ «именно этот вариант»: товар + продукт («кефир 3,2%#17»)."""
+    return f"{product.item_key}#{product.id}"
 
 
 class StockService:
@@ -116,7 +124,7 @@ class StockService:
         qty = quantize(qty)
         if qty <= 0:
             return ZERO
-        key = product.search_name
+        key = product.item_key
         settings = await self._stock.settings(household_id, key)
         if settings is not None and settings.is_staple:
             return ZERO  # базовые продукты не учитываем
@@ -190,7 +198,7 @@ class StockService:
                 product = await self._stock.product_for_variant(variant_id)
                 if product is None:
                     continue
-                entry = by_key.setdefault(product.search_name, {"product": product, "variant_id": variant_id, "diff": ZERO})
+                entry = by_key.setdefault(product.item_key, {"product": product, "variant_id": variant_id, "diff": ZERO})
                 entry["diff"] += sign * grams
                 if sign > 0:
                     entry["product"], entry["variant_id"] = product, variant_id
@@ -200,7 +208,7 @@ class StockService:
         ]
         for e, qty in changes:
             if e["diff"] < 0:
-                await self._give_back(pot.id, e["product"].search_name, qty)
+                await self._give_back(pot.id, e["product"].item_key, qty)
         for e, qty in changes:
             if e["diff"] > 0:
                 await self._consume(
@@ -213,7 +221,7 @@ class StockService:
         qty = quantize(qty)
         movements = [
             m for m in await self._stock.movements(pot_id=pot_id)
-            if m.reason == "cook" and (await self._stock.product(m.product_id)).search_name == key
+            if m.reason == "cook" and (await self._stock.product(m.product_id)).item_key == key
         ]
         movements.sort(key=lambda m: (m.lot_id is not None, -m.id))
         left = qty
@@ -250,7 +258,7 @@ class StockService:
         return product
 
     async def _refuse_staple(self, household_id: int, product: Product) -> None:
-        s = await self._stock.settings(household_id, product.search_name)
+        s = await self._stock.settings(household_id, product.item_key)
         if s is not None and s.is_staple:
             raise ValidationError(
                 "Это базовый товар — его остаток не учитывается. "
@@ -408,7 +416,7 @@ class StockService:
         """Пересчитали: остаток товара становится ровно actual; «учёт сбился» снимается."""
         product = await self._product(product_id)
         await self._refuse_staple(household_id, product)
-        key = product.search_name
+        key = product.item_key
         total = sum((_d(lot.remaining) for lot in await self._stock.open_lots_for_key(household_id, key)), ZERO)
         if actual < total:
             await self._consume(
@@ -428,7 +436,7 @@ class StockService:
         self, household_id: int, product_id: int, is_staple: bool | None, is_low: bool | None
     ) -> None:
         product = await self._product(product_id)
-        s = await self._stock.get_or_create_settings(household_id, product.search_name)
+        s = await self._stock.get_or_create_settings(household_id, product.item_key)
         if is_staple is not None:
             s.is_staple = is_staple
             if not is_staple:
@@ -442,13 +450,13 @@ class StockService:
         """Запасы по товарам + базовые и «учёт сбился» даже без партий."""
         lots = await self._stock.open_lots(household_id)
         settings = await self._stock.settings_map(household_id)
-        keys = {lot.product.search_name for lot in lots} | {
+        keys = {lot.product.item_key for lot in lots} | {
             k for k, s in settings.items() if s.is_staple or s.needs_check
         }
-        products = {p.search_name: p for p in await self._stock.products_by_keys(keys)}
+        products = {p.item_key: p for p in await self._stock.products_by_keys(keys)}
         items: list[StockItem] = []
         for key in keys:
-            mine = [lot for lot in lots if lot.product.search_name == key]
+            mine = [lot for lot in lots if lot.product.item_key == key]
             rep = mine[0].product if mine else products.get(key)
             if rep is None:
                 continue
@@ -457,7 +465,7 @@ class StockService:
             items.append(StockItem(
                 item_key=key,
                 product_id=rep.id,
-                name=rep.name,
+                name=rep.item.name if rep.item else rep.name,
                 category_name=rep.category.name if rep.category else None,
                 unit=rep.base_unit,
                 piece_weight_g=rep.piece_weight_g,
@@ -483,7 +491,7 @@ class StockService:
                 id=m.id, delta=m.delta, reason=m.reason, lot_id=m.lot_id, pot_id=m.pot_id,
                 portion_id=m.portion_id, note=m.note, created_at=m.created_at,
             )
-            for m in await self._stock.history(household_id, product.search_name)
+            for m in await self._stock.history(household_id, product.item_key)
         ]
 
     # ===================================================== потребность и покупки
@@ -509,7 +517,7 @@ class StockService:
             if need <= 0:
                 continue
             if item.variant_id is not None:
-                needs.add(await product_of(item.variant_id), item.variant_id, need)
+                needs.add(await product_of(item.variant_id), item.variant_id, need, exact=bool(item.exact))
             elif item.recipe_id is not None:
                 recipe_need[item.recipe_id] = recipe_need.get(item.recipe_id, ZERO) + need
         for recipe_id, need in recipe_need.items():
@@ -521,7 +529,7 @@ class StockService:
             step = Decimal("0.5") if recipe.allow_half else Decimal(1)
             batches = Decimal(_ceil(portions / step)) * step
             for ing in recipe.template_ingredients:
-                needs.add(await product_of(ing.variant_id), ing.variant_id, _d(ing.weight_g) * batches)
+                needs.add(await product_of(ing.variant_id), ing.variant_id, _d(ing.weight_g) * batches, exact=bool(ing.exact))
         return needs
 
     async def to_buy(self, household_id: int, start: date, end: date, today: date) -> list[ShoppingItem]:
@@ -531,52 +539,73 @@ class StockService:
         period = await self.needs(household_id, start, end)
         before = await self.needs(household_id, today, start - timedelta(days=1)) if start > today else Needs()
         # партии, которые испортятся до начала периода, запасом не считаем
-        stock = await self._stock.available_by_key(household_id, max(today, start))
+        as_of = max(today, start)
+        stock = await self._stock.available_by_key(household_id, as_of)
+        stock_by_product = await self._stock.available_by_product(household_id, as_of)
         settings = await self._stock.settings_map(household_id)
         low_staples = {k for k, s in settings.items() if s.is_staple and s.is_low}
         keys = set(period.by_key) | low_staples
-        all_products = await self._stock.products_by_keys(keys)
+        item_keys = {k.split("#", 1)[0] for k in keys}
+        all_products = await self._stock.products_by_keys(item_keys)
         packages: dict[str, set[Decimal]] = {}
         reps: dict[str, Product] = {}
+        by_id: dict[int, Product] = {}
         for p in all_products:
-            packages.setdefault(p.search_name, set()).update(_d(pk.amount) for pk in p.packages)
-            reps.setdefault(p.search_name, p)
+            packages.setdefault(p.item_key, set()).update(_d(pk.amount) for pk in p.packages)
+            reps.setdefault(p.item_key, p)
+            by_id[p.id] = p
+        # «обычно берёте» — по последней покупке; иначе — продукт из плана/рецепта
+        usual = await self._stock.usual_products(household_id, item_keys)
+        used_by_exact: dict[str, Decimal] = {}
 
         out: list[ShoppingItem] = []
-        for key in keys:
+        # сначала «именно этот вариант»: берут только из партий своего продукта,
+        # остальное по товару достаётся обычной потребности
+        for key in sorted(keys, key=lambda k: "#" not in k):
             need = period.by_key.get(key)
-            product = need.product if need and need.product else reps.get(key)
+            item_key = key.split("#", 1)[0]
+            exact = bool(need and need.exact)
+            product = need.product if need and need.product else reps.get(item_key)
             if product is None:
                 continue
-            s = settings.get(key)
+            s = settings.get(item_key)
             unit, piece = product.base_unit, product.piece_weight_g
-            amounts = sorted(packages.get(key, set()))
+            amounts = sorted(packages.get(item_key, set()))
             if s is not None and s.is_staple:
-                if not s.is_low:
-                    continue  # базовый и не заканчивается — не покупаем
+                if not s.is_low or "#" in key:
+                    continue  # базовый и не заканчивается — не покупаем (и без «точных» строк)
                 pkg_amount, pkg_count = (amounts[0], 1) if amounts else (None, None)
-                out.append(self._item(product, need, unit, None, None, None, pkg_amount, pkg_count, staple=True))
+                shown = by_id.get(usual.get(item_key)) or product
+                out.append(self._item(shown, need, unit, None, None, None, pkg_amount, pkg_count, staple=True))
                 continue
             need_q = grams_to_base(need.grams, unit, piece) if need else ZERO
             before_need = before.by_key.get(key)
             before_q = grams_to_base(before_need.grams, unit, piece) if before_need else ZERO
-            have = stock.get(key, ZERO)
+            if exact:
+                have = stock_by_product.get(product.id, ZERO)
+                used_by_exact[item_key] = used_by_exact.get(item_key, ZERO) + min(have, before_q + need_q)
+            else:
+                have = max(ZERO, stock.get(item_key, ZERO) - used_by_exact.get(item_key, ZERO))
             free = max(ZERO, have - before_q)
             buy = max(ZERO, need_q - free)
             if buy <= 0:
                 continue
             pkg_amount, pkg_count = pick_packages(buy, amounts, unit)
-            out.append(self._item(product, need, unit, need_q, free, buy, pkg_amount, pkg_count))
+            shown = product if exact else (by_id.get(usual.get(item_key)) or product)
+            out.append(self._item(shown, need if exact or shown is product else None, unit, need_q, free, buy,
+                                  pkg_amount, pkg_count, exact=exact))
         out.sort(key=lambda i: ((i.category_name or ""), i.product_name))
         return out
 
     @staticmethod
-    def _item(product, need, unit, need_q, free, buy, pkg_amount, pkg_count, staple=False) -> ShoppingItem:
+    def _item(product, need, unit, need_q, free, buy, pkg_amount, pkg_count, staple=False, exact=False) -> ShoppingItem:
+        # обычная строка — по товару («Кефир 3,2%»), «именно этот» — продукт с брендом
         return ShoppingItem(
-            item_key=product.search_name,
+            item_key=product.item_key,
             product_id=product.id,
             variant_id=need.variant_id if need else None,
-            product_name=product.name,
+            product_name=product.name if exact or product.item is None else product.item.name,
+            is_exact=exact,
             brand=brand_of(product),
             category_name=product.category.name if product.category else None,
             unit=unit,
@@ -610,7 +639,7 @@ class StockService:
             lst.lines.append(ShoppingLine(
                 product_id=it.product_id, variant_id=it.variant_id, needed=it.to_buy,
                 package_amount=it.package_amount, package_count=it.package_count,
-                is_staple=it.is_staple, is_extra=False, is_checked=False,
+                is_staple=it.is_staple, is_extra=False, is_checked=False, is_exact=it.is_exact,
             ))
         lst.updated_at = _now()
         await self._lists.flush()
@@ -650,7 +679,7 @@ class StockService:
         if line.is_staple:
             # базовый товар: остаток не ведём — просто снимаем «заканчивается»
             product = await self._product(line.product_id)
-            (await self._stock.get_or_create_settings(lst.household_id, product.search_name)).is_low = False
+            (await self._stock.get_or_create_settings(lst.household_id, product.item_key)).is_low = False
             line.is_checked = True
             line.checked_by_user_id = user_id
             line.checked_at = _now()
@@ -664,9 +693,20 @@ class StockService:
             qty = _d(line.needed)
         if not qty or qty <= 0:
             raise ValidationError("Укажите, сколько купили")
+        variant_id = data.variant_id or line.variant_id
+        if data.product_id and data.product_id != line.product_id:
+            # обычная строка — по товару: можно купить любой бренд, но не другой товар
+            if line.is_exact:
+                raise ValidationError("В этой строке нужен именно этот вариант продукта")
+            bought = await self._product(data.product_id)
+            current = await self._product(line.product_id)
+            if bought.item_key != current.item_key:
+                raise ValidationError(f"«{bought.name}» — другой товар, а в строке «{current.item.name if current.item else current.name}»")
+            line.product_id = bought.id
+            variant_id = data.variant_id   # версия КБЖУ строки относилась к прежнему бренду
         lot = await self.add_lot(
             lst.household_id, user_id,
-            LotAdd(product_id=line.product_id, variant_id=data.variant_id or line.variant_id, quantity=qty,
+            LotAdd(product_id=line.product_id, variant_id=variant_id, quantity=qty,
                    price=data.price, expires_on=data.expires_on),
             source="purchase", today=today,
         )
@@ -732,6 +772,18 @@ class StockService:
                 lot.expires_on = data.expires_on
             if "variant_id" in fields:
                 lot.variant_id = data.variant_id
+            if data.product_id and data.product_id != lot.product_id:
+                if line.is_exact:
+                    raise ValidationError("В этой строке нужен именно этот вариант продукта")
+                bought = await self._product(data.product_id)
+                current = await self._product(lot.product_id)
+                if bought.item_key != current.item_key:
+                    raise ValidationError(f"«{bought.name}» — другой товар")
+                lot.product_id = line.product_id = bought.id
+                if "variant_id" not in fields:
+                    lot.variant_id = None   # версия КБЖУ была от прежнего бренда
+                for m in await self._stock.lot_movements(lot.id):
+                    m.product_id = bought.id
         lst.updated_at = _now()
         await self._lists.flush()
         return self._list_out(await self._lists.get_full(lst.id))
@@ -757,10 +809,13 @@ class StockService:
             lot = line.lot
             lines.append(ShoppingLineResponse(
                 id=line.id,
-                item_key=p.search_name if p else None,
+                item_key=p.item_key if p else None,
                 product_id=line.product_id,
                 variant_id=line.variant_id,
-                product_name=p.name if p else f"Продукт #{line.product_id}",
+                # обычная строка — название товара, «именно этот» и «вне плана» — продукт с брендом
+                product_name=(p.item.name if p and p.item and not (line.is_exact or line.is_extra)
+                              else p.name if p else f"Продукт #{line.product_id}"),
+                is_exact=line.is_exact,
                 brand=brand_of(p),
                 category_name=p.category.name if p and p.category else None,
                 unit=p.base_unit if p else "g",

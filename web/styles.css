@@ -271,6 +271,11 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .receipt-row + .receipt-row { border-top: 1px solid var(--border); }
 .receipt-row.skipped > :first-child { opacity: .55; }
 
+/* Товары: строка товара с брендами, группа «похоже на один товар» */
+.item-row { padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+.item-row + .item-row { border-top: 1px solid var(--border); }
+.suggest-group + .suggest-group { border-top: 1px dashed var(--border); padding-top: 8px; }
+
 /* Поле поиска с крестиком «очистить» внутри */
 .clearable { position: relative; flex: 1 1 auto; min-width: 0; }
 .clearable > input { padding-right: 34px; }

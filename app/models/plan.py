@@ -41,6 +41,8 @@ class MealItem(Base):
     variant_id = Column(
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=True
     )
+    # «Именно этот вариант» готового продукта: в покупки — этот бренд, а не любой того же товара
+    exact = Column(Boolean, default=False, nullable=False, server_default="false")
     cooking_log_id = Column(
         Integer, ForeignKey("recipe_cooking_logs.id", ondelete="SET NULL"), nullable=True,
         index=True,

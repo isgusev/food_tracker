@@ -177,7 +177,7 @@ class RecipeService:
             fats_per_100g=quantize(per_100.fats),
             carbs_per_100g=quantize(per_100.carbs),
             template_ingredients=[
-                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g)
+                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g, exact=i.exact)
                 for i in data.ingredients
             ],
         )
@@ -235,7 +235,7 @@ class RecipeService:
             total_raw, totals = await _sum_ingredients(ingredient_lines, self._variants)
             recipe.total_raw_weight = quantize(total_raw)
             recipe.template_ingredients = [
-                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g)
+                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g, exact=i.exact)
                 for i in ingredient_lines
             ]
         else:

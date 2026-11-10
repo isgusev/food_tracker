@@ -44,26 +44,42 @@ class ProductRepository(BaseRepository[Product]):
         """Загрузка продукта со всем деревом каталога одним JOIN'ом (лечит N+1)."""
         return select(Product).options(
             joinedload(Product.brand),
+            joinedload(Product.item),
             joinedload(Product.manufacturers).joinedload(ProductManufacturer.variants),
             selectinload(Product.packages),
         )
 
-    async def item_has_stock(self, search_name: str) -> bool:
+    async def item_has_stock(self, item_key: str) -> bool:
         """Есть ли у кого-нибудь ненулевые партии этого товара."""
         from app.models.stock import StockLot  # локально: репозиторий каталога не зависит от запасов
 
         stmt = (
             select(StockLot.id)
             .join(Product, Product.id == StockLot.product_id)
-            .where(Product.search_name == search_name, StockLot.remaining > 0)
+            .where(Product.item_key == item_key, StockLot.remaining > 0)
             .limit(1)
         )
         return (await self._session.execute(stmt)).first() is not None
 
-    async def same_item(self, search_name: str) -> list[Product]:
-        """Все продукты одного товара (одно название, разные бренды)."""
-        stmt = select(Product).where(Product.search_name == search_name).options(selectinload(Product.packages))
+    async def same_item(self, item_key: str) -> list[Product]:
+        """Все продукты одного товара (разные бренды и названия)."""
+        stmt = select(Product).where(Product.item_key == item_key).options(selectinload(Product.packages))
         return list((await self._session.execute(stmt)).scalars().all())
+
+    # --- товары ---
+    async def item(self, key: str):
+        from app.models.product import Item
+
+        return await self._session.get(Item, key)
+
+    def add_item(self, item) -> None:
+        self._session.add(item)
+
+    async def all_items(self):
+        from app.models.product import Item
+
+        stmt = select(Item).options(selectinload(Item.products).joinedload(Product.brand)).order_by(Item.name)
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def by_barcode(self, code: str) -> Product | None:
         stmt = self.full_query().where(Product.barcode == code)

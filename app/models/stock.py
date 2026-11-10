@@ -33,8 +33,8 @@ from app.db.base import Base
 class HouseholdProduct(Base):
     """Настройки товара в конкретной семье.
 
-    Товар = продукт без учёта бренда: ключ — название в нижнем регистре
-    (Product.search_name), так «гречка» любого бренда — один товар.
+    Товар = базовое наименование без бренда (Item; ключ — Product.item_key),
+    так «гречка» любого бренда — один товар.
     """
 
     __tablename__ = "household_products"
@@ -174,6 +174,7 @@ class ShoppingLine(Base):
     package_count = Column(Integer, nullable=True)
     is_extra = Column(Boolean, default=False, nullable=False)    # добавлено вручную
     is_staple = Column(Boolean, default=False, nullable=False)   # «базовый, заканчивается»
+    is_exact = Column(Boolean, default=False, nullable=False, server_default="false")  # именно этот бренд
     is_checked = Column(Boolean, default=False, nullable=False)
     checked_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
