@@ -431,7 +431,7 @@ class ReceiptService:
 
         def free_line_for(product: Product) -> ShoppingLine | None:
             for ln in open_lines:
-                if ln.id not in used_lines and ln.product.search_name == product.search_name:
+                if ln.id not in used_lines and ln.product.item_key == product.item_key:
                     return ln
             return None
 
@@ -600,7 +600,7 @@ class ReceiptService:
         qty = ln.quantity or item_quantity(item, product)
         if qty is None:
             raise ValidationError(f"«{item['name']}»: укажите, сколько куплено")
-        settings = await self._stock_repo.settings(household_id, product.search_name)
+        settings = await self._stock_repo.settings(household_id, product.item_key)
         if settings is not None and settings.is_staple:
             return product, qty  # базовый товар: остаток не ведём, только запоминаем
         lst = await self._lists.active(household_id)

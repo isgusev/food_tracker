@@ -109,6 +109,13 @@ class PackageResponse(ORMModel):
     name: Optional[str] = None
 
 
+class ItemBrief(ORMModel):
+    """Товар — базовое наименование без бренда."""
+
+    key: str
+    name: str
+
+
 class ProductResponse(ORMModel):
     id: int
     category_id: int
@@ -118,6 +125,8 @@ class ProductResponse(ORMModel):
     base_unit: str = "g"
     piece_weight_g: Optional[Decimal] = None
     barcode: Optional[str] = None
+    item_key: str
+    item: Optional[ItemBrief] = None
     packages: list[PackageResponse] = []
     manufacturers: list[ManufacturerResponse] = []
 

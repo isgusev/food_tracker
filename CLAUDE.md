@@ -70,8 +70,18 @@
   `MealPortion` (член семьи или гость=NULL, вес, `is_eaten`, `eaten_from_pot_id`).
 - **Кастрюля** (`RecipeCookingLog`) резервирует несъеденные порции привязанных блюд;
   привязка с сегодняшнего дня по вместимости, освобождение поздних блюд при убывании.
+- **Товар** (`Item`, ключ строкой `items.key`) — базовое наименование без бренда («Кефир 3,2%»); у продукта
+  `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
+  единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
+  дубликатов «название+бренд»). Новый продукт попадает в товар со своим названием; объединение
+  (`app/services/items.py`, `/items/merge`, предложения `/items/suggestions` — суть названия без брендов и
+  размеров, числа должны совпадать) = перепривязка продуктов + слияние настроек семей. «🎯 Именно этот
+  вариант» — `RecipeTemplateIngredient.exact`, `MealItem.exact` → в покупках отдельная строка
+  `ShoppingLine.is_exact` (ключ потребности `item_key#product_id`), закрывается только запасами этого
+  продукта; обычная строка — имя товара + «обычно <бренд>» (последняя покупка), при «куплено»/«Изменить»
+  можно выбрать бренд товара (`product_id` в LineCheck/LineUpdate). Веб: «Продукты → Товары» (`views/items.js`).
 - **Запасы** — партии со своим сроком; пачки с кодом «Честного знака» с разным сроком — разные партии.
-  Сверяются по ТОВАРУ = `Product.search_name` (без бренда); партии `StockLot`,
+  Сверяются по ТОВАРУ = `Product.item_key`; партии `StockLot`,
   каждое изменение — `StockMovement` (отмены возвращают в те же партии). Готовка списывает
   состав кастрюли, «съел» — готовый продукт. «Базовые» товары не учитываются.
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
@@ -88,8 +98,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 96 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0014)
+.venv/bin/python -m pytest -q              # 101 тест, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0015)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -113,6 +123,8 @@
 - SQL `LOWER()/ILIKE` не работает с кириллицей в SQLite — сравнивать в Python.
 - Остатки `Numeric(…,1)` — количества `quantize()` ДО сравнения, иначе ложные «недостачи».
 - Async SQLAlchemy: не трогать незагруженные связи (MissingGreenlet), не делать `expire_all`.
+  Удаляя родителя с загруженной коллекцией детей, SQLAlchemy обнуляет у них FK — даже если детей уже
+  перенесли (`Item.products` поэтому с `passive_deletes="all"`).
 - Amvera сама задаёт `PORT` — порт в `start.sh` фиксирован 8000. Пароль БД экранируется в URL,
   `%` удваивается для alembic. `POSTGRES_PORT` по умолчанию 5433 (локальный) — на хостинге задавать.
 - Встроенный браузер Claude: service worker не регистрируется, браузер кэширует JS —

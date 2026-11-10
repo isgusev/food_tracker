@@ -26,6 +26,7 @@ class MealItemCreate(BaseModel):
     # Ровно одно из двух: блюдо по рецепту ИЛИ готовый продукт (версия КБЖУ)
     recipe_id: Optional[int] = None
     variant_id: Optional[int] = None
+    exact: bool = False   # готовый продукт: в покупки «именно этот вариант», а не любой бренд товара
     portions: list[PortionIn] = Field(min_length=1, max_length=30)
 
     @field_validator("meal_type")
@@ -94,6 +95,7 @@ class MealItemResponse(BaseModel):
     kind: str                         # "recipe" | "product"
     recipe_id: Optional[int] = None
     variant_id: Optional[int] = None
+    exact: bool = False
     name: str
     # "product" | "to_cook" | "in_fridge"
     state: str

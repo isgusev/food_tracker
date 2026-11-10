@@ -33,12 +33,14 @@ class IngredientLine(BaseModel):
 
     variant_id: int
     weight_g: Decimal = Field(gt=0, le=Decimal("99999.9"))
+    exact: bool = False   # «именно этот вариант» (в шаблоне рецепта; в готовке не используется)
 
 
 class RecipeTemplateIngredientResponse(ORMModel):
     id: int
     variant_id: int
     weight_g: Decimal
+    exact: bool = False
 
 
 class RecipeCreate(BaseModel):

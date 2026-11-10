@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import Nutrients, base_to_grams, grams_to_base, nutrients_are_inconsistent, quantize
-from app.models.product import Brand, Product, ProductManufacturer, ProductPackage, ProductVariant
+from app.models.product import Brand, Item, Product, ProductManufacturer, ProductPackage, ProductVariant
 from app.repositories.product import (
     BrandRepository,
     ManufacturerRepository,
@@ -99,13 +99,19 @@ class ProductService:
                 f"Продукт '{data.name}' для этого бренда уже существует (регистр не имеет значения)"
             )
 
-        # единица — свойство товара: новый бренд наследует её у товара с тем же названием
+        # товар: есть товар с таким названием — продукт к нему, иначе новый товар
+        item = await self._products.item(search_name)
+        if item is None:
+            self._products.add_item(Item(key=search_name, name=data.name))
+            await self._products.flush()
+        # единица — свойство товара: новый бренд наследует её у товара
         same = await self._products.same_item(search_name)
         product = Product(
             category_id=data.category_id,
             brand_id=brand_id,
             name=data.name,
             search_name=search_name,
+            item_key=search_name,
             barcode=data.barcode,
             base_unit=same[0].base_unit if same else "g",
             piece_weight_g=same[0].piece_weight_g if same else None,
@@ -161,7 +167,7 @@ class ProductService:
             return
         if unit == "ml" and product.base_unit == "g" and is_new:
             # новый товар в бутылке — сразу учитываем в мл (если других брендов нет)
-            if len(await self._products.same_item(product.search_name)) == 1:
+            if len(await self._products.same_item(product.item_key)) == 1:
                 product.base_unit = "ml"
         if unit == "pcs":
             if product.base_unit != "pcs":
@@ -259,12 +265,12 @@ class ProductService:
             return product
         # запасы хранятся в единице товара — менять её под живыми остатками нельзя
         # (справочник общий: это задело бы и другие семьи)
-        if await self._products.item_has_stock(product.search_name):
+        if await self._products.item_has_stock(product.item_key):
             raise ConflictError(
                 "Единицу нельзя поменять, пока этот товар есть в запасах "
                 "(в том числе у других семей). Сначала спишите или обнулите остаток."
             )
-        for p in await self._products.same_item(product.search_name):
+        for p in await self._products.same_item(product.item_key):
             # упаковки пересчитываем: старая единица → граммы → новая
             for pk in p.packages:
                 g = base_to_grams(Decimal(str(pk.amount)), p.base_unit, p.piece_weight_g)

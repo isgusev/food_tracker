@@ -14,6 +14,7 @@ from app.db.session import SessionDep, get_session
 from app.models.household import HouseholdMember
 from app.models.user import User
 from app.repositories.household import HouseholdRepository, MemberRepository
+from app.repositories.item import ItemRepository
 from app.repositories.plan import PlanRepository
 from app.repositories.receipt import ReceiptAliasRepository, ReceiptRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
@@ -32,6 +33,7 @@ from app.repositories.recipe import (
 from app.repositories.user import InviteRepository, UserRepository
 from app.services.auth import AuthService
 from app.services.household import HouseholdService
+from app.services.items import ItemService
 from app.services.plan import PlanService
 from app.services.finance import FinanceService
 from app.services.stock import StockService
@@ -194,3 +196,10 @@ def get_receipt_service(session: SessionDep) -> ReceiptService:
 
 
 ReceiptServiceDep = Annotated[ReceiptService, Depends(get_receipt_service)]
+
+
+def get_item_service(session: SessionDep) -> ItemService:
+    return ItemService(ItemRepository(session))
+
+
+ItemServiceDep = Annotated[ItemService, Depends(get_item_service)]

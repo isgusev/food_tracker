@@ -63,6 +63,7 @@ export const AddItemModal = {
     const recipeId = ref(null);
     const variantId = ref(null);
     const draft = ref(null);          // продукт из Open Food Facts, ещё не в справочнике
+    const exact = ref(false);         // «именно этот вариант» — в покупки этот бренд
     const meal = ref(props.meal || "lunch");
     const dates = ref([props.date]);
     const rows = ref(activeMembers.value.map((m) => ({ member_id: m.id, name: m.name, on: true, weight: 250 })));
@@ -186,6 +187,7 @@ export const AddItemModal = {
         if (!variantId.value && !draft.value) { error.value = "Выберите продукт"; return; }
         if (draft.value && (error.value = draftError(draft.value))) return;
         body.variant_id = variantId.value;
+        body.exact = exact.value;
       }
       if (!portions.length) { error.value = "Отметьте, кто ест"; return; }
       busy.value = true;
@@ -212,7 +214,7 @@ export const AddItemModal = {
     }
 
     return {
-      kind, recipeId, variantId, draft, packages, amountMode, pkgIdx, pkgCount, pkgSplit, meal, dates, rows, guests, guestWeight, potStatus, potFree, busy, error,
+      kind, recipeId, variantId, draft, exact, packages, amountMode, pkgIdx, pkgCount, pkgSplit, meal, dates, rows, guests, guestWeight, potStatus, potFree, busy, error,
       recipeItems, portionHint, per100, kcal, total, MEALS, toggleDate, save, fmt, grams, fmtWeekday, fmtDayMonth, n,
     };
   },
@@ -233,6 +235,9 @@ export const AddItemModal = {
         <span v-if="!variantId && !draft" class="tiny muted">Сначала ищем в справочнике, не нашли — в Open Food Facts. 📷 — штрихкод камерой.</span>
       </div>
       <OffDraftCard v-if="kind === 'product' && draft" :draft="draft" />
+      <label v-if="kind === 'product' && (variantId || draft)" class="row small" style="gap: 8px; cursor: pointer">
+        <input type="checkbox" v-model="exact">
+        <span>🎯 Именно этот вариант <span class="muted">— в покупках этот бренд, а не любой бренд того же товара</span></span></label>
 
       <div v-if="packages.length" class="stack tight">
         <div class="segmented">

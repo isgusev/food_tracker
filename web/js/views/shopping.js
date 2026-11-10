@@ -52,19 +52,24 @@ const BoughtModal = {
   emits: ["close", "saved"],
   setup(props, { emit }) {
     const qty = ref(n(props.line.bought_quantity));
+    // купили другой бренд того же товара — КБЖУ и цена пойдут по нему
+    const productId = ref(props.line.product_id);
+    const brands = computed(() => state.products
+      .filter((p) => p.item_key === props.line.item_key)
+      .map((p) => ({ id: p.id, label: `${p.brand?.name || "без бренда"} · ${p.name}` })));
     const price = ref(props.line.price != null ? n(props.line.price) : "");
     const expires = ref(props.line.expires_on || "");
     const busy = ref(false);
     async function save() {
       busy.value = true;
       try {
-        const res = await api.patch(`/shopping-lists/lines/${props.line.id}`, {
-          quantity: n(qty.value), price: price.value === "" ? null : n(price.value), expires_on: expires.value || null,
-        });
+        const body = { quantity: n(qty.value), price: price.value === "" ? null : n(price.value), expires_on: expires.value || null };
+        if (productId.value !== props.line.product_id) body.product_id = productId.value;
+        const res = await api.patch(`/shopping-lists/lines/${props.line.id}`, body);
         emit("saved", res);
       } catch (e) { toastError(e); } finally { busy.value = false; }
     }
-    return { qty, price, expires, busy, save, UNIT_LABEL };
+    return { qty, price, expires, busy, save, UNIT_LABEL, productId, brands };
   },
   template: `
     <Modal :title="line.product_name" @close="$emit('close')">
@@ -73,6 +78,9 @@ const BoughtModal = {
         <label class="field"><span>Цена за всё, ₽</span><input type="number" min="0" step="0.01" v-model="price" placeholder="необязательно"></label>
       </div>
       <label class="field"><span>Годен до</span><input type="date" v-model="expires"><span class="tiny">Необязательно — пригодится для напоминаний</span></label>
+      <label v-if="!line.is_exact && brands.length > 1" class="field"><span>Какой бренд купили</span>
+        <select v-model.number="productId"><option v-for="b in brands" :key="b.id" :value="b.id">{{ b.label }}</option></select>
+        <span class="tiny">По нему посчитаются КБЖУ и цена; в следующий раз подскажем его как «обычно».</span></label>
       <template #foot>
         <button @click="$emit('close')">Отмена</button>
         <button class="primary" :disabled="busy" @click="save">Сохранить</button>
@@ -292,11 +300,12 @@ export const ShoppingView = {
               <span class="grow shop-name">{{ l.product_name }}
                 <span v-if="l.is_staple" class="badge warn">заканчивается</span>
                 <span v-if="l.is_extra" class="badge">вне плана</span>
-                <span v-if="l.brand" class="tiny muted"> · {{ l.brand }}</span></span>
+                <span v-if="l.is_exact" class="badge warn" title="Нужен именно этот бренд">🎯 {{ l.brand }}</span>
+                <span v-else-if="l.brand" class="tiny muted" style="display: block">{{ l.is_extra ? l.brand : 'обычно ' + l.brand }}</span></span>
               <span class="nowrap" style="text-align: right"><b class="num">{{ pkgText(l) }}</b>
                 <div v-if="estimate(l) != null" class="tiny muted num">≈ {{ fmt(estimate(l)) }} ₽</div>
-                <button v-if="needsPackage(l)" class="sm ghost" style="padding: 0 4px" @click="packaging = l"
-                        title="У товара нет упаковки — укажите, и покупка округлится до целых пачек">📦 Упаковка?</button></span>
+                <button v-if="needsPackage(l)" class="sm ghost" style="padding: 0 4px; display: block; margin-left: auto" @click="packaging = l"
+                        title="У товара нет упаковки — укажите, и покупка округлится до целых пачек">📦 пачка?</button></span>
               <button class="ghost icon sm" @click="remove(l)" title="Убрать из списка">✕</button>
             </div>
           </template>
