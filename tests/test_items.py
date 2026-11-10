@@ -31,6 +31,8 @@ async def lines(client, h) -> list[dict]:
 def test_core_tokens_ignore_brand_size_and_comma():
     assert core_tokens("Кефир 3,2% Домик в деревне 930мл", {"Домик в деревне"}) == core_tokens("кефир 3.2%", set())
     assert core_tokens("Кефир 2,5%", set()) != core_tokens("Кефир 3,2%", set())
+    # знак процента суть не меняет: «Кефир 3,2» и «Кефир 3,2%» — один товар
+    assert core_tokens("Кефир 3,2", set()) == core_tokens("Кефир 3,2%", set())
 
 
 async def test_suggest_and_merge_items_one_shopping_line(client):
