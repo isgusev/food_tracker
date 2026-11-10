@@ -51,6 +51,14 @@ class HouseholdMember(Base):
     target_fats = Column(Numeric(5, 1), nullable=True)
     target_carbs = Column(Numeric(5, 1), nullable=True)
 
+    # Параметры для расчёта целей (app/services/nutrition.py); всё необязательно
+    sex = Column(String(1), nullable=True)                 # "m" | "f"
+    birth_year = Column(Integer, nullable=True)
+    height_cm = Column(Numeric(4, 1), nullable=True)
+    weight_kg = Column(Numeric(4, 1), nullable=True)
+    activity = Column(Numeric(3, 2), nullable=True)        # КФА: 1.4 / 1.6 / 1.9 / 2.2
+    goal = Column(String(8), nullable=True)                # "maintain" | "lose" | "gain"
+
     created_at = Column(DateTime, server_default=func.now())
 
     household = relationship("Household", back_populates="members")

@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import Nutrients, base_to_grams, grams_to_base, nutrients_are_inconsistent, quantize
-from app.models.product import Brand, Product, ProductManufacturer, ProductPackage, ProductVariant
+from app.models.product import Brand, Item, Product, ProductManufacturer, ProductPackage, ProductVariant
 from app.repositories.product import (
     BrandRepository,
     ManufacturerRepository,
@@ -23,10 +23,12 @@ from app.repositories.recipe import RecipeRepository
 from app.schemas.product import (
     BarcodeLookup,
     BarcodeSuggestion,
+    OffSearchResult,
     PackageCreate,
     ProductCreate,
     ProductResponse,
     ProductVariantCreate,
+    ProductWithCategoryCreate,
     UnitUpdate,
 )
 from app.services import barcode as off
@@ -97,13 +99,19 @@ class ProductService:
                 f"Продукт '{data.name}' для этого бренда уже существует (регистр не имеет значения)"
             )
 
-        # единица — свойство товара: новый бренд наследует её у товара с тем же названием
+        # товар: есть товар с таким названием — продукт к нему, иначе новый товар
+        item = await self._products.item(search_name)
+        if item is None:
+            self._products.add_item(Item(key=search_name, name=data.name))
+            await self._products.flush()
+        # единица — свойство товара: новый бренд наследует её у товара
         same = await self._products.same_item(search_name)
         product = Product(
             category_id=data.category_id,
             brand_id=brand_id,
             name=data.name,
             search_name=search_name,
+            item_key=search_name,
             barcode=data.barcode,
             base_unit=same[0].base_unit if same else "g",
             piece_weight_g=same[0].piece_weight_g if same else None,
@@ -111,10 +119,73 @@ class ProductService:
         self._products.add(product)
         await self._products.flush()  # получаем product.id внутри той же транзакции
 
-        await self.create_variant(product.id, data.base_variant)
+        if data.base_variant is None:
+            # КБЖУ внесут позже: версия-заглушка с нулями, продукт помечен
+            product.kbju_missing = True
+            await self.create_variant(product.id, ProductVariantCreate(calories=0, proteins=0, fats=0, carbs=0), placeholder=True)
+        else:
+            await self.create_variant(product.id, data.base_variant)
         full = await self._products.get_full(product.id)
         assert full is not None
         return full
+
+    async def create_with_category(self, data: ProductWithCategoryCreate) -> Product:
+        """Продукт из формы (или из Open Food Facts): категория по имени, штрихкод,
+        упаковка с этикетки. reuse_existing — вернуть уже существующий продукт."""
+        if data.reuse_existing:
+            existing = await self._find_existing(data)
+            if existing is not None:
+                if data.barcode and not existing.barcode and await self._products.by_barcode(data.barcode) is None:
+                    existing.barcode = data.barcode
+                await self._add_label_package(existing, data.package_amount, data.package_unit)
+                await self._products.flush()
+                return await self.get_product(existing.id)
+        category_id = await self.get_or_create_category(data.category_name)
+        product = await self.create_product(ProductCreate(
+            category_id=category_id,
+            name=data.name,
+            brand_name=data.brand_name or "Без бренда",
+            barcode=data.barcode,
+            base_variant=data.base_variant,
+        ))
+        await self._add_label_package(product, data.package_amount, data.package_unit, is_new=True)
+        await self._products.flush()
+        return await self.get_product(product.id)
+
+    async def _find_existing(self, data: ProductWithCategoryCreate) -> Product | None:
+        if data.barcode:
+            found = await self._products.by_barcode(data.barcode)
+            if found is not None:
+                return found
+        brand = await self._brands.get_by_search_name((data.brand_name or "Без бренда").strip().lower())
+        if brand is None:
+            return None
+        dup = await self._products.find_duplicate(brand.id, data.name.lower())
+        return await self._products.get_full(dup.id) if dup else None
+
+    async def _add_label_package(
+        self, product: Product, amount: Decimal | None, unit: str | None, is_new: bool = False
+    ) -> None:
+        """Упаковка с этикетки → в единице товара. г и мл считаем 1:1; штуки
+        без веса одной штуки перевести нельзя — такую упаковку пропускаем."""
+        if not amount or not unit:
+            return
+        if unit == "ml" and product.base_unit == "g" and is_new:
+            # новый товар в бутылке — сразу учитываем в мл (если других брендов нет)
+            if len(await self._products.same_item(product.item_key)) == 1:
+                product.base_unit = "ml"
+        if unit == "pcs":
+            if product.base_unit != "pcs":
+                return
+            qty = amount
+        else:
+            if product.base_unit == "pcs" and not product.piece_weight_g:
+                return
+            qty = grams_to_base(amount, product.base_unit, product.piece_weight_g)
+        qty = quantize(qty)
+        if qty <= 0 or any(Decimal(str(p.amount)) == qty for p in product.packages):
+            return
+        product.packages.append(ProductPackage(amount=qty))
 
     async def _resolve_brand_id(self, data: ProductCreate) -> int:
         if data.brand_id is not None:
@@ -158,6 +229,26 @@ class ProductService:
             return BarcodeLookup(barcode=code, source="none")
         return BarcodeLookup(barcode=code, source="openfoodfacts", suggestion=BarcodeSuggestion(**off.parse_off(raw)))
 
+    async def search_off(self, q: str, limit: int = 20) -> OffSearchResult:
+        """Поиск по названию в Open Food Facts. Позиции, чей штрихкод уже есть
+        в справочнике, возвращаются как свои продукты (local), а не подсказки."""
+        raw = await off.search_off(q, limit)
+        if raw is None:
+            return OffSearchResult(available=False)
+        items, local, seen = [], [], set()
+        for p in raw:
+            s = off.parse_off(p)
+            if not s["name"] or (s["barcode"] and s["barcode"] in seen):
+                continue
+            if s["barcode"]:
+                seen.add(s["barcode"])
+                own = await self._products.by_barcode(s["barcode"])
+                if own is not None:
+                    local.append(ProductResponse.model_validate(own))
+                    continue
+            items.append(BarcodeSuggestion(**s))
+        return OffSearchResult(items=items, local=local)
+
     async def set_barcode(self, product_id: int, code: str) -> Product:
         product = await self.get_product(product_id)
         other = await self._products.by_barcode(code)
@@ -179,12 +270,12 @@ class ProductService:
             return product
         # запасы хранятся в единице товара — менять её под живыми остатками нельзя
         # (справочник общий: это задело бы и другие семьи)
-        if await self._products.item_has_stock(product.search_name):
+        if await self._products.item_has_stock(product.item_key):
             raise ConflictError(
                 "Единицу нельзя поменять, пока этот товар есть в запасах "
                 "(в том числе у других семей). Сначала спишите или обнулите остаток."
             )
-        for p in await self._products.same_item(product.search_name):
+        for p in await self._products.same_item(product.item_key):
             # упаковки пересчитываем: старая единица → граммы → новая
             for pk in p.packages:
                 g = base_to_grams(Decimal(str(pk.amount)), p.base_unit, p.piece_weight_g)
@@ -228,7 +319,7 @@ class ProductService:
         return manufacturer
 
     async def create_variant(
-        self, product_id: int, data: ProductVariantCreate
+        self, product_id: int, data: ProductVariantCreate, *, placeholder: bool = False
     ) -> ProductVariant:
         product = await self._products.get(product_id)
         if product is None:
@@ -261,6 +352,10 @@ class ProductService:
         await self._variants.flush()
         if current_active is not None:
             await self._retarget(current_active.id, variant.id)
+            # настоящие цифры заменили заглушку — продукт больше не «без КБЖУ»
+            if product.kbju_missing and not placeholder:
+                product.kbju_missing = False
+                await self._products.flush()
         return variant
 
     async def _retarget(self, old_variant_id: int, new_variant_id: int) -> None:

@@ -1,16 +1,20 @@
 // Холодильник → Продукты: запасы семьи по товарам (все бренды вместе).
-import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
+import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { Modal, Picker, BarcodeScanner } from "../components.js";
 import { state, ensureCatalog, toast, toastError } from "../store.js";
 import { fmt, fmtDateTime, fmtDayMonth, fmtQty, matches, n, today, UNIT_LABEL } from "../util.js";
+import { PacksEditor, packsBody, defaultPackAmount, productById } from "../marking.js";
 
 const REASON = { purchase: "покупка", manual: "добавлено", inventory: "инвентаризация", cook: "готовка", eat: "съедено", write_off: "списано" };
 
 const AddLotModal = {
-  components: { Modal, Picker, BarcodeScanner },
+  components: { Modal, Picker, BarcodeScanner, PacksEditor },
   emits: ["close", "saved"],
   setup(_, { emit }) {
+    const mode = ref("qty");          // "qty" — количеством, "packs" — по пачкам («Честный знак»)
+    const packs = ref([]);
+    const packAmount = ref("");
     const productId = ref(null);
     const qty = ref("");
     const price = ref("");
@@ -27,7 +31,24 @@ const AddLotModal = {
     }
     const items = computed(() => state.products.map((p) => ({ id: p.id, label: p.name, sub: p.brand?.name, right: UNIT_LABEL[p.base_unit || "g"] })));
     const unit = computed(() => state.products.find((p) => p.id === productId.value)?.base_unit || "g");
+    const product = computed(() => productById(productId.value));
+    watch(productId, () => { if (!n(packAmount.value)) packAmount.value = defaultPackAmount(product.value); });
+    async function savePacks() {
+      if (!productId.value || !packs.value.length || !(n(packAmount.value) > 0)) {
+        toast("Выберите продукт, размер пачки и добавьте пачки", "error"); return;
+      }
+      busy.value = true;
+      try {
+        const res = await api.post("/stock/lots/packs", {
+          product_id: productId.value, pack_amount: n(packAmount.value),
+          price: price.value === "" ? null : n(price.value), packs: packsBody(packs.value),
+        });
+        toast(`Добавлено пачек: ${packs.value.length}`);
+        emit("saved", res);
+      } catch (e) { toastError(e); } finally { busy.value = false; }
+    }
     async function save() {
+      if (mode.value === "packs") return savePacks();
       if (!productId.value || !(n(qty.value) > 0)) { toast("Выберите продукт и количество", "error"); return; }
       busy.value = true;
       try {
@@ -39,7 +60,7 @@ const AddLotModal = {
         emit("saved", res);
       } catch (e) { toastError(e); } finally { busy.value = false; }
     }
-    return { productId, qty, price, expires, busy, items, unit, save, UNIT_LABEL, scanning, onCode };
+    return { mode, packs, packAmount, product, productId, qty, price, expires, busy, items, unit, save, UNIT_LABEL, scanning, onCode };
   },
   template: `
     <Modal title="Добавить в запасы" @close="$emit('close')">
@@ -47,17 +68,58 @@ const AddLotModal = {
         <div class="row" style="flex-wrap: nowrap"><div class="grow"><Picker :items="items" v-model="productId" autofocus placeholder="Что добавить…" /></div>
           <button class="sm" @click="scanning = true" title="По штрихкоду">📷</button></div></label>
       <BarcodeScanner v-if="scanning" @close="scanning = false" @code="onCode" />
-      <div class="grid-2">
-        <label class="field"><span>Количество, {{ UNIT_LABEL[unit] }}</span><input type="number" min="0.1" step="any" v-model="qty"></label>
-        <label class="field"><span>Цена, ₽</span><input type="number" min="0" step="0.01" v-model="price" placeholder="необязательно"></label>
+      <div class="segmented">
+        <button :class="{ on: mode === 'qty' }" @click="mode = 'qty'">Количеством</button>
+        <button :class="{ on: mode === 'packs' }" @click="mode = 'packs'">По пачкам «Честный знак»</button>
       </div>
-      <label class="field"><span>Годен до</span><input type="date" v-model="expires"></label>
+      <template v-if="mode === 'qty'">
+        <div class="grid-2">
+          <label class="field"><span>Количество, {{ UNIT_LABEL[unit] }}</span><input type="number" min="0.1" step="any" v-model="qty"></label>
+          <label class="field"><span>Цена, ₽</span><input type="number" min="0" step="0.01" v-model="price" placeholder="необязательно"></label>
+        </div>
+        <label class="field"><span>Годен до</span><input type="date" v-model="expires"></label>
+      </template>
+      <template v-else>
+        <PacksEditor :product="product" v-model:packs="packs" v-model:packAmount="packAmount" @product="productId = $event" />
+        <label class="field"><span>Цена за все пачки, ₽</span><input type="number" min="0" step="0.01" v-model="price" placeholder="необязательно"></label>
+        <span class="tiny muted">Пачки с одним сроком станут одной партией, с разными — разными (цена делится по числу пачек).</span>
+      </template>
       <template #foot><button @click="$emit('close')">Отмена</button><button class="primary" :disabled="busy" @click="save">Добавить</button></template>
     </Modal>`,
 };
 
+// Партия → пачки со своими сроками (купили по списку, а сроки на пачках разные)
+const SplitLotModal = {
+  components: { Modal, PacksEditor },
+  props: { lot: Object, unit: String },
+  emits: ["close", "saved"],
+  setup(props, { emit }) {
+    const product = computed(() => productById(props.lot.product_id));
+    const packs = ref([]);
+    const packAmount = ref(defaultPackAmount(product.value, n(props.lot.remaining)));
+    const busy = ref(false);
+    async function save() {
+      if (!packs.value.length || !(n(packAmount.value) > 0)) { toast("Добавьте пачки и укажите размер пачки", "error"); return; }
+      busy.value = true;
+      try {
+        const list = await api.post(`/stock/lots/${props.lot.id}/packs`, { pack_amount: n(packAmount.value), packs: packsBody(packs.value) });
+        toast("Сроки по пачкам сохранены");
+        emit("saved", list);
+      } catch (e) { toastError(e); } finally { busy.value = false; }
+    }
+    return { product, packs, packAmount, busy, save, fmtQty, fmtDayMonth };
+  },
+  template: `
+    <Modal title="Сроки по пачкам" @close="$emit('close')">
+      <div class="small muted">Партия от {{ fmtDayMonth(lot.purchased_on) }}: осталось {{ fmtQty(lot.remaining, unit) }}.
+        Пачки с другим сроком станут отдельными партиями — холодильник будет списывать сначала те, что раньше испортятся.</div>
+      <PacksEditor :product="product" v-model:packs="packs" v-model:packAmount="packAmount" :max="Number(lot.remaining)" />
+      <template #foot><button @click="$emit('close')">Отмена</button><button class="primary" :disabled="busy || !packs.length" @click="save">Сохранить</button></template>
+    </Modal>`,
+};
+
 const ItemModal = {
-  components: { Modal },
+  components: { Modal, SplitLotModal },
   props: { item: Object },
   emits: ["close", "saved"],
   setup(props, { emit }) {
@@ -67,6 +129,7 @@ const ItemModal = {
     const woNote = ref("");
     const history = ref([]);
     const busy = ref(false);
+    const splitting = ref(null);   // партия, которую раскладываем по пачкам
     onMounted(async () => {
       try { history.value = await api.get(`/stock/items/${it.value.product_id}/history`); } catch { /* необязательно */ }
     });
@@ -83,7 +146,14 @@ const ItemModal = {
     const inventory = () => run(() => api.post(`/stock/items/${it.value.product_id}/inventory`, { quantity: n(actual.value) }), "Остаток уточнён");
     const writeOff = () => n(woQty.value) > 0 && run(() => api.post(`/stock/items/${it.value.product_id}/write-off`, { quantity: n(woQty.value), note: woNote.value || null }), "Списано");
     const flags = (body, msg) => run(() => api.patch(`/stock/items/${it.value.product_id}`, body), msg);
-    return { it, actual, woQty, woNote, history, busy, inventory, writeOff, flags, fmt, fmtQty, fmtDayMonth, fmtDateTime, REASON, UNIT_LABEL, n };
+    function onSplit(list) {
+      splitting.value = null;
+      emit("saved", list);
+      it.value = list.find((x) => x.item_key === it.value.item_key) || it.value;
+    }
+    // ближайший срок — сверху: так же холодильник и списывает
+    const lotsByExpiry = computed(() => [...it.value.lots].sort((x, y) => (x.expires_on || "9999").localeCompare(y.expires_on || "9999") || x.id - y.id));
+    return { it, actual, woQty, woNote, history, busy, inventory, writeOff, flags, splitting, onSplit, lotsByExpiry, todayIso: today(), fmt, fmtQty, fmtDayMonth, fmtDateTime, REASON, UNIT_LABEL, n };
   },
   template: `
     <Modal :title="it.name" wide @close="$emit('close')">
@@ -94,16 +164,15 @@ const ItemModal = {
         <span class="muted small" v-if="!it.is_staple">Сейчас: <b class="num">{{ fmtQty(it.remaining, it.unit) }}</b></span>
       </div>
 
-      <div v-if="it.lots.length" class="card flush table-wrap">
-        <table class="tbl small">
-          <thead><tr><th>Партия</th><th class="r">Осталось</th><th class="r">Цена</th><th>Годен до</th></tr></thead>
-          <tbody><tr v-for="l in it.lots" :key="l.id">
-            <td>{{ fmtDayMonth(l.purchased_on) }} · {{ l.brand || '—' }} <span class="muted">{{ REASON[l.source] || l.source }}</span></td>
-            <td class="r num">{{ fmtQty(l.remaining, it.unit) }} <span class="muted">из {{ fmtQty(l.quantity, it.unit) }}</span></td>
-            <td class="r num">{{ l.price != null ? fmt(l.price, 2) + ' ₽' : '—' }}</td>
-            <td>{{ l.expires_on ? fmtDayMonth(l.expires_on) : '—' }}</td>
-          </tr></tbody>
-        </table>
+      <div v-if="it.lots.length" class="card flush">
+        <div v-for="l in lotsByExpiry" :key="l.id" class="lot-row">
+          <div class="grow" style="min-width: 0">
+            <div><b :class="{ 'lot-expired': l.expires_on && l.expires_on < todayIso }">{{ l.expires_on ? 'до ' + fmtDayMonth(l.expires_on) : 'срок не указан' }}</b>
+              · <span class="num">{{ fmtQty(l.remaining, it.unit) }}</span><span class="muted small"> из {{ fmtQty(l.quantity, it.unit) }}</span></div>
+            <div class="tiny muted ellipsis">{{ fmtDayMonth(l.purchased_on) }} · {{ l.brand || '—' }} · {{ REASON[l.source] || l.source }}<template v-if="l.price != null"> · {{ fmt(l.price, 2) }} ₽</template></div>
+          </div>
+          <button class="sm" @click="splitting = l" title="Указать сроки по пачкам (код «Честного знака»)">📦 Сроки</button>
+        </div>
       </div>
 
       <div class="grid-2" v-if="!it.is_staple">
@@ -127,6 +196,7 @@ const ItemModal = {
         <span class="tiny muted">Базовые (соль, масло, специи) не считаются по граммам — в покупки попадают по отметке «заканчивается».</span>
       </div>
 
+      <SplitLotModal v-if="splitting" :lot="splitting" :unit="it.unit" @close="splitting = null" @saved="onSplit" />
       <details v-if="history.length">
         <summary class="small muted" style="cursor: pointer">История ({{ history.length }})</summary>
         <div class="stack tight" style="margin-top: 8px">

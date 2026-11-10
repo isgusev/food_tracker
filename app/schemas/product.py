@@ -32,7 +32,21 @@ class ProductWithCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     brand_name: Optional[str] = None
     barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
-    base_variant: ProductVariantCreate
+    # нет КБЖУ — продукт создаётся «на потом» (kbju_missing), цифры вносятся при первом использовании
+    base_variant: Optional[ProductVariantCreate] = None
+    # Упаковка с этикетки (например, из Open Food Facts): 930 мл, 300 г
+    package_amount: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("9999999.9"))
+    package_unit: Optional[str] = None
+    # Такой продукт уже есть (тот же штрихкод или название+бренд) — вернуть его,
+    # а не ошибку: так выбор из Open Food Facts можно повторять без дублей
+    reuse_existing: bool = False
+
+    @field_validator("package_unit")
+    @classmethod
+    def _pkg_unit(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("g", "ml", "pcs"):
+            raise ValueError("package_unit: g, ml или pcs")
+        return v
 
     @field_validator("category_name", "name")
     @classmethod
@@ -73,7 +87,8 @@ class ProductCreate(ORMModel):
     brand_id: Optional[int] = None
     brand_name: Optional[str] = None
     barcode: Optional[str] = Field(default=None, pattern=r"^\d{8,14}$")
-    base_variant: ProductVariantCreate
+    # нет КБЖУ — продукт создаётся «на потом» (kbju_missing), цифры вносятся при первом использовании
+    base_variant: Optional[ProductVariantCreate] = None
 
     @field_validator("name")
     @classmethod
@@ -96,6 +111,13 @@ class PackageResponse(ORMModel):
     name: Optional[str] = None
 
 
+class ItemBrief(ORMModel):
+    """Товар — базовое наименование без бренда."""
+
+    key: str
+    name: str
+
+
 class ProductResponse(ORMModel):
     id: int
     category_id: int
@@ -105,6 +127,9 @@ class ProductResponse(ORMModel):
     base_unit: str = "g"
     piece_weight_g: Optional[Decimal] = None
     barcode: Optional[str] = None
+    kbju_missing: bool = False
+    item_key: str
+    item: Optional[ItemBrief] = None
     packages: list[PackageResponse] = []
     manufacturers: list[ManufacturerResponse] = []
 
@@ -152,8 +177,10 @@ class BarcodeIn(BaseModel):
 class BarcodeSuggestion(BaseModel):
     """Подсказка из Open Food Facts — пользователь проверяет и сохраняет сам."""
 
+    barcode: Optional[str] = None
     name: Optional[str] = None
     brand: Optional[str] = None
+    manufacturer: Optional[str] = None            # владелец марки, если отличается от бренда
     calories: Optional[Decimal] = None
     proteins: Optional[Decimal] = None
     fats: Optional[Decimal] = None
@@ -167,3 +194,12 @@ class BarcodeLookup(BaseModel):
     source: str                                   # "local" | "openfoodfacts" | "none"
     product: Optional[ProductResponse] = None     # уже есть в справочнике
     suggestion: Optional[BarcodeSuggestion] = None
+
+
+class OffSearchResult(BaseModel):
+    """Поиск по названию в Open Food Facts; available=False — сервис не ответил."""
+
+    available: bool = True
+    items: list[BarcodeSuggestion] = []
+    # продукты из этого поиска, которые уже есть в справочнике (по штрихкоду)
+    local: list[ProductResponse] = []

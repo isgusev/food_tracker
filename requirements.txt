@@ -6,6 +6,8 @@ python-multipart==0.0.20
 # --- Конфигурация и схемы ---
 pydantic==2.11.7
 pydantic-settings==2.10.1
+# база часовых поясов для zoneinfo (в slim-образе её может не быть)
+tzdata==2025.2
 email-validator==2.2.0
 
 # --- БД: PostgreSQL + SQLAlchemy 2.0 (async) + миграции ---

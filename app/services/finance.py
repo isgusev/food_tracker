@@ -13,13 +13,14 @@ from __future__ import annotations
 
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.core import clock
 from app.domain import grams_to_base, quantize
 from app.models.household import Household
 from app.models.plan import MealPortion
@@ -86,7 +87,7 @@ class FinanceService:
         )
         out: dict[str, ItemPrice] = {}
         for lot in (await self._s.execute(stmt)).unique().scalars():
-            key = lot.product.search_name
+            key = lot.product.item_key
             if key in out:
                 continue
             up = unit_price(lot)
@@ -149,7 +150,7 @@ class FinanceService:
                 all_g += g
                 if product is None:
                     continue
-                p = prices.get(product.search_name)
+                p = prices.get(product.item_key)
                 if p is None:
                     continue
                 total += grams_to_base(g, product.base_unit, product.piece_weight_g) * p.unit_price
@@ -170,7 +171,7 @@ class FinanceService:
 
     # ---------------------------------------------------------------- сводка
     async def summary(self, household_id: int, start: date, end: date, today: date) -> FinanceSummary:
-        t0, t1 = datetime.combine(start, time.min), datetime.combine(end, time.max)
+        t0, t1 = clock.utc_bounds(start, end)   # метки времени в базе — UTC, дни — местные
 
         # Потрачено: партии, купленные в период
         lots = list((await self._s.execute(
@@ -193,7 +194,7 @@ class FinanceService:
         moves = list((await self._s.execute(
             select(StockMovement)
             .where(StockMovement.household_id == household_id, StockMovement.created_at >= t0,
-                   StockMovement.created_at <= t1, StockMovement.delta < 0)
+                   StockMovement.created_at < t1, StockMovement.delta < 0)
             .options(joinedload(StockMovement.lot).joinedload(StockLot.product))
         )).unique().scalars())
         eaten, wasted = ZERO, ZERO
@@ -215,7 +216,7 @@ class FinanceService:
         pots = list((await self._s.execute(
             select(RecipeCookingLog).where(
                 RecipeCookingLog.household_id == household_id, RecipeCookingLog.is_discarded.is_(True),
-                RecipeCookingLog.cooked_at >= t0, RecipeCookingLog.cooked_at <= t1,
+                RecipeCookingLog.cooked_at >= t0, RecipeCookingLog.cooked_at < t1,
             ).options(joinedload(RecipeCookingLog.recipe))
         )).unique().scalars())
         if pots:

@@ -37,6 +37,24 @@ class Brand(Base):
     products = relationship("Product", back_populates="brand")
 
 
+class Item(Base):
+    """Товар — базовое наименование без бренда: «Кефир 3,2%», «Масло сливочное 82,5%».
+
+    По товару считаются запасы, покупки, «базовые» и цены: кефир любого бренда —
+    одна строка в списке. Продукты конкретных брендов ссылаются на свой товар
+    (Product.item_key); объединить похожие товары = перепривязать продукты.
+    """
+
+    __tablename__ = "items"
+
+    key = Column(String(255), primary_key=True)        # нижний регистр, стабильный
+    name = Column(String(255), nullable=False)         # как показывать
+    created_at = Column(DateTime, server_default=func.now())
+
+    # товар удаляют только пустым (продукты уже перенесены) — сами продукты не трогать
+    products = relationship("Product", back_populates="item", passive_deletes="all")
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -57,8 +75,16 @@ class Product(Base):
     piece_weight_g = Column(Numeric(7, 1), nullable=True)
     # Штрихкод упаковки (EAN): один код — один продукт конкретного бренда
     barcode = Column(String(32), nullable=True, unique=True)
+    # КБЖУ ещё не внесены (продукт завели из чека / внеплановой покупки «на потом»):
+    # активная версия — заглушка с нулями; первая настоящая версия снимает флаг
+    kbju_missing = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Товар (базовое наименование), по которому идут запасы и покупки
+    item_key = Column(
+        String(255), ForeignKey("items.key", ondelete="RESTRICT"), nullable=False, index=True
+    )
 
     category = relationship("ProductCategory", back_populates="products")
+    item = relationship("Item", back_populates="products")
     brand = relationship("Brand", back_populates="products")
     manufacturers = relationship(
         "ProductManufacturer", back_populates="product", cascade="all, delete-orphan"

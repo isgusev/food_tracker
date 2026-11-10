@@ -13,12 +13,16 @@ import datetime as dt
 import pytest
 from httpx import AsyncClient
 
+from app.core import clock
+
 pytestmark = pytest.mark.anyio
 
 
 def day(offset: int = 0) -> str:
     """ISO-дата относительно сегодня: логика холодильника зависит от текущей даты."""
-    return (dt.date.today() + dt.timedelta(days=offset)).isoformat()
+    # то же «сегодня», что у приложения (часовой пояс семьи), — иначе ночью по Москве
+    # или на CI в UTC тесты разъезжаются с сервером на сутки
+    return (clock.today() + dt.timedelta(days=offset)).isoformat()
 
 
 TODAY = day()

@@ -1,13 +1,13 @@
 // Service worker: приложение открывается без сети, список покупок виден офлайн.
 // Стратегия — «сначала сеть»: онлайн всегда свежая версия (после обновления
 // сразу новые JS/CSS), офлайн — последняя сохранённая копия.
-const CACHE = "ft-v1";
+const CACHE = "ft-v6";
 const SHELL = [
-  "./", "index.html", "styles.css", "manifest.webmanifest", "icons/icon-192.png",
-  "vendor/vue.esm-browser.prod.js",
-  "js/app.js", "js/api.js", "js/store.js", "js/util.js", "js/components.js",
+  "./", "index.html", "styles.css", "manifest.webmanifest", "icons/icon-192.png", "icons/icon.svg",
+  "vendor/vue.esm-browser.prod.js", "vendor/zxing.min.js",
+  "js/app.js", "js/api.js", "js/store.js", "js/util.js", "js/components.js", "js/product-finder.js", "js/marking.js", "js/receipts.js",
   "js/views/planner.js", "js/views/plan-modals.js", "js/views/shopping.js", "js/views/fridge.js",
-  "js/views/stock.js", "js/views/recipes.js", "js/views/catalog.js", "js/views/misc.js", "js/views/money.js",
+  "js/views/stock.js", "js/views/recipes.js", "js/views/catalog.js", "js/views/items.js", "js/views/misc.js", "js/views/money.js",
 ];
 // Ответы API, которые полезно иметь офлайн (только чтение)
 const OFFLINE_API = ["/api/v1/shopping-lists/active", "/api/v1/auth/me", "/api/v1/household", "/api/v1/finance/prices"];

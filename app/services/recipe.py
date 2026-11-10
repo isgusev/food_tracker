@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
     ZERO,
@@ -168,6 +169,7 @@ class RecipeService:
             instructions=data.instructions.strip() if data.instructions else None,
             created_by_user=data.created_by_user,
             default_servings=data.default_servings,
+            allow_half=data.allow_half,
             total_raw_weight=quantize(total_raw),
             estimated_cooked_weight=data.estimated_cooked_weight,
             calories_per_100g=quantize(per_100.calories),
@@ -175,7 +177,7 @@ class RecipeService:
             fats_per_100g=quantize(per_100.fats),
             carbs_per_100g=quantize(per_100.carbs),
             template_ingredients=[
-                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g)
+                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g, exact=i.exact)
                 for i in data.ingredients
             ],
         )
@@ -223,6 +225,8 @@ class RecipeService:
             )
         if "default_servings" in fields:
             recipe.default_servings = fields["default_servings"]
+        if fields.get("allow_half") is not None:
+            recipe.allow_half = fields["allow_half"]
 
         new_weight = fields.get("estimated_cooked_weight", recipe.estimated_cooked_weight)
         if "ingredients" in fields:
@@ -231,7 +235,7 @@ class RecipeService:
             total_raw, totals = await _sum_ingredients(ingredient_lines, self._variants)
             recipe.total_raw_weight = quantize(total_raw)
             recipe.template_ingredients = [
-                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g)
+                RecipeTemplateIngredient(variant_id=i.variant_id, weight_g=i.weight_g, exact=i.exact)
                 for i in ingredient_lines
             ]
         else:
@@ -486,6 +490,6 @@ class RecipeService:
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
         await self._stock.adjust_pot(
-            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, date.today()
+            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, clock.today()
         )
         return full

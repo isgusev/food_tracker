@@ -15,6 +15,7 @@ from app.models.stock import (
     ShoppingLine,
     ShoppingList,
     StockLot,
+    StockMark,
     StockMovement,
 )
 from app.repositories.base import BaseRepository
@@ -28,7 +29,7 @@ class StockRepository(BaseRepository[StockLot]):
         stmt = (
             select(Product)
             .where(Product.id == product_id)
-            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category))
+            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category), joinedload(Product.item))
         )
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
@@ -38,7 +39,7 @@ class StockRepository(BaseRepository[StockLot]):
             .join(ProductManufacturer, ProductManufacturer.product_id == Product.id)
             .join(ProductVariant, ProductVariant.manufacturer_id == ProductManufacturer.id)
             .where(ProductVariant.id == variant_id)
-            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category))
+            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category), joinedload(Product.item))
         )
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
@@ -48,8 +49,8 @@ class StockRepository(BaseRepository[StockLot]):
             return []
         stmt = (
             select(Product)
-            .where(Product.search_name.in_(keys))
-            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category))
+            .where(Product.item_key.in_(keys))
+            .options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category), joinedload(Product.item))
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
@@ -75,7 +76,7 @@ class StockRepository(BaseRepository[StockLot]):
             select(StockLot)
             .join(Product, Product.id == StockLot.product_id)
             .where(StockLot.household_id == household_id)
-            .options(joinedload(StockLot.product).options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category)))
+            .options(joinedload(StockLot.product).options(selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category), joinedload(Product.item)))
         )
 
     async def open_lots(self, household_id: int) -> list[StockLot]:
@@ -85,7 +86,7 @@ class StockRepository(BaseRepository[StockLot]):
     async def open_lots_for_key(self, household_id: int, key: str) -> list[StockLot]:
         stmt = (
             self._lots_query(household_id)
-            .where(Product.search_name == key, StockLot.remaining > 0)
+            .where(Product.item_key == key, StockLot.remaining > 0)
             .order_by(StockLot.id)
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
@@ -93,7 +94,7 @@ class StockRepository(BaseRepository[StockLot]):
     async def available_by_key(self, household_id: int, as_of: date) -> dict[str, Decimal]:
         """Свободный остаток по товарам: непросроченные партии на дату."""
         stmt = (
-            select(Product.search_name, StockLot.remaining)
+            select(Product.item_key, StockLot.remaining)
             .join(Product, Product.id == StockLot.product_id)
             .where(
                 StockLot.household_id == household_id,
@@ -104,6 +105,37 @@ class StockRepository(BaseRepository[StockLot]):
         out: dict[str, Decimal] = {}
         for key, remaining in (await self._session.execute(stmt)).all():
             out[key] = out.get(key, Decimal("0")) + Decimal(str(remaining))
+        return out
+
+    async def available_by_product(self, household_id: int, as_of: date) -> dict[int, Decimal]:
+        """То же по конкретным продуктам — для покупок «именно этот вариант»."""
+        stmt = (
+            select(StockLot.product_id, StockLot.remaining)
+            .where(
+                StockLot.household_id == household_id,
+                StockLot.remaining > 0,
+                or_(StockLot.expires_on.is_(None), StockLot.expires_on >= as_of),
+            )
+        )
+        out: dict[int, Decimal] = {}
+        for pid, remaining in (await self._session.execute(stmt)).all():
+            out[pid] = out.get(pid, Decimal("0")) + Decimal(str(remaining))
+        return out
+
+    async def usual_products(self, household_id: int, keys: set[str]) -> dict[str, int]:
+        """«Обычно берёте»: товар → продукт из последней покупки семьи."""
+        if not keys:
+            return {}
+        stmt = (
+            select(Product.item_key, StockLot.product_id)
+            .join(Product, Product.id == StockLot.product_id)
+            .where(StockLot.household_id == household_id, Product.item_key.in_(keys),
+                   StockLot.source.in_(("purchase", "manual")))
+            .order_by(StockLot.purchased_on.desc(), StockLot.id.desc())
+        )
+        out: dict[str, int] = {}
+        for key, pid in (await self._session.execute(stmt)).all():
+            out.setdefault(key, pid)
         return out
 
     # --- движения ---
@@ -129,11 +161,29 @@ class StockRepository(BaseRepository[StockLot]):
         stmt = (
             select(StockMovement)
             .join(Product, Product.id == StockMovement.product_id)
-            .where(StockMovement.household_id == household_id, Product.search_name == key)
+            .where(StockMovement.household_id == household_id, Product.item_key == key)
             .order_by(StockMovement.id.desc())
             .limit(limit)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+    # --- пачки с кодами маркировки ---
+    async def product_by_barcode(self, barcode: str) -> Product | None:
+        stmt = select(Product).where(Product.barcode == barcode).options(selectinload(Product.packages))
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def mark_exists(self, household_id: int, gtin: str, serial: str) -> bool:
+        stmt = select(StockMark.id).where(
+            StockMark.household_id == household_id, StockMark.gtin == gtin, StockMark.serial == serial
+        )
+        return (await self._session.execute(stmt)).first() is not None
+
+    def add_mark(self, mark: StockMark) -> None:
+        self._session.add(mark)
+
+    async def lot_of_household(self, household_id: int, lot_id: int) -> StockLot | None:
+        stmt = self._lots_query(household_id).where(StockLot.id == lot_id)
+        return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
     async def delete_obj(self, obj) -> None:
         await self._session.delete(obj)
@@ -146,7 +196,8 @@ class ShoppingListRepository(BaseRepository[ShoppingList]):
         return select(ShoppingList).options(
             selectinload(ShoppingList.lines).options(
                 joinedload(ShoppingLine.product).options(
-                    selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category)
+                    selectinload(Product.packages), joinedload(Product.brand), joinedload(Product.category),
+                    joinedload(Product.item),
                 ),
                 joinedload(ShoppingLine.lot),
             )

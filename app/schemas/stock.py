@@ -94,6 +94,7 @@ class ShoppingItem(BaseModel):
     package_amount: Optional[Decimal] = None
     package_count: Optional[int] = None
     is_staple: bool = False
+    is_exact: bool = False                # «именно этот вариант» — строка с брендом
 
 
 class ShoppingPreview(BaseModel):
@@ -119,6 +120,8 @@ class LineCheck(BaseModel):
     price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))
     variant_id: Optional[int] = None
     expires_on: Optional[date] = None
+    # купили другой бренд того же товара (строка «Кефир 3,2%» — взяли «Простоквашино»)
+    product_id: Optional[int] = None
 
 
 class LineUpdate(BaseModel):
@@ -126,6 +129,7 @@ class LineUpdate(BaseModel):
     price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))
     variant_id: Optional[int] = None
     expires_on: Optional[date] = None
+    product_id: Optional[int] = None      # какой бренд товара купили на самом деле
 
 
 class ShoppingLineResponse(BaseModel):
@@ -142,6 +146,8 @@ class ShoppingLineResponse(BaseModel):
     package_count: Optional[int] = None
     is_extra: bool
     is_staple: bool
+    is_exact: bool = False
+    added: Optional[Decimal] = None       # из них добавлено вручную (поверх плана)
     is_checked: bool
     checked_at: Optional[datetime] = None
     bought_quantity: Optional[Decimal] = None
@@ -157,3 +163,45 @@ class ShoppingListOut(BaseModel):
     status: str
     updated_at: Optional[datetime] = None
     lines: list[ShoppingLineResponse]
+
+
+# --- Пачки с кодами «Честного знака» ---
+class PackIn(BaseModel):
+    """Одна пачка: срок годности (из кода или введённый) и код маркировки, если сканировали."""
+
+    expires_on: Optional[date] = None
+    code: Optional[str] = Field(default=None, max_length=300)
+
+
+class PacksAdd(BaseModel):
+    """Добавить в запасы по пачкам: пачки с разным сроком станут разными партиями."""
+
+    product_id: int
+    variant_id: Optional[int] = None
+    pack_amount: Decimal = Qty               # сколько в одной пачке, в базовой единице
+    price: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999999"))  # за все пачки
+    purchased_on: Optional[date] = None
+    packs: list[PackIn] = Field(min_length=1, max_length=200)
+
+
+class PacksSplit(BaseModel):
+    """Разложить уже купленную партию по пачкам со своими сроками."""
+
+    pack_amount: Decimal = Qty
+    packs: list[PackIn] = Field(min_length=1, max_length=200)
+
+
+class MarkParseIn(BaseModel):
+    code: str = Field(min_length=10, max_length=300)
+
+
+class MarkParsed(BaseModel):
+    """Что удалось прочитать из кода маркировки."""
+
+    gtin: str
+    barcode: str                             # EAN-13, как в справочнике
+    serial: str
+    expires_on: Optional[date] = None
+    product_id: Optional[int] = None         # товар справочника с этим штрихкодом
+    product_name: Optional[str] = None
+    already_registered: bool = False         # эта пачка уже в запасах

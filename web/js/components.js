@@ -1,19 +1,21 @@
-// Переиспользуемые компоненты: модалка, поиск-выбор, КБЖУ, редактор ингредиентов.
+// Переиспользуемые компоненты: модалка, поиск-выбор, КБЖУ, сканер штрихкода.
+// Поиск продукта и редактор состава блюда — в product-finder.js.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
-import { activeVariants, variantIndex } from "./store.js";
-import { fmt, grams, matches, n } from "./util.js";
+import { fmt, fuzzyScore, matches, n } from "./util.js";
 
+// Закрывается только явно — ✕ или кнопкой в подвале: промах мышью мимо окна
+// не должен терять введённое. dismissible — разрешить закрытие по фону и Esc.
 export const Modal = {
-  props: { title: String, wide: Boolean },
+  props: { title: String, wide: Boolean, dismissible: Boolean },
   emits: ["close"],
-  setup(_, { emit }) {
-    const onKey = (e) => { if (e.key === "Escape") emit("close"); };
+  setup(props, { emit }) {
+    const onKey = (e) => { if (props.dismissible && e.key === "Escape") emit("close"); };
     onMounted(() => document.addEventListener("keydown", onKey));
     onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
     return {};
   },
   template: `
-    <div class="modal-backdrop" @mousedown.self="$emit('close')">
+    <div class="modal-backdrop" @mousedown.self="dismissible && $emit('close')">
       <div class="modal" :class="{ wide }" role="dialog" aria-modal="true">
         <div class="modal-head">
           <h2>{{ title }}</h2>
@@ -25,7 +27,9 @@ export const Modal = {
     </div>`,
 };
 
-// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right? }]
+// Поиск с выпадающим списком. items: [{ id, label, sub?, group?, right?, right2?, keys? }]
+// right2 — вторая строка справа (Б/Ж/У под калориями)
+// sub — вторая мелкая строка (бренд · производитель · упаковка), keys — скрытые поля поиска (штрихкод)
 export const Picker = {
   props: {
     items: { type: Array, required: true },
@@ -44,7 +48,8 @@ export const Picker = {
 
     const filtered = computed(() => {
       const q = open.value && selected.value && query.value === selected.value.label ? "" : query.value;
-      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""}`, q)).slice(0, 80);
+      return props.items.filter((i) => matches(`${i.label} ${i.sub || ""} ${i.group || ""} ${i.keys || ""}`, q)
+        || (q && fuzzyScore(q, `${i.label} ${i.sub || ""}`) >= 0.6)).slice(0, 80);
     });
     const rows = computed(() => {
       const out = [];
@@ -80,15 +85,20 @@ export const Picker = {
   },
   template: `
     <div class="picker">
-      <input ref="input" v-model="query" :placeholder="placeholder" @focus="open = true; $event.target.select()"
-             @input="open = true" @keydown="onKey" @blur="onBlur" autocomplete="off">
+      <div class="clearable">
+        <input ref="input" v-model="query" :placeholder="placeholder" @focus="open = true; $event.target.select()"
+               @input="open = true" @keydown="onKey" @blur="onBlur" autocomplete="off">
+        <button v-if="query" type="button" class="clear-btn" aria-label="Очистить" title="Очистить"
+                @mousedown.prevent="query = ''; open = true; input.focus()">✕</button>
+      </div>
       <div class="picker-list" v-if="open && rows.length">
         <template v-for="r in rows" :key="r.key">
           <div v-if="r.header" class="picker-group">{{ r.header }}</div>
           <div v-else class="picker-item" :class="{ hl: r.idx === hl }" @mousedown.prevent="pick(r.item)">
-            <span class="grow"><span>{{ r.item.label }}</span>
-              <span v-if="r.item.sub" class="muted small"> · {{ r.item.sub }}</span></span>
-            <span v-if="r.item.right" class="muted small nowrap num">{{ r.item.right }}</span>
+            <span class="grow" style="min-width: 0"><span>{{ r.item.label }}</span>
+              <span v-if="r.item.sub" class="tiny muted ellipsis" style="display: block">{{ r.item.sub }}</span></span>
+            <span v-if="r.item.right" class="finder-right"><span>{{ r.item.right }}</span>
+              <span v-if="r.item.right2" class="tiny">{{ r.item.right2 }}</span></span>
           </div>
         </template>
       </div>
@@ -136,127 +146,135 @@ export const MacroMeters = {
     </div>`,
 };
 
-// Выбор активной версии продукта
-export const VariantPicker = {
-  components: { Picker },
-  props: { modelValue: [Number, null], autofocus: Boolean, placeholder: String },
-  emits: ["update:modelValue", "pick"],
-  setup() {
-    const items = computed(() => activeVariants.value.map((v) => ({
-      id: v.id, label: v.name, sub: v.sub, group: v.category || "Без категории",
-      right: `${fmt(v.calories)} ккал`,
-    })));
-    return { items };
-  },
-  template: `<Picker :items="items" :modelValue="modelValue" :autofocus="autofocus"
-               :placeholder="placeholder || 'Продукт…'"
-               @update:modelValue="$emit('update:modelValue', $event)" @pick="$emit('pick', $event)" />`,
-};
+// Сканер штрихкода. Где есть встроенный BarcodeDetector (Chrome на Android/Mac) —
+// он; иначе (Safari и все браузеры на iPhone) — библиотека ZXing из vendor/.
+// Камера доступна только на https или localhost; всегда можно ввести цифры руками.
+let zxingLoading = null;
+function loadZxing() {
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  zxingLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "vendor/zxing.min.js";
+    s.onload = () => resolve(window.ZXing);
+    s.onerror = () => reject(new Error("не удалось загрузить распознавание"));
+    document.head.appendChild(s);
+  });
+  return zxingLoading;
+}
 
-// Редактор состава: [{ variant_id, weight_g }] + итоговый вес/КБЖУ
-export const IngredientsEditor = {
-  components: { VariantPicker, Macros },
-  props: { modelValue: { type: Array, required: true }, cookedWeight: [Number, String] },
-  emits: ["update:modelValue"],
-  setup(props, { emit }) {
-    const rows = computed(() => props.modelValue);
-    function update(i, patch) {
-      const next = props.modelValue.map((r, j) => (j === i ? { ...r, ...patch } : r));
-      emit("update:modelValue", next);
-    }
-    function add() { emit("update:modelValue", [...props.modelValue, { variant_id: null, weight_g: 100 }]); }
-    function remove(i) { emit("update:modelValue", props.modelValue.filter((_, j) => j !== i)); }
-    const totals = computed(() => {
-      const t = { raw: 0, calories: 0, proteins: 0, fats: 0, carbs: 0 };
-      for (const r of props.modelValue) {
-        const v = variantIndex.value[r.variant_id];
-        const w = n(r.weight_g);
-        t.raw += w;
-        if (!v) continue;
-        t.calories += (v.calories * w) / 100;
-        t.proteins += (v.proteins * w) / 100;
-        t.fats += (v.fats * w) / 100;
-        t.carbs += (v.carbs * w) / 100;
-      }
-      return t;
-    });
-    const per100 = computed(() => {
-      const cw = n(props.cookedWeight);
-      if (!cw) return null;
-      const k = 100 / cw;
-      const t = totals.value;
-      return { calories: t.calories * k, proteins: t.proteins * k, fats: t.fats * k, carbs: t.carbs * k };
-    });
-    const oldVersion = (id) => id && variantIndex.value[id] && !variantIndex.value[id].active;
-    return { rows, update, add, remove, totals, per100, grams, variantIndex, oldVersion };
-  },
-  template: `
-    <div class="stack tight">
-      <div v-for="(r, i) in rows" :key="i" class="row" style="flex-wrap: nowrap">
-        <div class="grow">
-          <VariantPicker :modelValue="r.variant_id" @update:modelValue="update(i, { variant_id: $event })"
-            :placeholder="oldVersion(r.variant_id) ? variantIndex[r.variant_id].label + ' (стар. версия)' : 'Продукт…'" />
-        </div>
-        <input type="number" min="0.1" step="any" style="width: 90px" :value="r.weight_g"
-               @input="update(i, { weight_g: $event.target.value })" aria-label="Вес, г">
-        <span class="muted small">г</span>
-        <button class="ghost icon" @click="remove(i)" title="Убрать">✕</button>
-      </div>
-      <div class="row between">
-        <button class="sm" @click="add">+ Ингредиент</button>
-        <span class="small muted">Сырой вес: <b class="num">{{ grams(totals.raw) }}</b></span>
-      </div>
-      <div class="small" v-if="per100"><span class="muted">На 100 г готового: </span><Macros :m="per100" :digits="1" /></div>
-    </div>`,
-};
-
-// Сканер штрихкода: камера + BarcodeDetector (Chrome/Android, Chrome на Mac),
-// иначе — ручной ввод цифр. Камера доступна только на https или localhost.
+// marks — режим «Честного знака»: читаем и квадратные коды DataMatrix, сканируем подряд
+// (каждый новый код — событие code; один и тот же код повторно не шлём), «Готово» закрывает.
+const EAN_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
 export const BarcodeScanner = {
   components: { Modal },
+  props: { marks: Boolean, qr: Boolean, title: String, count: Number },
   emits: ["close", "code"],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     const video = ref(null);
     const manual = ref("");
     const status = ref("");
-    const supported = "BarcodeDetector" in window && !!navigator.mediaDevices?.getUserMedia;
-    let stream = null;
-    let timer = null;
+    const supported = !!navigator.mediaDevices?.getUserMedia && window.isSecureContext;
+    let stop = () => {};
+    let done = false;
+    const seen = new Set();
+    const found = (code) => {
+      code = String(code);
+      if (props.marks) {
+        if (seen.has(code)) return;          // та же пачка ещё в кадре
+        seen.add(code);
+        navigator.vibrate?.(60);
+        emit("code", code);
+        return;
+      }
+      if (done) return;
+      done = true; stop(); emit("code", code);
+    };
+
+    async function withDetector() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      video.value.srcObject = stream;
+      await video.value.play();
+      const supportedFormats = await window.BarcodeDetector.getSupportedFormats?.() || EAN_FORMATS;
+      const wanted = props.qr ? ["qr_code"] : props.marks ? ["data_matrix", ...EAN_FORMATS] : EAN_FORMATS;
+      const formats = wanted.filter((f) => supportedFormats.includes(f));
+      if ((props.marks && !formats.includes("data_matrix")) || (props.qr && !formats.length)) throw new Error("no-datamatrix");
+      const detector = new window.BarcodeDetector({ formats });
+      const timer = setInterval(async () => {
+        try { const r = await detector.detect(video.value); for (const x of r) found(x.rawValue); } catch { /* кадр не готов */ }
+      }, 300);
+      stop = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); };
+    }
+
+    async function withZxing() {
+      const Z = await loadZxing();
+      const formats = [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E];
+      if (props.marks) formats.unshift(Z.BarcodeFormat.DATA_MATRIX);
+      if (props.qr) formats.splice(0, formats.length, Z.BarcodeFormat.QR_CODE);
+      const hints = new Map([[Z.DecodeHintType.POSSIBLE_FORMATS, formats]]);
+      const reader = new Z.BrowserMultiFormatReader(hints, 300);
+      stop = () => { try { reader.reset(); } catch { /* уже остановлен */ } };
+      await reader.decodeFromConstraints({ video: { facingMode: "environment" } }, video.value, (result) => {
+        if (result) found(result.getText());
+      });
+    }
+
     async function start() {
-      if (!supported) { status.value = "Этот браузер не умеет сканировать — введите цифры под штрихкодом."; return; }
+      if (!supported) { status.value = "Камера доступна только по https — введите цифры под штрихкодом."; return; }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        video.value.srcObject = stream;
-        await video.value.play();
-        const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
-        status.value = "Наведите камеру на штрихкод";
-        timer = setInterval(async () => {
-          try {
-            const found = await detector.detect(video.value);
-            if (found.length) { stop(); emit("code", found[0].rawValue); }
-          } catch { /* кадр не готов */ }
-        }, 300);
-      } catch {
-        status.value = "Нет доступа к камере (нужен https или localhost) — введите цифры вручную.";
+        status.value = props.qr ? "Наведите камеру на QR-код внизу чека"
+          : props.marks ? "Наведите камеру на квадратный код «Честного знака» — пачки можно сканировать подряд" : "Наведите камеру на штрихкод";
+        if ("BarcodeDetector" in window) {
+          try { await withDetector(); } catch (e) { if (e?.message === "no-datamatrix") { stop(); await withZxing(); } else throw e; }
+        } else await withZxing();
+      } catch (e) {
+        status.value = e?.name === "NotAllowedError"
+          ? "Нет разрешения на камеру — разрешите доступ в настройках браузера или введите цифры."
+          : "Камера недоступна — введите цифры под штрихкодом.";
       }
     }
-    function stop() {
-      clearInterval(timer);
-      stream?.getTracks().forEach((t) => t.stop());
-      stream = null;
-    }
     onMounted(start);
-    onBeforeUnmount(stop);
-    const submit = () => { const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) { stop(); emit("code", c); } };
+    onBeforeUnmount(() => stop());
+    const submit = () => {
+      if (props.marks || props.qr) { const c = manual.value.trim(); if (c.length >= 10) { found(c); manual.value = ""; } return; }
+      const c = manual.value.replace(/\D/g, ""); if (c.length >= 8) found(c);
+    };
     return { video, manual, status, supported, submit };
   },
   template: `
-    <Modal title="Штрихкод" @close="$emit('close')">
-      <video v-if="supported" ref="video" playsinline muted style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
+    <Modal :title="title || (qr ? 'QR-код чека' : marks ? 'Код «Честного знака»' : 'Штрихкод')" @close="$emit('close')">
+      <video v-if="supported" ref="video" playsinline muted autoplay style="width: 100%; border-radius: 10px; background: #000; max-height: 50vh"></video>
       <div class="small muted">{{ status }}</div>
+      <div v-if="marks && count != null" class="small"><b>Отсканировано пачек: {{ count }}</b></div>
       <div class="row" style="flex-wrap: nowrap">
-        <input v-model="manual" inputmode="numeric" placeholder="4600000000000" @keydown.enter="submit">
-        <button class="primary" @click="submit">Найти</button>
+        <input v-model="manual" :inputmode="marks || qr ? 'text' : 'numeric'"
+               :placeholder="qr ? 't=…&s=…&fn=…&i=…&fp=…&n=1' : marks ? 'код с упаковки, если камера не читает' : '4600000000000'" @keydown.enter="submit">
+        <button :class="marks ? '' : 'primary'" @click="submit">{{ marks ? 'Добавить' : qr ? 'Загрузить' : 'Найти' }}</button>
       </div>
+      <template v-if="marks" #foot><button class="primary" @click="$emit('close')">Готово</button></template>
     </Modal>`,
+};
+
+// ---------- КБЖУ на 100 г: поля ввода с мягкой проверкой ----------
+// То же правило, что на сервере (app/domain.py): ошибка — если расхождение > 10 ккал И > 15 %
+function atwater(k) {
+  const calc = 4 * n(k.proteins) + 9 * n(k.fats) + 4 * n(k.carbs);
+  const diff = Math.abs(n(k.calories) - calc);
+  return { calc, off: n(k.calories) > 0 && diff > 10 && diff > 0.15 * calc };
+}
+
+export const KbjuInputs = {
+  props: { modelValue: Object },
+  setup(props) { return { check: computed(() => atwater(props.modelValue)), fmt }; },
+  template: `
+    <div class="stack tight">
+      <div class="grid-4">
+        <label class="field"><span>Ккал / 100 г</span><input type="number" min="0" step="any" v-model="modelValue.calories"></label>
+        <label class="field"><span>Белки, г</span><input type="number" min="0" step="any" v-model="modelValue.proteins"></label>
+        <label class="field"><span>Жиры, г</span><input type="number" min="0" step="any" v-model="modelValue.fats"></label>
+        <label class="field"><span>Углеводы, г</span><input type="number" min="0" step="any" v-model="modelValue.carbs"></label>
+      </div>
+      <div v-if="check.off" class="tiny" style="color: var(--warn)">
+        По БЖУ выходит ≈ {{ fmt(check.calc) }} ккал — проверьте цифры с упаковки (сохранить можно, версия будет помечена).
+      </div>
+    </div>`,
 };

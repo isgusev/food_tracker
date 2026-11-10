@@ -1,9 +1,10 @@
 // Рецепты: библиотека, создание/правка состава, приготовление.
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
-import { Modal, IngredientsEditor, Macros } from "../components.js";
+import { Modal, Macros } from "../components.js";
+import { IngredientsEditor, resolveDraftIngredients } from "../product-finder.js";
 import { state, ensureCatalog, loadRecipes, recipeCategoryName, variantLabel, toast, toastError } from "../store.js";
-import { fmt, grams, matches, n } from "../util.js";
+import { fmt, fuzzyScore, grams, matches, n } from "../util.js";
 import { CookModal } from "./fridge.js";
 
 const RecipeModal = {
@@ -17,10 +18,11 @@ const RecipeModal = {
       name: r?.name || "",
       recipe_category_id: r?.recipe_category_id || state.recipeCategories[0]?.id || null,
       default_servings: r?.default_servings || 4,
+      allow_half: !!r?.allow_half,
       cooking_time_minutes: r?.cooking_time_minutes ?? null,
       estimated_cooked_weight: n(r?.estimated_cooked_weight) || null,
       instructions: r?.instructions || "",
-      ingredients: r ? r.template_ingredients.map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })) : [{ variant_id: null, weight_g: 100 }],
+      ingredients: r ? r.template_ingredients.map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g), exact: !!i.exact })) : [{ variant_id: null, weight_g: 100 }],
     });
     const newCat = ref("");
     const busy = ref(false);
@@ -39,15 +41,20 @@ const RecipeModal = {
     async function save() {
       error.value = "";
       const f = form.value;
-      const ingredients = f.ingredients.filter((i) => i.variant_id && n(i.weight_g) > 0)
-        .map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) }));
       if (!f.name.trim()) { error.value = "Укажите название"; return; }
       if (!f.recipe_category_id) { error.value = "Выберите или создайте категорию"; return; }
+      busy.value = true;
+      try { await resolveDraftIngredients(f.ingredients); }   // новые продукты — сначала в справочник
+      catch (e) { error.value = e.message; busy.value = false; return; }
+      busy.value = false;
+      const ingredients = f.ingredients.filter((i) => i.variant_id && n(i.weight_g) > 0)
+        .map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g), exact: !!i.exact }));
       if (!ingredients.length) { error.value = "Добавьте ингредиенты"; return; }
       const body = {
         name: f.name.trim(),
         recipe_category_id: f.recipe_category_id,
         default_servings: Number(f.default_servings) || 1,
+        allow_half: !!f.allow_half,
         cooking_time_minutes: f.cooking_time_minutes === "" || f.cooking_time_minutes == null ? null : Number(f.cooking_time_minutes),
         estimated_cooked_weight: n(f.estimated_cooked_weight) || rawTotal.value,
         instructions: f.instructions || null,
@@ -81,12 +88,13 @@ const RecipeModal = {
           <span>{{ r.default_servings }} порц.</span>
           <span>· выход {{ grams(r.estimated_cooked_weight) }} (порция ≈ {{ grams(n(r.estimated_cooked_weight) / r.default_servings) }})</span>
           <span v-if="r.cooking_time_minutes">· {{ r.cooking_time_minutes }} мин</span>
+          <span v-if="r.allow_half">· можно половиной</span>
         </div>
         <div class="small"><span class="muted">На 100 г: </span>
           <Macros :m="{ calories: r.calories_per_100g, proteins: r.proteins_per_100g, fats: r.fats_per_100g, carbs: r.carbs_per_100g }" :digits="1" /></div>
         <div class="card flush">
           <table class="tbl"><tbody>
-            <tr v-for="i in r.template_ingredients" :key="i.id"><td>{{ variantLabel(i.variant_id) }}</td><td class="r num">{{ grams(i.weight_g) }}</td></tr>
+            <tr v-for="i in r.template_ingredients" :key="i.id"><td>{{ variantLabel(i.variant_id) }}<span v-if="i.exact" title="Именно этот бренд"> 🎯</span></td><td class="r num">{{ grams(i.weight_g) }}</td></tr>
           </tbody></table>
         </div>
         <div v-if="r.instructions" style="white-space: pre-wrap">{{ r.instructions }}</div>
@@ -105,7 +113,8 @@ const RecipeModal = {
           </label>
         </div>
         <h3>Состав (на всю кастрюлю)</h3>
-        <IngredientsEditor v-model="form.ingredients" :cookedWeight="form.estimated_cooked_weight || rawTotal" />
+        <IngredientsEditor v-model="form.ingredients" :cookedWeight="form.estimated_cooked_weight || rawTotal" exactToggle />
+        <div class="tiny muted">🎯 — в покупки именно этот бренд; без отметки подойдёт любой бренд того же товара («Кефир 3,2%»).</div>
         <div class="grid-4">
           <label class="field"><span>Выход готового, г</span>
             <input type="number" min="1" step="any" v-model="form.estimated_cooked_weight" :placeholder="fmt(rawTotal)">
@@ -114,6 +123,8 @@ const RecipeModal = {
           <label class="field"><span>Время, мин</span><input type="number" min="0" v-model="form.cooking_time_minutes"></label>
         </div>
         <div class="tiny muted">Выход ≠ сырой вес: крупы развариваются, мясо ужаривается. Если пусто — возьмём сырой вес.</div>
+        <label class="row small" style="gap: 8px; cursor: pointer; flex-wrap: nowrap; align-items: flex-start"><input type="checkbox" v-model="form.allow_half">
+          <span>Можно готовить половиной <span class="muted">— в покупки пойдёт половина закладки, если на план её хватает</span></span></label>
         <label class="field"><span>Как готовить</span><textarea v-model="form.instructions"></textarea></label>
       </template>
 
@@ -147,8 +158,8 @@ export const RecipesView = {
       api.get("/finance/recipe-costs").then((r) => { costs.value = Object.fromEntries(r.map((c) => [c.recipe_id, c])); }).catch(() => {});
     });
     const list = computed(() => state.recipes
-      .filter((r) => (!cat.value || r.recipe_category_id === cat.value) && matches(r.name, q.value))
-      .sort((a, b) => a.name.localeCompare(b.name, "ru")));
+      .filter((r) => (!cat.value || r.recipe_category_id === cat.value) && (matches(r.name, q.value) || fuzzyScore(q.value, r.name) >= 0.6))
+      .sort((a, b) => (q.value ? fuzzyScore(q.value, b.name) - fuzzyScore(q.value, a.name) : 0) || a.name.localeCompare(b.name, "ru")));
     function onSaved() { opened.value = null; creating.value = false; }
     function onCook(id) { opened.value = null; cookId.value = id; }
     function cooked() { cookId.value = null; location.hash = "#/fridge"; }
@@ -161,7 +172,10 @@ export const RecipesView = {
         <button class="primary" @click="creating = true">+ Новый рецепт</button>
       </div>
       <div class="row" style="margin-bottom: 12px">
-        <input v-model="q" placeholder="Поиск…" style="max-width: 280px">
+        <div class="clearable" style="max-width: 280px">
+          <input v-model="q" placeholder="Поиск рецепта…">
+          <button v-if="q" type="button" class="clear-btn" aria-label="Очистить" title="Очистить" @click="q = ''">✕</button>
+        </div>
         <select v-model.number="cat" style="max-width: 220px">
           <option :value="0">Все категории</option>
           <option v-for="c in state.recipeCategories" :key="c.id" :value="c.id">{{ c.name }}</option>

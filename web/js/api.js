@@ -1,4 +1,4 @@
-// HTTP-клиент Food Tracker API: JWT в localStorage, разбор ошибок FastAPI.
+// HTTP-клиент API ЕлиГуси: JWT в localStorage, разбор ошибок FastAPI.
 // Интерфейс раздаётся тем же процессом, что и API (/app), поэтому базовый URL — относительный.
 
 const API = "/api/v1";

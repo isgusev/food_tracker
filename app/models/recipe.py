@@ -49,6 +49,8 @@ class Recipe(Base):
     instructions = Column(Text, nullable=True)
     created_by_user = Column(String(100), nullable=False, default="system")
     default_servings = Column(Integer, default=1, nullable=False)
+    # Можно готовить половиной: в покупки — до половины закладки, иначе — целая закладка
+    allow_half = Column(Boolean, default=False, nullable=False, server_default="false")
     total_raw_weight = Column(Numeric(7, 1), default=0.0, nullable=False)
     estimated_cooked_weight = Column(Numeric(7, 1), nullable=False)
     calories_per_100g = Column(Numeric(5, 1), default=0.0, nullable=False)
@@ -80,6 +82,8 @@ class RecipeTemplateIngredient(Base):
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
     )
     weight_g = Column(Numeric(7, 1), nullable=False)
+    # «Именно этот вариант»: в покупки — этот продукт с брендом, а не любой того же товара
+    exact = Column(Boolean, default=False, nullable=False, server_default="false")
 
     recipe = relationship("Recipe", back_populates="template_ingredients")
     variant = relationship("ProductVariant")

@@ -10,6 +10,7 @@ from app.schemas.product import (
     CategoryResponse,
     BarcodeIn,
     BarcodeLookup,
+    OffSearchResult,
     PackageCreate,
     UnitUpdate,
     ProductCreate,
@@ -39,16 +40,9 @@ async def create_category(category: CategoryCreate, service: ProductServiceDep):
 async def create_product_with_category(
     product: ProductWithCategoryCreate, service: ProductServiceDep
 ):
-    """Продукт + авто-создание категории по имени (get-or-create)."""
-    category_id = await service.get_or_create_category(product.category_name)
-    payload = ProductCreate(
-        category_id=category_id,
-        name=product.name,
-        brand_name=product.brand_name,
-        barcode=product.barcode,
-        base_variant=product.base_variant,
-    )
-    return await service.create_product(payload)
+    """Продукт + категория по имени (get-or-create) + упаковка с этикетки.
+    reuse_existing=true — вернуть уже существующий (тот же штрихкод / название+бренд)."""
+    return await service.create_with_category(product)
 
 
 @router.get("/categories", response_model=list[CategoryResponse])
@@ -111,6 +105,16 @@ async def add_package(product_id: int, payload: PackageCreate, service: ProductS
 @router.delete("/packages/{package_id}", response_model=ProductResponse)
 async def delete_package(package_id: int, service: ProductServiceDep):
     return await service.delete_package(package_id)
+
+
+@router.get("/off-search", response_model=OffSearchResult)
+async def search_open_food_facts(
+    service: ProductServiceDep,
+    q: str = Query(min_length=2, max_length=100, description="Название и/или бренд"),
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    """Поиск по названию в Open Food Facts (подсказки КБЖУ, упаковки, штрихкода)."""
+    return await service.search_off(q.strip(), limit)
 
 
 @router.get("/barcode/{code}", response_model=BarcodeLookup)

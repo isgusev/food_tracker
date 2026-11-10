@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+from app.core import clock
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain import (
     ITEM_IN_FRIDGE,
@@ -70,7 +71,10 @@ def display_name(variant, variant_id: int) -> str:
         return f"Продукт #{variant_id}"
     brand_name = product.brand.name if product.brand else ""
     m_name = manufacturer.name or ""
-    return f"{product.name} ({brand_name} / {m_name})".replace("( / )", "").strip()
+    # производитель — только если отличается от бренда: «Творог (Простоквашино)»
+    parts = [brand_name] + ([m_name] if m_name and m_name.lower() != brand_name.lower() else [])
+    parts = [x for x in parts if x and x.lower() != "без бренда"]
+    return f"{product.name} ({' / '.join(parts)})" if parts else product.name
 
 
 class PlanService:
@@ -169,6 +173,7 @@ class PlanService:
             kind=kind,
             recipe_id=item.recipe_id,
             variant_id=item.variant_id,
+            exact=bool(item.exact),
             name=name,
             state=state,
             cooking_log_id=item.cooking_log_id,
@@ -216,6 +221,7 @@ class PlanService:
             meal_type=data.meal_type,
             recipe_id=data.recipe_id,
             variant_id=data.variant_id,
+            exact=bool(data.exact and data.variant_id),
             created_by_user_id=user_id,
             portions=[MealPortion(member_id=p.member_id, weight_g=p.weight_g) for p in data.portions],
         )
@@ -275,7 +281,7 @@ class PlanService:
         await self._plan.flush()
         if portion.is_eaten and item.variant_id is not None:
             await self._stock.revert(portion_id=portion.id)
-            await self._stock.consume_portion(item, portion, date.today())
+            await self._stock.consume_portion(item, portion, clock.today())
         await self._release(portion.eaten_from_pot_id)
         await self._release(item.cooking_log_id)
         return await self.response(item.id)
@@ -333,7 +339,7 @@ class PlanService:
             portion.eaten_from_pot_id = pot.id if pot is not None else None
         await self._plan.flush()
         for portion, _ in todo:
-            await self._stock.consume_portion(item, portion, date.today())
+            await self._stock.consume_portion(item, portion, clock.today())
         if pot is not None:
             # съели больше плана — поздним блюдам может уже не хватить
             await self._release(pot.id)
@@ -416,6 +422,7 @@ class PlanService:
                 "meal_type": it.meal_type,
                 "recipe_id": it.recipe_id,
                 "variant_id": it.variant_id,
+                "exact": bool(it.exact),
                 "portions": [{"member_id": p.member_id, "weight_g": str(p.weight_g)} for p in it.portions],
             }
             for it in items
@@ -461,6 +468,7 @@ class PlanService:
                 meal_type=it["meal_type"],
                 recipe_id=it.get("recipe_id"),
                 variant_id=it.get("variant_id"),
+                exact=bool(it.get("exact")),
                 portions=portions,
             )
             try:

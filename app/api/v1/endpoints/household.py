@@ -12,7 +12,10 @@ from app.schemas.household import (
     JoinRequest,
     MemberCreate,
     MemberUpdate,
+    TargetsCalcIn,
+    TargetsCalcOut,
 )
+from app.services.household import calc_member_targets
 
 router = APIRouter(prefix="/household", tags=["Семья"])
 
@@ -40,6 +43,12 @@ async def update_member(
 ):
     """Имя, цели КБЖУ; is_active=false — скрыть из планирования (история остаётся)."""
     return await service.update_member(me, member_id, payload)
+
+
+@router.post("/targets/calc", response_model=TargetsCalcOut)
+async def calc_targets(payload: TargetsCalcIn, me: CurrentMemberDep):
+    """Рекомендуемые КБЖУ под цель (поддержание / снижение / набор) — без сохранения."""
+    return calc_member_targets(payload)
 
 
 @router.post("/invite-code", response_model=HouseholdResponse)

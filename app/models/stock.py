@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import relationship
@@ -32,8 +33,8 @@ from app.db.base import Base
 class HouseholdProduct(Base):
     """Настройки товара в конкретной семье.
 
-    Товар = продукт без учёта бренда: ключ — название в нижнем регистре
-    (Product.search_name), так «гречка» любого бренда — один товар.
+    Товар = базовое наименование без бренда (Item; ключ — Product.item_key),
+    так «гречка» любого бренда — один товар.
     """
 
     __tablename__ = "household_products"
@@ -173,6 +174,9 @@ class ShoppingLine(Base):
     package_count = Column(Integer, nullable=True)
     is_extra = Column(Boolean, default=False, nullable=False)    # добавлено вручную
     is_staple = Column(Boolean, default=False, nullable=False)   # «базовый, заканчивается»
+    is_exact = Column(Boolean, default=False, nullable=False, server_default="false")  # именно этот бренд
+    # Добавлено вручную поверх расчёта по плану («ещё йогурт»): переживает «Пересчитать»
+    added = Column(Numeric(9, 1), nullable=True)
     is_checked = Column(Boolean, default=False, nullable=False)
     checked_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -187,3 +191,27 @@ class ShoppingLine(Base):
     product = relationship("Product")
     variant = relationship("ProductVariant")
     lot = relationship("StockLot")
+
+
+class StockMark(Base):
+    """Отсканированная пачка с кодом «Честного знака»: к какой партии относится.
+
+    Один код — одна физическая пачка: (семья, GTIN, серийный номер) уникальны,
+    поэтому одну и ту же пачку нельзя добавить в запасы дважды.
+    """
+
+    __tablename__ = "stock_marks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lot_id = Column(Integer, ForeignKey("stock_lots.id", ondelete="CASCADE"), nullable=False, index=True)
+    gtin = Column(String(14), nullable=False)
+    serial = Column(String(64), nullable=False)
+    expires_on = Column(Date, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("household_id", "gtin", "serial", name="_stock_mark_uc"),
+    )

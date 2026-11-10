@@ -1,0 +1,269 @@
+// Чек по QR: строка QR → расшифровка (code-qr.ru → ФНС) → сопоставление строк чека
+// со списком покупок и справочником → проверка → «Сохранить покупки».
+// Чек доходит до налоговой с задержкой: «ждём» — нормальное состояние, чек сохранён.
+import { ref, computed, onMounted, onBeforeUnmount } from "../vendor/vue.esm-browser.prod.js";
+import { api } from "./api.js";
+import { Modal, Picker, BarcodeScanner } from "./components.js";
+import { state, loadProducts, toast, toastError } from "./store.js";
+import { fmt, fmtDateTime, fmtQty, fuzzyScore, local, n, UNIT_LABEL } from "./util.js";
+
+const LAST_CATEGORY = "ft.lastProductCategory";
+const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(кг|гр|г|мл|л)(?![а-яa-z])/gi;
+
+// Название для нового продукта из строки чека: без размера, «,кг», «вес», лишних пробелов
+function cleanName(name) {
+  const s = name.replace(SIZE_RE, " ").replace(/[,;]\s*(кг|шт|вес)\.?\s*$/i, " ").replace(/(?<![а-яё])вес(?![а-яё])\.?/gi, " ")
+    .replace(/\s+/g, " ").replace(/[\s,.;:-]+$/, "").trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : name.trim();
+}
+// Упаковка из названия («930мл» → 930 мл); у весового товара упаковки нет
+function packOf(item) {
+  if (n(item.quantity) % 1 || /(?<![а-яё])вес(?![а-яё])|,\s*кг\s*$/i.test(item.name)) return null;
+  const all = [...item.name.matchAll(SIZE_RE)];
+  if (!all.length) return null;
+  const [, num, u] = all[all.length - 1];
+  const v = Number(num.replace(",", ".")), unit = u.toLowerCase();
+  if (!(v > 0)) return null;
+  if (unit === "кг") return { amount: v * 1000, unit: "g" };
+  if (unit === "л") return { amount: v * 1000, unit: "ml" };
+  return { amount: v, unit: unit === "мл" ? "ml" : "g" };
+}
+
+const SOURCE = { alias: "запомнено", list: "из списка", catalog: "похоже", none: "" };
+
+// Строка чека → редактируемое решение: choice = "skip" | "line:<id>" | "product" | "new"
+// ("new" — продукта нет в справочнике: заводим по названию, КБЖУ внесут при использовании)
+function rowFrom(item, lines) {
+  const s = item.suggestion || { action: "skip", source: "none" };
+  let choice = "skip";
+  if (s.action === "list" && s.shopping_line_id && lines.some((l) => l.id === s.shopping_line_id)) choice = `line:${s.shopping_line_id}`;
+  else if (s.action !== "skip" && s.product_id) choice = "product";
+  return {
+    index: item.index, item, source: s.source, confidence: s.confidence || 0,
+    choice, product_id: s.product_id || null,
+    quantity: s.quantity != null ? n(s.quantity) : "", qtyEdited: false,
+    newName: cleanName(item.name), newCategory: local.get(LAST_CATEGORY, "") || "Прочее",
+  };
+}
+
+export const ReceiptModal = {
+  components: { Modal, Picker, BarcodeScanner },
+  emits: ["close", "applied"],
+  setup(_, { emit }) {
+    const receipt = ref(null);
+    const recent = ref([]);
+    const lines = ref([]);          // неотмеченные строки активного списка
+    const rows = ref([]);
+    const qr = ref("");
+    const scanning = ref(false);
+    const busy = ref(false);
+    const error = ref("");
+
+    async function loadContext() {
+      try { recent.value = await api.get("/receipts"); } catch { /* не критично */ }
+      try {
+        const lst = await api.get("/shopping-lists/active");
+        lines.value = (lst?.lines || []).filter((l) => !l.is_checked);
+      } catch { lines.value = []; }
+    }
+    onMounted(loadContext);
+
+    // Пока окно открыто, «ждущий» чек опрашиваем сами: первую минуту — каждые 4 с,
+    // потом до 3 минут — каждые 15 с; дальше его проверит сервер в фоне.
+    // Запрос статуса проверку из пакета не тратит.
+    const polling = ref(false);
+    const nextIn = ref(0);
+    let pollTimer = null, tickTimer = null, pollStarted = 0;
+    function stopPolling() {
+      clearTimeout(pollTimer); clearInterval(tickTimer);
+      pollTimer = tickTimer = null; polling.value = false;
+    }
+    function schedulePoll() {
+      const elapsed = Date.now() - pollStarted;
+      if (elapsed > 180000) { stopPolling(); return; }
+      const delay = elapsed < 60000 ? 4000 : 15000;
+      polling.value = true;
+      nextIn.value = Math.round(delay / 1000);
+      clearInterval(tickTimer);
+      tickTimer = setInterval(() => { nextIn.value = Math.max(0, nextIn.value - 1); }, 1000);
+      pollTimer = setTimeout(async () => {
+        if (!receipt.value) return stopPolling();
+        try { show(await api.get(`/receipts/${receipt.value.id}`), true); } catch { schedulePoll(); }
+      }, delay);
+    }
+    onBeforeUnmount(stopPolling);
+
+    function show(r, fromPoll = false) {
+      receipt.value = r;
+      rows.value = r.status === "done" ? r.items.map((it) => rowFrom(it, lines.value)) : [];
+      if (r.status !== "pending") { stopPolling(); return; }
+      if (!fromPoll) pollStarted = Date.now();
+      schedulePoll();
+    }
+    async function submit(text) {
+      scanning.value = false;
+      const q = (text ?? qr.value).trim();
+      if (q.length < 10) { error.value = "Отсканируйте QR-код чека или вставьте строку из него"; return; }
+      error.value = ""; busy.value = true;
+      try { show(await api.post("/receipts", { qr: q })); }
+      catch (e) { error.value = e.message; } finally { busy.value = false; }
+    }
+    async function open(id) {
+      error.value = ""; busy.value = true;
+      try { show(await api.get(`/receipts/${id}`)); }
+      catch (e) { error.value = e.message; } finally { busy.value = false; }
+    }
+    const refresh = () => open(receipt.value.id);
+    function back() { stopPolling(); receipt.value = null; error.value = ""; loadContext(); }
+
+    const productItems = computed(() => state.products.map((p) => ({ id: p.id, label: p.name, sub: p.brand?.name })));
+    const lineById = computed(() => Object.fromEntries(lines.value.map((l) => [l.id, l])));
+    function unitOf(r) {
+      if (r.choice.startsWith("line:")) return lineById.value[Number(r.choice.slice(5))]?.unit || "g";
+      if (r.choice === "new") return packOf(r.item)?.unit || "g";
+      return state.products.find((p) => p.id === r.product_id)?.base_unit || r.item.suggestion?.unit || "g";
+    }
+    // «Новый продукт»: сначала покажем похожие из справочника — вдруг он уже есть
+    function similar(r) {
+      const name = (r.newName || "").trim();
+      if (name.length < 3) return [];
+      return state.products
+        .map((p) => ({ p, s: Math.max(fuzzyScore(name, `${p.name} ${p.brand?.name || ""}`), fuzzyScore(p.name, name)) }))
+        .filter((x) => x.s >= 0.6).sort((a, b) => b.s - a.s).slice(0, 3).map((x) => x.p);
+    }
+    function useExisting(r, p) { r.choice = "product"; r.product_id = p.id; }
+    // одна строка списка — одной строке чека
+    const usedLines = computed(() => new Set(rows.value.filter((r) => r.choice.startsWith("line:")).map((r) => r.choice)));
+    const chosen = computed(() => rows.value.filter((r) => r.choice !== "skip"));
+    const chosenSum = computed(() => chosen.value.reduce((s, r) => s + n(r.item.sum), 0));
+
+    async function apply() {
+      error.value = "";
+      const noProduct = rows.value.find((r) => r.choice === "product" && !r.product_id);
+      if (noProduct) { error.value = `Выберите продукт для «${noProduct.item.name}» или пропустите строку`; return; }
+      const noName = rows.value.find((r) => r.choice === "new" && !(r.newName.trim() && r.newCategory.trim()));
+      if (noName) { error.value = `Укажите название и категорию нового продукта для «${noName.item.name}»`; return; }
+      busy.value = true;
+      try {
+        // новые продукты — в справочник без КБЖУ (тот же по названию не задвоится)
+        let created = false;
+        for (const r of rows.value.filter((x) => x.choice === "new")) {
+          const pk = packOf(r.item);
+          const p = await api.post("/products/with-category", {
+            category_name: r.newCategory.trim(), name: r.newName.trim(), reuse_existing: true,
+            package_amount: pk?.amount || null, package_unit: pk ? pk.unit : null,
+          });
+          local.set(LAST_CATEGORY, r.newCategory.trim());
+          r.product_id = p.id; r.choice = "product"; created = true;
+        }
+        if (created) await loadProducts();
+      } catch (e) { error.value = e.message; busy.value = false; return; }
+      const body = rows.value.map((r) => {
+        if (r.choice === "skip") return { index: r.index, action: "skip" };
+        const line = { index: r.index, price: n(r.item.sum) };
+        if (r.qtyEdited && n(r.quantity) > 0) line.quantity = n(r.quantity);
+        if (r.choice.startsWith("line:")) return { ...line, action: "list", shopping_line_id: Number(r.choice.slice(5)) };
+        return { ...line, action: "extra", product_id: r.product_id };
+      });
+      try {
+        await api.post(`/receipts/${receipt.value.id}/apply`, { lines: body });
+        toast(`Чек сохранён, покупок: ${chosen.value.length}`);
+        emit("applied");
+      } catch (e) { error.value = e.message; } finally { busy.value = false; }
+    }
+    return {
+      receipt, recent, lines, rows, qr, scanning, busy, error, submit, open, refresh, apply, back, polling, nextIn,
+      productItems, lineById, unitOf, usedLines, similar, useExisting, state, chosen, chosenSum, SOURCE, fmt, fmtDateTime, fmtQty, n, UNIT_LABEL,
+    };
+  },
+  template: `
+    <Modal title="Чек по QR-коду" wide @close="$emit('close')">
+      <template v-if="!receipt">
+        <div class="row">
+          <button class="primary" @click="scanning = true">📷 Сканировать QR чека</button>
+        </div>
+        <div class="field"><span>…или строка из QR-кода</span>
+          <div class="row" style="flex-wrap: nowrap">
+            <input v-model="qr" placeholder="t=20261015T2145&s=100.63&fn=…&i=…&fp=…&n=1" @keydown.enter="submit()">
+            <button :disabled="busy" @click="submit()">Загрузить</button>
+          </div>
+        </div>
+        <div v-if="recent.length" class="stack tight">
+          <div class="picker-group">Недавние чеки</div>
+          <div v-for="r in recent" :key="r.id" class="picker-item" @click="open(r.id)">
+            <span class="grow" style="min-width: 0"><span>{{ r.store_name || 'Чек' }}</span>
+              <span class="tiny muted" style="display: block">{{ r.purchased_at ? fmtDateTime(r.purchased_at) : '' }} · {{ r.items_count }} поз.</span></span>
+            <span class="finder-right"><span>{{ r.total != null ? fmt(r.total, 2) + ' ₽' : '' }}</span>
+              <span class="tiny">{{ { pending: 'ждём ФНС', done: 'проверить', error: 'ошибка', applied: 'сохранён' }[r.status] }}</span></span>
+          </div>
+        </div>
+        <div class="tiny muted">Строки чека сопоставятся со списком покупок и справочником; вы проверите и поправите перед сохранением. Сопоставления запоминаются — следующие чеки из того же магазина узнаются сами.</div>
+      </template>
+
+      <template v-else>
+        <div class="row small">
+          <b>{{ receipt.store_name || 'Чек' }}</b>
+          <span class="muted">{{ receipt.purchased_at ? fmtDateTime(receipt.purchased_at) : '' }}</span>
+          <span class="grow"></span>
+          <b class="num">{{ receipt.total != null ? fmt(receipt.total, 2) + ' ₽' : '' }}</b>
+        </div>
+        <div v-if="receipt.status === 'pending'" class="alert info">
+          <template v-if="polling">Расшифровываем чек… следующая проверка через {{ nextIn }} с.</template>
+          <template v-else>Чек ещё не дошёл до налоговой — так бывает, если у кассы не было связи (иногда часы).
+            Он сохранён, приложение само проверит его позже — в «Покупках» появится «🧾 Чек · готов».</template>
+          <button class="sm" :disabled="busy" @click="refresh">Проверить сейчас</button>
+        </div>
+        <div v-else-if="receipt.status === 'error'" class="alert error">{{ receipt.error || 'Сервис не смог расшифровать чек' }}</div>
+        <div v-else-if="receipt.status === 'applied'" class="alert info">Этот чек уже сохранён в покупки.</div>
+
+        <datalist id="receipt-cat-list"><option v-for="c in state.productCategories" :key="c.id" :value="c.name" /></datalist>
+        <div v-if="receipt.status === 'done'" class="stack tight">
+          <div v-for="r in rows" :key="r.index" class="receipt-row" :class="{ skipped: r.choice === 'skip' }">
+            <div class="row between small" style="flex-wrap: nowrap; align-items: flex-start">
+              <span style="min-width: 0; overflow-wrap: anywhere">{{ r.item.name }}</span>
+              <span class="nowrap num muted">{{ fmt(r.item.quantity, n(r.item.quantity) % 1 ? 3 : 0) }} × {{ fmt(r.item.price, 2) }} = <b>{{ fmt(r.item.sum, 2) }} ₽</b></span>
+            </div>
+            <div class="row" style="flex-wrap: nowrap">
+              <select v-model="r.choice" class="grow" style="min-width: 0">
+                <option value="skip">— не учитывать</option>
+                <optgroup v-if="lines.length" label="Из списка покупок">
+                  <option v-for="l in lines" :key="l.id" :value="'line:' + l.id"
+                          :disabled="usedLines.has('line:' + l.id) && r.choice !== 'line:' + l.id">{{ l.product_name }}</option>
+                </optgroup>
+                <option value="product">Другой продукт из справочника…</option>
+                <option value="new">Новый продукт — нет в справочнике…</option>
+              </select>
+              <template v-if="r.choice !== 'skip'">
+                <input type="number" min="0.1" step="any" v-model="r.quantity" @input="r.qtyEdited = true" style="width: 84px" placeholder="авто" aria-label="Количество">
+                <span class="small muted">{{ UNIT_LABEL[unitOf(r)] }}</span>
+              </template>
+            </div>
+            <Picker v-if="r.choice === 'product'" :items="productItems" v-model="r.product_id" placeholder="Найти в справочнике…" />
+            <div v-if="r.choice === 'new'" class="stack tight">
+              <div class="row" style="flex-wrap: nowrap">
+                <input v-model="r.newName" class="grow" style="min-width: 0" placeholder="Название продукта" aria-label="Название нового продукта">
+                <input v-model="r.newCategory" list="receipt-cat-list" style="width: 40%" placeholder="Категория" aria-label="Категория">
+              </div>
+              <div v-if="similar(r).length" class="tiny">
+                <span class="muted">Похожие уже есть: </span>
+                <button v-for="p in similar(r)" :key="p.id" class="sm ghost" style="padding: 0 6px" @click="useExisting(r, p)"
+                        title="Взять этот продукт вместо нового">{{ p.name }}<template v-if="p.brand && p.brand.name !== 'Без бренда'"> · {{ p.brand.name }}</template></button>
+              </div>
+              <span class="tiny muted">Сохранится в справочник без КБЖУ — внесёте, когда добавите продукт в план или рецепт.</span>
+            </div>
+            <span v-if="r.choice !== 'skip' && SOURCE[r.source]" class="tiny muted">{{ SOURCE[r.source] }}{{ r.source !== 'alias' ? ' · ' + Math.round(r.confidence * 100) + '%' : '' }}</span>
+          </div>
+        </div>
+      </template>
+
+      <div v-if="error" class="alert error">{{ error }}</div>
+      <BarcodeScanner v-if="scanning" qr @close="scanning = false" @code="submit" />
+      <template #foot>
+        <button v-if="receipt" @click="back">← Другой чек</button>
+        <span class="grow"></span>
+        <button @click="$emit('close')">{{ receipt && receipt.status === 'done' ? 'Отмена' : 'Закрыть' }}</button>
+        <button v-if="receipt && receipt.status === 'done'" class="primary" :disabled="busy" @click="apply">
+          Сохранить {{ chosen.length }} покуп. · {{ fmt(chosenSum, 2) }} ₽</button>
+      </template>
+    </Modal>`,
+};

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,6 +17,34 @@ class Targets(BaseModel):
     proteins: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("2000"))
     fats: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("2000"))
     carbs: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("2000"))
+
+
+class BodyProfile(BaseModel):
+    """Параметры для расчёта целей (хранятся, чтобы не вводить каждый раз)."""
+
+    sex: Optional[Literal["m", "f"]] = None
+    birth_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    height_cm: Optional[Decimal] = Field(default=None, ge=50, le=250)
+    weight_kg: Optional[Decimal] = Field(default=None, ge=2, le=400)
+    activity: Optional[Decimal] = Field(default=None, ge=Decimal("1.2"), le=Decimal("2.5"))
+    goal: Optional[Literal["maintain", "lose", "gain"]] = None
+
+
+class TargetsCalcIn(BaseModel):
+    sex: Literal["m", "f"]
+    birth_year: int = Field(ge=1900, le=2100)
+    height_cm: Decimal = Field(gt=0, le=300)
+    weight_kg: Decimal = Field(gt=0, le=500)
+    activity: Decimal = Field(gt=0, le=3)
+    goal: Literal["maintain", "lose", "gain"] = "maintain"
+
+
+class TargetsCalcOut(BaseModel):
+    targets: Targets
+    age: int
+    bmr: Decimal            # основной обмен, ккал
+    maintenance: Decimal    # суточные траты при поддержании, ккал
+    notes: list[str] = []
 
 
 def _clean_name(v: str) -> str:
@@ -41,6 +69,7 @@ class MemberCreate(BaseModel):
 class MemberUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=50)
     targets: Optional[Targets] = None
+    profile: Optional[BodyProfile] = None
     is_active: Optional[bool] = None
 
     @field_validator("name")
@@ -57,6 +86,7 @@ class MemberResponse(BaseModel):
     is_active: bool
     is_me: bool = False
     targets: Targets
+    profile: BodyProfile = BodyProfile()
 
 
 class HouseholdResponse(ORMModel):

@@ -66,6 +66,18 @@ class Settings(BaseSettings):
     login_max_failures: int = 10
     login_window_minutes: int = 15
 
+    # Часовой пояс семьи: «сегодня» для учёта (сервер на хостинге живёт в UTC)
+    app_timezone: str = "Europe/Moscow"
+
+    # --- Импорт кассовых чеков по QR (code-qr.ru → ФНС) ---
+    # Ключ выдаётся в личном кабинете code-qr.ru; без него импорт чеков отключён
+    codeqr_api_key: str | None = None
+    codeqr_base_url: str = "https://code-qr.ru/api"
+    # Фоновая проверка «ждущих» чеков (0 — выключить); запрос статуса проверку пакета не тратит
+    receipt_poll_minutes: int = 10
+    # Чек не дошёл до ФНС за столько дней — помечаем ошибкой
+    receipt_pending_days: int = 3
+
     def validate_runtime(self) -> None:
         """Проверки, которые нельзя выразить декларативно (запускается в lifespan)."""
         if self.postgres_ssl not in (None, "", "require", "prefer", "disable", "verify-ca", "verify-full"):

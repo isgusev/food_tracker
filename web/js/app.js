@@ -75,7 +75,7 @@ const App = {
     <LoginView v-else-if="!state.user" @done="bootstrap" />
     <div v-else class="layout">
       <nav class="sidebar">
-        <div class="brand">🥗 Food Tracker</div>
+        <div class="brand row" style="gap: 10px"><img src="icons/icon.svg" alt="" width="28" height="28" style="border-radius: 7px">ЕлиГуси</div>
         <a v-for="n in NAV" :key="n.path" :href="'#/' + n.path" class="nav-link" :class="{ active: active(n.path) }">
           <span class="nav-icon">{{ n.icon }}</span>{{ n.label }}</a>
         <div class="sidebar-foot small muted">{{ state.user.username }}<div class="tiny" v-if="state.household">{{ state.household.name }}</div></div>
