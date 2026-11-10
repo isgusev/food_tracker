@@ -22,8 +22,8 @@ _NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
 
 def core_tokens(name: str, brands: set[str]) -> tuple[str, ...]:
-    """Суть названия: без брендов, размеров упаковки, мусорных слов; «3,2» = «3.2»."""
-    text = normalize_query(name).replace(",", ".")
+    """Суть названия: без брендов, размеров упаковки, мусорных слов; «3,2» = «3.2» = «3,2%»."""
+    text = normalize_query(name).replace(",", ".").replace("%", " ")
     words = []
     brand_words = {w for b in brands for w in normalize_query(b).split()}
     for w in text.split():

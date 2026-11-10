@@ -74,7 +74,7 @@
   `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
   единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
   дубликатов «название+бренд»). Новый продукт попадает в товар со своим названием; объединение
-  (`app/services/items.py`, `/items/merge`, предложения `/items/suggestions` — суть названия без брендов и
+  (`app/services/items.py`, `/items/merge`, предложения `/items/suggestions` — суть названия без брендов, «%» и
   размеров, числа должны совпадать) = перепривязка продуктов + слияние настроек семей. «🎯 Именно этот
   вариант» — `RecipeTemplateIngredient.exact`, `MealItem.exact` → в покупках отдельная строка
   `ShoppingLine.is_exact` (ключ потребности `item_key#product_id`), закрывается только запасами этого
