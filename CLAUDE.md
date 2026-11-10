@@ -85,6 +85,10 @@
   Сверяются по ТОВАРУ = `Product.item_key`; партии `StockLot`,
   каждое изменение — `StockMovement` (отмены возвращают в те же партии). Готовка списывает
   состав кастрюли, «съел» — готовый продукт. «Базовые» товары не учитываются.
+- **Базовый справочник** — миграция `0018_base_catalog` (82 продукта «Без бренда»: овощи, фрукты, мясо, птица,
+  рыба, яйца, крупы, базовая молочка, масла, сахар/соль/мёд, орехи; КБЖУ по Скурихину, `created_by_user =
+  'base_catalog'`). Идемпотентна: есть такой «Без бренда» — пропуск; есть товар с тем же названием — встаёт в него
+  с его единицей. Новые базовые продукты — новой миграцией (не правкой 0018). Данные проверяет `tests/test_base_catalog.py`.
 - **Справочник** общий для всех семей: продукт = название + бренд, `barcode` (уникален),
   производители с версиями КБЖУ, упаковки `ProductPackage` в единице товара (г/мл/шт).
   `POST /products/with-category` с `reuse_existing` и `package_amount/unit` — сохранение из OFF без дублей.
@@ -107,8 +111,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 103 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0017)
+.venv/bin/python -m pytest -q              # 105 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0018)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
