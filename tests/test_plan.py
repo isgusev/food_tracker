@@ -5,63 +5,26 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
-
-from tests.test_api import (
-    TODAY,
+from tests.helpers import (
+    add_child,
     build_recipe_stack,
     cook,
     create_ready_product,
     day,
+    get_item,
+    household,
+    me_id,
+    plan,
+    pot_remaining,
     register_and_login,
+    shopping,
+    TODAY,
 )
+
 
 pytestmark = pytest.mark.anyio
 
 # Каша: 60 г овсянки (380 ккал/100 г = 228 ккал) на выход 300 г → 76 ккал/100 г
-
-
-async def household(client, h) -> dict:
-    r = await client.get("/api/v1/household", headers=h)
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-async def me_id(client, h) -> int:
-    return (await household(client, h))["me_member_id"]
-
-
-async def add_child(client, h, name="Маша", calories=1400) -> int:
-    r = await client.post(
-        "/api/v1/household/members",
-        json={"name": name, "targets": {"calories": calories, "proteins": 50}},
-        headers=h,
-    )
-    assert r.status_code == 201, r.text
-    return next(m["id"] for m in r.json()["members"] if m["name"] == name)
-
-
-async def plan(client, h, *, date_day=TODAY, meal="dinner", recipe_id=None, variant_id=None, portions):
-    body = {"date_day": date_day, "meal_type": meal, "portions": portions}
-    body["recipe_id" if recipe_id else "variant_id"] = recipe_id or variant_id
-    r = await client.post("/api/v1/plan", json=body, headers=h)
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-async def get_item(client, h, item_id, date_day=TODAY) -> dict:
-    r = await client.get("/api/v1/plan", params={"start_date": date_day, "end_date": date_day}, headers=h)
-    return next(i for i in r.json() if i["id"] == item_id)
-
-
-async def shopping(client, h, start=TODAY, end=None) -> dict[int, float]:
-    r = await client.get("/api/v1/shopping-list", params={"start_date": start, "end_date": end or start}, headers=h)
-    assert r.status_code == 200, r.text
-    return {i["variant_id"]: float(i["to_buy"]) for i in r.json()["items"]}
-
-
-async def pot_remaining(client, h, pot_id) -> float:
-    pots = (await client.get("/api/v1/recipes/cooking-logs", params={"include_finished": True}, headers=h)).json()
-    return float(next(p for p in pots if p["id"] == pot_id)["current_remaining_weight"])
 
 
 def portion_of(item, member_id):

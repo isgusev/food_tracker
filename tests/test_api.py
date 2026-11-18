@@ -8,37 +8,12 @@
 from __future__ import annotations
 
 
-import datetime as dt
 
 import pytest
-from httpx import AsyncClient
 
-from app.core import clock
+from tests.helpers import build_recipe_stack, cook, create_ready_product, get_variant_id, register_and_login, TODAY
 
 pytestmark = pytest.mark.anyio
-
-
-def day(offset: int = 0) -> str:
-    """ISO-дата относительно сегодня: логика холодильника зависит от текущей даты."""
-    # то же «сегодня», что у приложения (часовой пояс семьи), — иначе ночью по Москве
-    # или на CI в UTC тесты разъезжаются с сервером на сутки
-    return (clock.today() + dt.timedelta(days=offset)).isoformat()
-
-
-TODAY = day()
-
-
-async def register_and_login(client: AsyncClient, username: str, email: str) -> dict:
-    """Хелпер: создать пользователя и получить Bearer-заголовки."""
-    r = await client.post(
-        "/api/v1/auth/register",
-        json={"username": username, "email": email, "password": "secret123"},
-    )
-    assert r.status_code == 201, r.text
-    r = await client.post("/api/v1/auth/token", data={"username": username, "password": "secret123"})
-    assert r.status_code == 200, r.text
-    token = r.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 # --- АУТЕНТИФИКАЦИЯ ---
@@ -134,55 +109,6 @@ async def test_inconsistent_nutrients_flagged(client):
 
 
 # --- РЕЦЕПТЫ И ХОЛОДИЛЬНИК (план семьи — в tests/test_plan.py) ---
-
-
-async def build_recipe_stack(client, headers) -> tuple[int, int]:
-    """Создаёт продукт с КБЖУ (product + base_variant одним запросом) и рецепт.
-
-    Возвращает (variant_id, recipe_id).
-    """
-    r = await client.post("/api/v1/products/categories", json={"name": "Бакалея"}, headers=headers)
-    cat_id = r.json()["id"]
-    r = await client.post(
-        "/api/v1/products/",
-        json={
-            "name": "Овсянка",
-            "category_id": cat_id,
-            "brand_name": "Домашняя",
-            "base_variant": {
-                "manufacturer_name": "Домашняя",
-                "calories": 380,
-                "proteins": 12.0,
-                "fats": 6.0,
-                "carbs": 70.0,
-            },
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    variant_id = r.json()["manufacturers"][0]["variants"][0]["id"]
-
-    r = await client.post("/api/v1/recipes/categories", json={"name": "Завтраки"}, headers=headers)
-    rcat_id = r.json()["id"]
-    r = await client.post(
-        "/api/v1/recipes/",
-        json={
-            "name": "Каша овсяная",
-            "recipe_category_id": rcat_id,
-            "estimated_cooked_weight": 300,
-            "ingredients": [{"variant_id": variant_id, "weight_g": 60}],
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return variant_id, r.json()["id"]
-
-
-async def get_variant_id(client, headers) -> int:
-    """ID первой версии продукта текущего пользователя (для кастрюль)."""
-    r = await client.get("/api/v1/products/", headers=headers)
-    assert r.status_code == 200, r.text
-    return r.json()[0]["manufacturers"][0]["variants"][0]["id"]
 
 
 async def test_pots_isolated_between_users(client):
@@ -338,39 +264,7 @@ async def test_pot_ingredients_replace(client):
 # --- ГОТОВЫЙ ПРОДУКТ (для плана) ---
 
 
-async def create_ready_product(client, headers) -> int:
-    r = await client.post(
-        "/api/v1/products/with-category",
-        json={
-            "category_name": "Молочные продукты",
-            "name": "Йогурт греческий 2%",
-            "brand_name": "Теос",
-            "base_variant": {
-                "manufacturer_name": "Теос",
-                "calories": 66,
-                "proteins": 8.0,
-                "fats": 2.0,
-                "carbs": 4.0,
-            },
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return r.json()["manufacturers"][0]["variants"][0]["id"]
-
-
 # --- КАСТРЮЛИ, ВЕРСИИ КБЖУ, ПОИСК ---
-
-
-async def cook(client, headers, recipe_id, variant_id, cooked_g):
-    r = await client.post(
-        f"/api/v1/recipes/{recipe_id}/cook",
-        json={"total_cooked_weight": cooked_g,
-              "ingredients": [{"variant_id": variant_id, "weight_g": 60}]},
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return r.json()["id"]
 
 
 async def test_new_kbju_version_updates_recipes_but_not_pots(client):

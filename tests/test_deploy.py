@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import get_settings
-from tests.test_api import register_and_login
+from tests.helpers import register_and_login
 
 pytestmark = pytest.mark.anyio
 

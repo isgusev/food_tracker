@@ -15,8 +15,12 @@
   Слои: `app/models` → `app/repositories` (только SQL) → `app/services` (вся логика) →
   `app/api/v1/endpoints` (тонкие роутеры). Доменные ошибки → HTTP в `app/api/error_handlers.py`.
 - Frontend: `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`, Node на машине нет),
-  раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — `web/js/views/*.js`,
-  общее состояние — `web/js/store.js`. PWA: `web/sw.js` (network-first), `manifest.webmanifest`.
+  раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — один компонент на файл:
+  `web/js/views/<экран>/<Компонент>.js`, помощники экрана — `views/<экран>/shared.js`, а `views/<экран>.js` только
+  реэкспортирует (импорты снаружи — из него). Общее состояние — `web/js/store.js`; действие с сервером из компонента
+  («занято», ошибка, тост) — `useAction()` из `web/js/use-action.js` (`{ inline, done }`), не писать свои `run()`.
+  PWA: `web/sw.js` (network-first); **новый JS-файл — добавить в `SHELL` и поднять `CACHE`** (проверяет
+  `scripts/check_web.sh`), `manifest.webmanifest`.
 - Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone). `BarcodeScanner marks` —
   режим «Честного знака»: читает DataMatrix, сканирует пачки подряд (каждый новый код — событие).
 - «Честный знак»: разбор кода GS1 — `app/services/marking.py` (`parse_mark`: 01 GTIN → EAN-13, 21 серийный,
@@ -165,7 +169,10 @@
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
 .venv/bin/python -m scripts.invite         # код приглашения в обход UI
+scripts/check_web.sh                       # фронтенд без браузера: модули грузятся, шаблоны компилируются, sw.js полный
 ```
+Общие помощники тестов — `tests/helpers.py` (пользователь, `day()`, продукты, рецепты, план, запасы, автоплан);
+тесты импортируют их оттуда, не друг из друга.
 Миграции проверять на временном Postgres в Docker (upgrade / check / downgrade -1 / upgrade),
 не трогая основную локальную базу пользователя (`food_tracker_db`, порт 5433).
 
@@ -207,9 +214,9 @@
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — через `day()` в `tests/test_api.py` (он берёт `clock.today()`): с 00:00 до 03:00 МСК
   серверное UTC-«сегодня» — вчера, на CI машина в UTC. Проверка: `TZ=UTC .venv/bin/python -m pytest -q`.
-- Шаблоны Vue без браузера: `jsc -m` (JavaScriptCore, `/System/Library/Frameworks/JavaScriptCore.framework/Versions/
-  Current/Helpers/jsc`) умеет ES-модули — можно импортировать `web/js/views/*.js` и прогнать `compile()` из
-  `vue.esm-browser.prod.js` по `template` компонентов (нужен шим `document.createElement` с `innerHTML`/`children[0].getAttribute`).
+- Шаблоны Vue без браузера — `scripts/check_web.sh` (JavaScriptCore из macOS грузит модули и компилирует шаблоны).
+  Продакшен-сборка Vue прощает незакрытые теги, а несуществующую переменную в `setup` видно только при работе
+  экрана — это по-прежнему проверка в браузере / на стенде.
 - «Вступить в семью» (`HouseholdRepository.move_all_data`) удаляет старую семью, и всё, что не перенесено, пропадает
   каскадом. Новая таблица с `household_id` — добавить её в перенос (и решить конфликты уникальности) + тест
   `test_join_keeps_stock_shopping_and_settings`.

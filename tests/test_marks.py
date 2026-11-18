@@ -8,7 +8,7 @@ from datetime import date, datetime
 import pytest
 
 from app.services.marking import parse_mark
-from tests.test_api import day, register_and_login
+from tests.helpers import day, register_and_login
 
 pytestmark = pytest.mark.anyio
 
