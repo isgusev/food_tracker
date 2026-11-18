@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 
+import datetime as dt
+
 import pytest
 
 from tests.test_api import (
@@ -363,3 +365,39 @@ async def test_portion_add_and_last_portion_delete_removes_item(client):
     assert r.status_code == 204
     r = await client.get("/api/v1/plan", params={"start_date": TODAY, "end_date": TODAY}, headers=h)
     assert r.json() == []
+
+
+async def test_join_keeps_stock_shopping_and_settings(client):
+    """Вступление в семью переносит всё: запасы, списки покупок, настройки товаров, шаблоны недель.
+    Совпадения (настройка того же товара, второй активный список) решаются в пользу новой семьи."""
+    ivan = await register_and_login(client, "ivan5", "ivan5@test.com")
+    await build_recipe_stack(client, ivan)
+    oats = (await client.get("/api/v1/products/", headers=ivan)).json()[0]["id"]
+    code = (await household(client, ivan))["invite_code"]
+    await client.patch(f"/api/v1/stock/items/{oats}", json={"regular": "always"}, headers=ivan)
+    await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=ivan)
+
+    anna = await register_and_login(client, "anna5", "anna5@test.com")
+    r = await client.post("/api/v1/stock/lots", json={"product_id": oats, "quantity": 500, "price": 80}, headers=anna)
+    assert r.status_code == 201, r.text
+    await client.patch(f"/api/v1/stock/items/{oats}", json={"regular": "never", "is_snack": True}, headers=anna)
+    await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=anna)
+    rcat = (await client.post("/api/v1/recipes/categories", json={"name": "Обеды Анны"}, headers=anna)).json()["id"]
+    vid = (await client.get("/api/v1/products/", headers=anna)).json()[0]["manufacturers"][0]["variants"][0]["id"]
+    r = await client.post("/api/v1/recipes/", headers=anna, json={
+        "name": "Каша Анны", "recipe_category_id": rcat, "estimated_cooked_weight": 300,
+        "ingredients": [{"variant_id": vid, "weight_g": 60}]})
+    recipe_id = r.json()["id"]
+    await plan(client, anna, recipe_id=recipe_id, portions=[{"member_id": await me_id(client, anna), "weight_g": 200}])
+    monday = (dt.date.fromisoformat(TODAY) - dt.timedelta(days=dt.date.fromisoformat(TODAY).weekday())).isoformat()
+    r = await client.post("/api/v1/plan/templates", json={"name": "Неделя Анны", "week_start": monday}, headers=anna)
+    assert r.status_code == 201, r.text
+
+    r = await client.post("/api/v1/household/join", json={"invite_code": code}, headers=anna)
+    assert r.status_code == 200, r.text
+    stock = {i["product_id"]: i for i in (await client.get("/api/v1/stock", headers=ivan)).json()}
+    assert float(stock[oats]["remaining"]) == 500                  # запасы Анны теперь общие
+    assert stock[oats]["regular"] == "always" and not stock[oats]["is_snack"]   # настройка семьи Ивана
+    assert (await client.get("/api/v1/shopping-lists/active", headers=anna)).status_code == 200
+    names = [t["name"] for t in (await client.get("/api/v1/plan/templates", headers=ivan)).json()]
+    assert names == ["Неделя Анны"]

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 
 import secrets
-from datetime import datetime, timezone
 
+from app.core import clock
 from app.core.config import Settings
 from app.core.exceptions import ConflictError, UnauthorizedError, ValidationError
 from app.models.household import HouseholdMember
@@ -111,5 +111,4 @@ class AuthService:
         return await self._users.get(user_id)
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+_now = clock.utc_now  # метки времени в базе — UTC без пояса

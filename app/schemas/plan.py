@@ -8,7 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.domain import MEAL_TYPES
+from app.schemas.common import meal_list, meal_type
 
 PortionWeight = Field(gt=0, le=Decimal("2000"))
 
@@ -32,10 +32,7 @@ class MealItemCreate(BaseModel):
     @field_validator("meal_type")
     @classmethod
     def _valid_meal(cls, v: str) -> str:
-        v = v.strip().lower()
-        if v not in MEAL_TYPES:
-            raise ValueError(f"meal_type должен быть одним из {sorted(MEAL_TYPES)}")
-        return v
+        return meal_type(v)
 
     @model_validator(mode="after")
     def _exactly_one_source(self):
@@ -55,12 +52,7 @@ class MealItemMove(BaseModel):
     @field_validator("meal_type")
     @classmethod
     def _valid_meal(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        v = v.strip().lower()
-        if v not in MEAL_TYPES:
-            raise ValueError(f"meal_type должен быть одним из {sorted(MEAL_TYPES)}")
-        return v
+        return meal_type(v)
 
 
 class PortionWeightIn(BaseModel):
@@ -166,11 +158,7 @@ class AutofillIn(BaseModel):
     @field_validator("meal_types")
     @classmethod
     def _meals(cls, v):
-        if v is None:
-            return v
-        if any(m not in MEAL_TYPES for m in v):
-            raise ValueError(f"meal_types должен быть из {sorted(MEAL_TYPES)}")
-        return v
+        return meal_list(v, empty_is_any=False)
 
     @model_validator(mode="after")
     def _period(self):

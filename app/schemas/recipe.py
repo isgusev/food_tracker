@@ -6,21 +6,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
-from app.domain import MEAL_ORDER, MEAL_TYPES
-from app.schemas.common import ORMModel
+from app.schemas.common import ORMModel, meal_list
 
 
 def _check_meal_types(v):
-    """Приёмы пищи для автоплана: без дублей, в порядке дня; пустой список — как «любые» (None)."""
-    if v is None:
-        return None
-    bad = [m for m in v if m not in MEAL_TYPES]
-    if bad:
-        raise ValueError(f"meal_types: допустимы {list(MEAL_ORDER)}")
-    out = [m for m in MEAL_ORDER if m in v]
-    return out or None
+    """Приёмы пищи рецепта для автоплана; пустой список — как «любые» (None)."""
+    return meal_list(v, empty_is_any=True)
 
 
 class RecipePlanning(BaseModel):

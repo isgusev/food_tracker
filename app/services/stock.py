@@ -17,11 +17,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from statistics import median
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.domain import UNITS, _ceil, grams_to_base, pick_packages, quantize
+from app.core import clock
+from app.domain import UNITS, _ceil, dec, grams_to_base, monday, pick_packages, quantize
+from app.services.naming import brand_of
 from app.models.plan import MealItem, MealPortion
 from app.models.product import Product
 from app.models.recipe import RecipeCookingLog
@@ -56,27 +58,13 @@ REGULAR_WEEKS = 8          # «обычно берём»: окно истори�
 REGULAR_SHARE = Decimal("0.5")   # покупали не реже чем в половине недель
 
 
-def monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())
-
-
 def is_snack(product: Product, settings, snack_categories: set[int]) -> bool:
     """Снек/сладкое: категория продукта отмечена у семьи или товар помечен «снек»."""
     return bool((settings is not None and settings.is_snack) or (product.category_id in snack_categories))
 
 
-def _d(v) -> Decimal:
-    return Decimal(str(v or 0))
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def brand_of(product: Product | None) -> str | None:
-    """Бренд для показа; служебный «Без бренда» — это отсутствие бренда."""
-    name = product.brand.name if product is not None and product.brand else None
-    return None if name and name.lower() == "без бренда" else name
+_d = dec
+_now = clock.utc_now
 
 
 @dataclass

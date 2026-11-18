@@ -55,6 +55,9 @@
   дальше — фоновая задача в lifespan (`app/services/receipt_poller.py`, раз в `RECEIPT_POLL_MINUTES`=10,
   только при заданном ключе, не в тестах); не дошёл за `RECEIPT_PENDING_DAYS`=3 дня — ошибка; ответ
   «нет пакета» чек не портит. Значок «🧾 Чек · готов» в «Покупках» — расшифрованные, но не разобранные.
+- Общие помощники: `app/domain.py` — `dec()` (что угодно → Decimal), `monday()`; `app/services/naming.py` —
+  `brand_of`, `display_name` (показ продукта без «Без бренда»); `app/schemas/common.py` — `meal_type`/`meal_list`
+  (одна проверка приёмов пищи для всех схем). Новые копии `_d`/`_now`/`monday` не заводить.
 - Время: «сегодня» для учёта — только `app/core/clock.today()` (пояс семьи `APP_TIMEZONE`, по умолчанию
   `Europe/Moscow`; сервер на Amvera в UTC). Метки времени в базе — UTC без пояса (`clock.utc_now()`);
   выборка за местные дни — `clock.utc_bounds(start, end)` (полуинтервал). `date.today()` в коде не использовать.
@@ -147,7 +150,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 128 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 129 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0024)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
@@ -198,6 +201,9 @@
 - Шаблоны Vue без браузера: `jsc -m` (JavaScriptCore, `/System/Library/Frameworks/JavaScriptCore.framework/Versions/
   Current/Helpers/jsc`) умеет ES-модули — можно импортировать `web/js/views/*.js` и прогнать `compile()` из
   `vue.esm-browser.prod.js` по `template` компонентов (нужен шим `document.createElement` с `innerHTML`/`children[0].getAttribute`).
+- «Вступить в семью» (`HouseholdRepository.move_all_data`) удаляет старую семью, и всё, что не перенесено, пропадает
+  каскадом. Новая таблица с `household_id` — добавить её в перенос (и решить конфликты уникальности) + тест
+  `test_join_keeps_stock_shopping_and_settings`.
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)
   требуют подтверждения Ивана.
 

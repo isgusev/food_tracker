@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qs, urlsplit
 
+from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
 from app.domain import UNIT_G, UNIT_ML, UNIT_PCS, base_to_grams, grams_to_base, quantize
 from app.models.product import Product
@@ -42,7 +43,8 @@ from app.schemas.receipt import (
 from app.schemas.stock import LineCheck, LotAdd
 from app.services import receipt_client
 from app.services.barcode import _token_score, normalize_query
-from app.services.stock import StockService, brand_of
+from app.services.naming import brand_of
+from app.services.stock import StockService
 
 ZERO = Decimal("0")
 KG = Decimal("1000")
@@ -53,8 +55,7 @@ ALIAS_SAME_STORE = 1.0
 ALIAS_OTHER_STORE = 0.9
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+_now = clock.utc_now  # метки времени в базе — UTC без пояса
 
 
 def _dec(v) -> Decimal | None:

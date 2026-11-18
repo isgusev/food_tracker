@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.services import barcode as off
-from tests.test_api import TODAY, build_recipe_stack, create_ready_product, day, register_and_login
+from tests.test_api import build_recipe_stack, create_ready_product, register_and_login
 from tests.test_plan import add_child, me_id, plan
 
 pytestmark = pytest.mark.anyio

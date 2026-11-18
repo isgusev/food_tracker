@@ -22,7 +22,7 @@ from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from statistics import median
 
 from app.core import clock
-from app.domain import MEAL_ORDER
+from app.domain import MEAL_ORDER, monday
 from app.models.household import HouseholdMember
 from app.models.plan import MealItem, MealPortion
 from app.models.recipe import RecipeCookingLog
@@ -33,7 +33,7 @@ from app.models.recipe import Recipe
 from app.repositories.household import HouseholdRepository
 from app.repositories.stock import StockRepository
 from app.services.household import planner_out
-from app.services.plan import display_name
+from app.services.naming import display_name
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.plan import AutofillOut, AutofillPortion, AutofillSuggestion, TypicalPortion
@@ -126,8 +126,7 @@ def standard_portion(recipe) -> Decimal | None:
 
 
 
-def _monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())
+_monday = monday
 
 
 def _keys(recipe: Recipe) -> dict[str, str]:
