@@ -76,6 +76,17 @@
   уменьшаются пропорционально (`scale_portions`, вниз до грамма). Только события кастрюли: готовка
   (`attach_to_new_pot`), правка остатка, «съели» (`_release(shrink=True)`); правки порций в плане — без допуска
   (заданный вес не урезается). Долю отдаёт `BaseRepository.tolerance(household_id)`.
+- **Автоплан** (`docs/AUTOPLAN.md`, `app/services/autoplan.py`, этап 1): у рецепта `in_rotation`, `effort` (easy/special),
+  `meal_types` (JSON; NULL — любой приём пищи), `keeps_days` (по умолч. 2), `is_freezable`; у блюда плана
+  `MealItem.origin` (manual/auto), `pinned`, `auto_reason` — ручная правка auto-блюда (перенос, порции) делает его manual
+  (`PlanService._touch`). Заготовки: `RecipeCookingLog.is_frozen` + `keeps_until`, `POST /recipes/cooking-logs/{id}/freeze`
+  (по умолч. +60 дн.) и `/unfreeze`; свойство `good_until` (keeps_until или готовка + keeps_days − 1; нужна загруженная
+  `recipe` — она в `CookingLogRepository.full_query`). Типичные порции — `GET /plan/typical-portions` (медиана съеденного
+  за 90 дн. → по другим членам семьи × цель ккал → стандартная порция рецепта (выход / порций, если порций > 1) ×
+  цель / 2000 → доля цели ккал на приём); форма «Добавить в план» берёт их, если на устройстве нет «как в прошлый раз».
+  `POST /plan/autofill {start, end, meal_types?, dry_run?}` — только ПУСТЫЕ ячейки, из остатков холодильника (пока
+  свежие) и заготовок, которым ≤ 14 дн.; блюдо не дважды за день; последняя порция — с допуском семьи. Веб: «🧊 Доесть
+  из холодильника» в плане, пунктир у auto-блюд, «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
 - **Товар** (`Item`, ключ строкой `items.key`) — базовое наименование без бренда («Кефир 3,2%»); у продукта
   `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
   единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
@@ -120,8 +131,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 112 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0021)
+.venv/bin/python -m pytest -q              # 119 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0022)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -155,6 +166,8 @@
   `(?<![а-яё])…(?![а-яё])`.
 - Регэкспы с `\d` и другими `\`-escape внутри шаблонов Vue (`template: \`…\``) ломаются —
   JS-литерал съедает обратный слэш. Проверки выносить в `computed`/функции в `setup`.
+- Встроенный браузер может не пускать на localhost (навигация «denied») — тогда API стенда проверять скриптом
+  (httpx в `.venv`), а экраны — на тестовом стенде; не повторять навигацию.
 - `preview_start` по `.claude/launch.json` не может запустить сервер (нет доступа к папке проекта) —
   uvicorn запускать через Bash в фоне на временной базе (Docker, порт 5439) и открывать
   `preview_start` с `url` http://localhost:8001/app/; демо-данные — `scripts.seed --url … --user … --password …`.

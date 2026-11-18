@@ -7,8 +7,14 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Query, Response
 
-from app.api.deps import CurrentMemberDep, CurrentUserDep, PlanServiceDep
+from app.api.deps import AutoplanServiceDep, CurrentMemberDep, CurrentUserDep, PlanServiceDep
+from app.core import clock
+from app.core.exceptions import ValidationError
+from app.domain import MEAL_TYPES
 from app.schemas.plan import (
+    AutofillIn,
+    AutofillOut,
+    TypicalPortion,
     EatOptionalWeight,
     MealItemCreate,
     MealItemMove,
@@ -34,6 +40,32 @@ async def list_plan(
 ):
     """Блюда семьи за период с порциями и КБЖУ каждой порции."""
     return await service.list_range(me.household_id, start_date, end_date)
+
+
+@router.get("/typical-portions", response_model=list[TypicalPortion])
+async def typical_portions(
+    service: AutoplanServiceDep,
+    me: CurrentMemberDep,
+    meal_type: str = Query(),
+    recipe_id: int | None = Query(default=None),
+    variant_id: int | None = Query(default=None),
+):
+    """Типичная порция каждого члена семьи для блюда/продукта: по съеденному за 90 дней,
+    иначе по другим членам семьи (пропорционально цели ккал), иначе по доле цели на приём пищи."""
+    if meal_type not in MEAL_TYPES or (recipe_id is None) == (variant_id is None):
+        raise ValidationError("Нужны meal_type и ровно одно из recipe_id / variant_id")
+    return await service.typical_for(me.household_id, meal_type, recipe_id, variant_id)
+
+
+@router.post("/autofill", response_model=AutofillOut)
+async def autofill(payload: AutofillIn, service: AutoplanServiceDep, me: CurrentMemberDep, user: CurrentUserDep):
+    """Заполнить ПУСТЫЕ ячейки периода тем, что уже приготовлено: остатки в холодильнике (пока свежие)
+    и заготовки из морозилки, которым скоро истекает срок. Ручной план не трогается;
+    предложенное — origin=auto с причиной. dry_run — только показать."""
+    items = await service.autofill(
+        me.household_id, user.id, payload.start, payload.end, payload.meal_types, payload.dry_run, clock.today()
+    )
+    return AutofillOut(items=items, dry_run=payload.dry_run)
 
 
 @router.post("", response_model=MealItemResponse, status_code=201)

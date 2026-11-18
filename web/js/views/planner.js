@@ -147,6 +147,14 @@ export const PlannerView = {
       };
     });
 
+    // Автоплан, этап 1: пустые ячейки недели — тем, что уже приготовлено (холодильник, морозилка)
+    async function fillFromFridge() {
+      try {
+        const r = await api.post("/plan/autofill", { start: weekStart.value, end: weekEnd.value });
+        toast(r.items.length ? `Добавлено из холодильника: ${r.items.length}` : "Нечего добавить: свободных остатков нет или ячейки заняты");
+        if (r.items.length) await load();
+      } catch (e) { toastError(e); }
+    }
     async function copyPrevWeek() {
       const src = await api.get("/plan", { start_date: addDays(weekStart.value, -7), end_date: addDays(weekStart.value, -1) });
       if (!src.length) { toast("На прошлой неделе нет блюд"); return; }
@@ -177,7 +185,7 @@ export const PlannerView = {
     return {
       weekStart, weekEnd, days, dayInfo, weekStats, loading, adding, opened, me, targets, MEALS, state,
       templates, dragId, dropTarget, dropTo, load,
-      copyPrevWeek, shopHref, onChanged, itemIcon, itemBadge, portionOf, portionsSummary, allEaten,
+      copyPrevWeek, fillFromFridge, shopHref, onChanged, itemIcon, itemBadge, portionOf, portionsSummary, allEaten,
       prev: () => (weekStart.value = addDays(weekStart.value, -7)),
       next: () => (weekStart.value = addDays(weekStart.value, 7)),
       thisWeek: () => (weekStart.value = startOfWeek(today())),
@@ -197,6 +205,7 @@ export const PlannerView = {
           </div>
         </div>
         <div class="row">
+          <button @click="fillFromFridge" title="Поставить в пустые приёмы пищи остатки из холодильника и заготовки, которым скоро истекает срок">🧊 Доесть из холодильника</button>
           <button @click="copyPrevWeek" title="Повторить план прошлой недели">⧉ Копировать прошлую неделю</button>
           <button @click="templates = true">Шаблоны</button>
           <a class="btn" :href="shopHref" style="background: var(--accent); color: #fff; border-color: var(--accent)">🛒 Покупки на неделю</a>
@@ -231,7 +240,7 @@ export const PlannerView = {
               <span>{{ m.label }}</span>
               <button class="add-btn" @click="adding = { date: d, meal: m.key }" :aria-label="'Добавить: ' + m.label">+</button>
             </div>
-            <div v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry" :class="{ fact: allEaten(it), dragging: dragId === it.id }"
+            <div v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry" :class="{ fact: allEaten(it), dragging: dragId === it.id, auto: it.origin === 'auto' }"
                  draggable="true" @dragstart="dragId = it.id; $event.dataTransfer.effectAllowed = 'move'" @dragend="dragId = null; dropTarget = ''"
                  @click="opened = it" title="Перетащите на другой день или приём пищи">
               <span class="ico">{{ itemIcon(it) }}</span>
@@ -245,6 +254,7 @@ export const PlannerView = {
                   <span v-if="it.portions.length > 1"> · ещё {{ it.portions.length - (portionOf(it, state.viewMemberId) ? 1 : 0) }}</span>
                 </div>
                 <div v-if="!allEaten(it) && itemBadge(it).cls === 'warn'" class="tiny" style="color: var(--warn)">{{ itemBadge(it).text }}</div>
+                <div v-if="it.origin === 'auto' && it.auto_reason" class="tiny muted">✨ {{ it.auto_reason }}</div>
               </div>
             </div>
           </div>

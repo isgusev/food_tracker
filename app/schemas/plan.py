@@ -101,6 +101,9 @@ class MealItemResponse(BaseModel):
     state: str
     cooking_log_id: Optional[int] = None
     portions: list[PortionResponse]
+    origin: str = "manual"            # manual | auto (предложено автопланом)
+    pinned: bool = False
+    auto_reason: Optional[str] = None
 
     # Холодильник для рецептов: остаток кастрюли (привязанной или активной по
     # рецепту), сколько из неё уже зарезервировано и хватает ли на это блюдо
@@ -142,3 +145,58 @@ class TemplateResponse(BaseModel):
 class TemplateApplied(BaseModel):
     created: int
     skipped: int                   # блюда, чей рецепт/продукт уже удалён
+
+
+class TypicalPortion(BaseModel):
+    """Типичная порция едока (docs/AUTOPLAN.md, 3.5)."""
+
+    member_id: int
+    weight_g: Decimal
+    source: str   # history — по съеденному · family — по другим членам семьи · recipe — порция рецепта · target — по цели ккал
+
+
+class AutofillIn(BaseModel):
+    start: date_type
+    end: date_type
+    meal_types: Optional[list[str]] = None   # какие приёмы заполнять; None — все
+    dry_run: bool = False
+
+    @field_validator("meal_types")
+    @classmethod
+    def _meals(cls, v):
+        if v is None:
+            return v
+        if any(m not in MEAL_TYPES for m in v):
+            raise ValueError(f"meal_types должен быть из {sorted(MEAL_TYPES)}")
+        return v
+
+    @model_validator(mode="after")
+    def _period(self):
+        if self.end < self.start:
+            raise ValueError("Конец периода раньше начала")
+        if (self.end - self.start).days > 31:
+            raise ValueError("Не больше месяца за раз")
+        return self
+
+
+class AutofillPortion(BaseModel):
+    member_id: int
+    weight_g: Decimal
+
+
+class AutofillSuggestion(BaseModel):
+    """Что автоплан поставил (или поставил бы при dry_run) в пустую ячейку."""
+
+    date_day: date_type
+    meal_type: str
+    recipe_id: Optional[int] = None
+    name: str
+    cooking_log_id: Optional[int] = None
+    portions: list[AutofillPortion]
+    auto_reason: str
+    item_id: Optional[int] = None   # id созданного блюда (не при dry_run)
+
+
+class AutofillOut(BaseModel):
+    items: list[AutofillSuggestion]
+    dry_run: bool = False

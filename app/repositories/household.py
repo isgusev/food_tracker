@@ -53,3 +53,11 @@ class MemberRepository(BaseRepository[HouseholdMember]):
             .options(joinedload(HouseholdMember.household))
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def active_in(self, household_id: int) -> list[HouseholdMember]:
+        stmt = (
+            select(HouseholdMember)
+            .where(HouseholdMember.household_id == household_id, HouseholdMember.is_active.is_(True))
+            .order_by(HouseholdMember.id)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())

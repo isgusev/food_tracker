@@ -48,6 +48,12 @@ class MealItem(Base):
         index=True,
     )
 
+    # Автоплан: manual — поставлено человеком (и всё старое), auto — предложено; ручная правка
+    # auto-блюда делает его manual. pinned — «📌 закреплено» (перегенерация не трогает)
+    origin = Column(String(10), default="manual", nullable=False, server_default="manual")
+    pinned = Column(Boolean, default=False, nullable=False, server_default="false")
+    auto_reason = Column(String(200), nullable=True)  # почему предложено: «остаток в холодильнике»
+
     created_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

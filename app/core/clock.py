@@ -42,3 +42,10 @@ def utc_bounds(start: date, end: date) -> tuple[datetime, datetime]:
     t0 = datetime.combine(start, time.min, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
     t1 = datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
     return t0, t1
+
+
+def local_date(utc_naive: datetime | None) -> date:
+    """Метка времени из базы (UTC без пояса) → местная дата семьи."""
+    if utc_naive is None:
+        return today()
+    return utc_naive.replace(tzinfo=timezone.utc).astimezone(tz()).date()

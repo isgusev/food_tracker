@@ -3,8 +3,10 @@ from __future__ import annotations
 
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -51,6 +53,12 @@ class Recipe(Base):
     default_servings = Column(Integer, default=1, nullable=False)
     # Можно готовить половиной: в покупки — до половины закладки, иначе — целая закладка
     allow_half = Column(Boolean, default=False, nullable=False, server_default="false")
+    # --- Автоплан (docs/AUTOPLAN.md, 3.1) ---
+    in_rotation = Column(Boolean, default=True, nullable=False, server_default="true")  # предлагать в автоплане
+    effort = Column(String(10), default="easy", nullable=False, server_default="easy")  # easy | special
+    meal_types = Column(JSON, nullable=True)  # уместные приёмы пищи; NULL — любые
+    keeps_days = Column(Integer, default=2, nullable=False, server_default="2")  # сколько дней есть одну закладку
+    is_freezable = Column(Boolean, default=False, nullable=False, server_default="false")
     total_raw_weight = Column(Numeric(7, 1), default=0.0, nullable=False)
     estimated_cooked_weight = Column(Numeric(7, 1), nullable=False)
     calories_per_100g = Column(Numeric(5, 1), default=0.0, nullable=False)
@@ -115,6 +123,9 @@ class RecipeCookingLog(Base):
     is_finished = Column(Boolean, default=False, nullable=False)  # Кастрюля пуста?
     # Признак «выбросили/испортилось» (в архиве холодильника помечается как удалённая)
     is_discarded = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Заготовка в морозилке: лежит дольше обычного, автоплан ставит её в дни без готовки
+    is_frozen = Column(Boolean, default=False, nullable=False, server_default="false")
+    keeps_until = Column(Date, nullable=True)  # годно до (у заготовки)
 
     calories_per_100g = Column(Numeric(5, 1), nullable=False)
     proteins_per_100g = Column(Numeric(4, 1), nullable=False)
@@ -127,6 +138,18 @@ class RecipeCookingLog(Base):
         cascade="all, delete-orphan",
     )
     recipe = relationship("Recipe", back_populates="cooking_logs")
+
+    @property
+    def good_until(self):
+        """До какого дня есть: заготовка/размороженное — keeps_until, иначе готовка + Recipe.keeps_days.
+        Нужна загруженная связь recipe (CookingLogRepository.full_query)."""
+        if self.keeps_until is not None:
+            return self.keeps_until
+        from datetime import timedelta
+
+        from app.core import clock
+        days = self.recipe.keeps_days if self.recipe is not None and self.recipe.keeps_days else 2
+        return clock.local_date(self.cooked_at) + timedelta(days=days - 1)
 
 
 class RecipeActualIngredient(Base):
