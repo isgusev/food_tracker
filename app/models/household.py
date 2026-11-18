@@ -78,4 +78,7 @@ class PlannerSettings(Base):
     no_cook_days = Column(JSON, nullable=True)        # дни недели без готовки (0 = пн)
     special_days = Column(JSON, nullable=True)        # дни для «эдакого»; пусто — любой
     max_special_per_week = Column(Integer, nullable=False, default=1, server_default="1")
+    # Снеки и сладкое (этап 3): категории продуктов семьи и квота ₽ в неделю (NULL — квоты нет)
+    snack_categories = Column(JSON, nullable=True)
+    snack_quota = Column(Numeric(10, 2), nullable=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

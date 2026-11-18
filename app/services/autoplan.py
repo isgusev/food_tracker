@@ -1,7 +1,9 @@
 """Автоплан (docs/AUTOPLAN.md): предложения плана поверх обычной модели.
 
 Шаги генерации (4.1): 1) остатки в холодильнике (пока свежие) и заготовки из морозилки — те, которым
-скоро истекает срок, и любые в дни «без готовки»; 2) регулярные готовые продукты — этап 3;
+скоро истекает срок, и любые в дни «без готовки»; 2) регулярные готовые продукты (этап 3): продукт, который
+в этот день недели и приём пищи стоял в ≥ 4 из 8 последних недель, — в пустую ячейку (если ели его там без
+блюда) или добавкой к предложенному блюду (если ели вместе с блюдом);
 3) готовки: в каждую пустую ячейку — лучший по оценке (4.2) рецепт в ротации, его закладка закрывает
 тот же приём следующих дней в пределах keeps_days и выхода; 4) оценки пересчитываются после каждого
 выбора; 5) порции — типичные (3.5).
@@ -31,6 +33,7 @@ from app.models.recipe import Recipe
 from app.repositories.household import HouseholdRepository
 from app.repositories.stock import StockRepository
 from app.services.household import planner_out
+from app.services.plan import display_name
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.plan import AutofillOut, AutofillPortion, AutofillSuggestion, TypicalPortion
@@ -55,6 +58,25 @@ REPEAT_PENALTY = 1.0   # то же блюдо в последние 2 дня
 REST_DAYS = 14
 EXPIRY_DAYS = 3
 CONTINUE_PREFIX = "та же закладка"
+REGULAR_WEEKS = 8
+REGULAR_MIN_WEEKS = 4
+WEEKDAYS_PL = ("по понедельникам", "по вторникам", "по средам", "по четвергам", "по пятницам",
+               "по субботам", "по воскресеньям")
+MEAL_NA = {"breakfast": "на завтрак", "lunch": "на обед", "dinner": "на ужин", "snack": "на перекус"}
+MEAL_K = {"breakfast": "к завтраку", "lunch": "к обеду", "dinner": "к ужину", "snack": "к перекусу"}
+
+
+@dataclass
+class _Regular:
+    """Регулярный готовый продукт в ячейке (день недели + приём пищи)."""
+
+    weekday: int
+    meal: str
+    item_key: str
+    variant_id: int
+    name: str
+    side: bool                                  # True — к блюду, False — сам по себе
+    weights: dict[int, Decimal]                 # член семьи → обычная порция
 
 
 def _round5(x: Decimal) -> Decimal:
@@ -221,6 +243,8 @@ class _Ctx:
     board: _Board
     dry_run: bool
     typical: dict[tuple[int, str], dict[int, tuple[Decimal, str]]] = field(default_factory=dict)
+    products: set[tuple[date, str, str]] = field(default_factory=set)   # (день, приём, товар) — уже стоит
+    regular_cells: set[tuple[date, str]] = field(default_factory=set)   # ячейки, занятые регулярными продуктами
 
 
 class AutoplanService:
@@ -359,6 +383,8 @@ class AutoplanService:
                 continue
             if item.date_day >= first:
                 ctx.board.cells.add((item.date_day, item.meal_type))
+                if item.variant is not None and item.variant.manufacturer is not None:
+                    ctx.products.add((item.date_day, item.meal_type, item.variant.manufacturer.product.item_key))
             if item.recipe is not None:
                 ctx.board.put(item.date_day, item.meal_type, item.recipe, ctx.scoring.keys.get(item.recipe_id))
         if not dry_run and replaced:
@@ -366,8 +392,11 @@ class AutoplanService:
         # put() добавил и ячейки до периода — они не мешают: генерация идёт с first
 
         out = await self._fill_from_pots(ctx, today)
+        regs = await self._regulars(ctx)
+        out += await self._fill_regular(ctx, regs)
         if cook:
             out += await self._fill_cooking(ctx)
+        out += await self._fill_sides(ctx, regs, out)
         if not dry_run:
             await self._plan.flush()
         out.sort(key=lambda s: (s.date_day, MEAL_ORDER.index(s.meal_type)))
@@ -511,6 +540,102 @@ class AutoplanService:
                         _, recipe, reason = cands[0]
                         out += await self._cook_at(ctx, day, meal, recipe, reason)
             day += timedelta(days=1)
+        return out
+
+    # ------------------------------------------------- регулярные продукты
+    async def _regulars(self, ctx: _Ctx) -> list[_Regular]:
+        """Готовые продукты, которые стоят в этой ячейке недели почти всегда: ≥ 4 из 8 последних недель.
+        Считается ручной план и всё, что ели; «никогда» у товара семьи — не предлагаем."""
+        w0 = _monday(ctx.first) - timedelta(weeks=REGULAR_WEEKS)
+        history = await self._plan.list_in_range(ctx.household_id, w0, ctx.first - timedelta(days=1))
+        with_recipe = {(i.date_day, i.meal_type) for i in history if i.recipe_id is not None}
+        never = set()
+        if self._stock is not None:
+            never = {k for k, st in (await self._stock.settings_map(ctx.household_id)).items()
+                     if st.regular == "never"}
+        active = {m.id for m in await self._members.active_in(ctx.household_id)}
+        groups: dict[tuple[int, str, str], dict] = {}
+        for it in history:
+            if it.variant_id is None or it.variant is None:
+                continue
+            if it.origin == "auto" and not any(p.is_eaten for p in it.portions):
+                continue                     # непринятое предложение — не история
+            product = it.variant.manufacturer.product if it.variant.manufacturer else None
+            if product is None or product.item_key in never:
+                continue
+            g = groups.setdefault((it.date_day.weekday(), it.meal_type, product.item_key), {
+                "alone": set(), "side": set(), "n": 0, "who": {}, "variant": it.variant_id, "last": it.date_day,
+                "name": display_name(it.variant, it.variant_id)})
+            week = (it.date_day - w0).days // 7
+            g["side" if (it.date_day, it.meal_type) in with_recipe else "alone"].add(week)
+            g["n"] += 1
+            if it.date_day >= g["last"]:
+                g["variant"], g["last"] = it.variant_id, it.date_day
+                g["name"] = display_name(it.variant, it.variant_id)
+            for p in it.portions:
+                if p.member_id in active:
+                    g["who"].setdefault(p.member_id, []).append(Decimal(str(p.weight_g)))
+        out: list[_Regular] = []
+        for (wd, meal, key), g in sorted(groups.items()):
+            alone, side = len(g["alone"]), len(g["side"])
+            if max(alone, side) < REGULAR_MIN_WEEKS:
+                continue
+            weights = {mid: _round5(Decimal(str(median(ws)))) for mid, ws in g["who"].items()
+                       if len(ws) * 2 >= g["n"]}   # тот, кто ест его хотя бы в половине случаев
+            if weights:
+                out.append(_Regular(wd, meal, key, g["variant"], g["name"], side > alone, weights))
+        return out
+
+    async def _add_product(self, ctx: _Ctx, day: date, reg: _Regular, reason: str, source: str) -> AutofillSuggestion:
+        ctx.products.add((day, reg.meal, reg.item_key))
+        item_id = None
+        if not ctx.dry_run:
+            item = MealItem(
+                household_id=ctx.household_id, date_day=day, meal_type=reg.meal, variant_id=reg.variant_id,
+                origin="auto", auto_reason=reason, created_by_user_id=ctx.user_id,
+                portions=[MealPortion(member_id=mid, weight_g=w) for mid, w in reg.weights.items()],
+            )
+            self._plan.add(item)
+            await self._plan.flush()
+            item_id = item.id
+        return AutofillSuggestion(
+            date_day=day, meal_type=reg.meal, variant_id=reg.variant_id, name=reg.name,
+            portions=[AutofillPortion(member_id=mid, weight_g=w) for mid, w in reg.weights.items()],
+            auto_reason=reason, source=source, item_id=item_id,
+        )
+
+    async def _fill_regular(self, ctx: _Ctx, regs: list[_Regular]) -> list[AutofillSuggestion]:
+        """Шаг 2: продукт «сам по себе» — в пустую ячейку своего дня недели."""
+        out = []
+        day = ctx.first
+        while day <= ctx.end:
+            for reg in regs:
+                if reg.side or reg.weekday != day.weekday() or reg.meal not in ctx.wanted:
+                    continue
+                if (day, reg.meal) in ctx.board.cells and (day, reg.meal) not in ctx.regular_cells:
+                    continue                 # занято блюдом или ручным планом
+                if (day, reg.meal, reg.item_key) in ctx.products:
+                    continue
+                ctx.board.cells.add((day, reg.meal))
+                ctx.regular_cells.add((day, reg.meal))
+                out.append(await self._add_product(
+                    ctx, day, reg, f"обычно {MEAL_NA[reg.meal]} {WEEKDAYS_PL[reg.weekday]}", "regular"))
+            day += timedelta(days=1)
+        return out
+
+    async def _fill_sides(self, ctx: _Ctx, regs: list[_Regular], placed: list[AutofillSuggestion]) -> list[AutofillSuggestion]:
+        """Продукт «к блюду» — в ячейки, куда автоплан только что поставил блюдо."""
+        out = []
+        cells = sorted({(s.date_day, s.meal_type) for s in placed if s.recipe_id is not None},
+                       key=lambda c: (c[0], MEAL_ORDER.index(c[1])))
+        for day, meal in cells:
+            for reg in regs:
+                if not reg.side or reg.weekday != day.weekday() or reg.meal != meal:
+                    continue
+                if (day, meal, reg.item_key) in ctx.products:
+                    continue
+                out.append(await self._add_product(
+                    ctx, day, reg, f"обычно {MEAL_K[meal]} {WEEKDAYS_PL[reg.weekday]}", "side"))
         return out
 
     # ------------------------------------------------------- другой вариант

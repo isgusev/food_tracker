@@ -16,6 +16,7 @@ from __future__ import annotations
 
 
 from dataclasses import dataclass, field
+from statistics import median
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -30,6 +31,10 @@ from app.repositories.recipe import RecipeRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
 from app.services.marking import MarkInfo, parse_mark
 from app.schemas.stock import (
+    ItemFlags,
+    RegularItem,
+    RegularOut,
+    SnackQuota,
     LineCheck,
     LineUpdate,
     LotAdd,
@@ -47,6 +52,17 @@ from app.schemas.stock import (
 
 ZERO = Decimal("0")
 FAR = date(9999, 12, 31)
+REGULAR_WEEKS = 8          # «обычно берём»: окно истории покупок, недель
+REGULAR_SHARE = Decimal("0.5")   # покупали не реже чем в половине недель
+
+
+def monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def is_snack(product: Product, settings, snack_categories: set[int]) -> bool:
+    """Снек/сладкое: категория продукта отмечена у семьи или товар помечен «снек»."""
+    return bool((settings is not None and settings.is_snack) or (product.category_id in snack_categories))
 
 
 def _d(v) -> Decimal:
@@ -438,18 +454,113 @@ class StockService:
         settings.needs_check = False
         await self._stock.flush()
 
-    async def set_flags(
-        self, household_id: int, product_id: int, is_staple: bool | None, is_low: bool | None
-    ) -> None:
+    async def set_flags(self, household_id: int, product_id: int, data: ItemFlags) -> None:
+        """Настройки товара семьи: базовый / заканчивается / «обычно берём» / снек."""
         product = await self._product(product_id)
         s = await self._stock.get_or_create_settings(household_id, product.item_key)
-        if is_staple is not None:
-            s.is_staple = is_staple
-            if not is_staple:
+        if data.is_staple is not None:
+            s.is_staple = data.is_staple
+            if not data.is_staple:
                 s.is_low = False
-        if is_low is not None:
-            s.is_low = is_low
+        if data.is_low is not None:
+            s.is_low = data.is_low
+        if data.regular is not None:
+            s.regular = data.regular
+        if "regular_qty" in data.model_fields_set:
+            s.regular_qty = data.regular_qty or None
+        if data.is_snack is not None:
+            s.is_snack = data.is_snack
         await self._stock.flush()
+
+    # ======================================================= «обычно берём»
+    async def snack_spent(self, household_id: int, start: date, end: date) -> Decimal:
+        """Сколько потрачено на снеки и сладкое за дни start…end."""
+        planner = await self._stock.planner(household_id)
+        cats = set(planner.snack_categories or []) if planner else set()
+        settings = await self._stock.settings_map(household_id)
+        return sum((
+            _d(lot.price) for lot in await self._stock.purchases_between(household_id, start, end)
+            if lot.price is not None and is_snack(lot.product, settings.get(lot.product.item_key), cats)
+        ), ZERO)
+
+    async def regular(self, household_id: int, start: date, end: date, today: date) -> RegularOut:
+        """«Обычно берём» на период (docs/AUTOPLAN.md, 5): товары, купленные в ≥ половине из 8 последних
+        полных недель; количество — медиана в неделю × недель периода − запасы − уже в активном списке.
+        always/never и своё количество — из настроек товара. Снеки сверх квоты недели не предлагаются."""
+        if start > end:
+            raise ValidationError("Дата окончания не может быть раньше даты начала")
+        w0 = monday(today) - timedelta(weeks=REGULAR_WEEKS)
+        lots = await self._stock.purchases_between(household_id, w0, monday(today) - timedelta(days=1))
+        settings = await self._stock.settings_map(household_id)
+        planner = await self._stock.planner(household_id)
+        cats = set(planner.snack_categories or []) if planner else set()
+        quota = _d(planner.snack_quota) if planner and planner.snack_quota else None
+
+        weekly: dict[str, dict[int, Decimal]] = {}
+        last: dict[str, StockLot] = {}
+        price: dict[str, Decimal] = {}
+        for lot in lots:
+            key = lot.product.item_key
+            wk = (lot.purchased_on - w0).days // 7
+            weekly.setdefault(key, {})
+            weekly[key][wk] = weekly[key].get(wk, ZERO) + _d(lot.quantity)
+            last[key] = lot
+            if lot.price is not None and _d(lot.quantity) > 0:
+                price[key] = _d(lot.price) / _d(lot.quantity)
+        keys = {k for k, w in weekly.items() if len(w) >= REGULAR_WEEKS * REGULAR_SHARE}
+        keys |= {k for k, st in settings.items() if st.regular == "always"}
+        keys = {k for k in keys if not (settings.get(k) and (settings[k].regular == "never" or settings[k].is_staple))}
+        if not keys:
+            return RegularOut(items=[], snacks=SnackQuota(quota=quota))
+
+        products = {}
+        for p in await self._stock.products_by_keys(keys):
+            products.setdefault(p.item_key, p)
+        stock = await self._stock.available_by_key(household_id, max(today, start))
+        lst = await self._lists.active(household_id)
+        in_list: dict[str, Decimal] = {}
+        for line in (lst.lines if lst else []):
+            if not line.is_checked:
+                k = line.product.item_key
+                in_list[k] = in_list.get(k, ZERO) + _d(line.needed)
+        weeks = max(1, round(((end - start).days + 1) / 7))
+
+        found: list[RegularItem] = []
+        for key in keys:
+            st = settings.get(key)
+            product = last[key].product if key in last else products.get(key)
+            if product is None:
+                continue
+            history = weekly.get(key, {})
+            per_week = _d(st.regular_qty) if st and st.regular_qty else (
+                Decimal(str(median(history.values()))) if history else None)
+            if not per_week:
+                continue
+            need = quantize(per_week * weeks - stock.get(key, ZERO) - in_list.get(key, ZERO))
+            if need <= 0:
+                continue
+            pkg_amount, pkg_count = await self._packages_for(product.id, need)
+            qty = _d(pkg_amount) * pkg_count if pkg_amount and pkg_count else need
+            found.append(RegularItem(
+                item_key=key, product_id=product.id, name=product.item.name if product.item else product.name,
+                unit=product.base_unit, weekly=quantize(per_week), to_buy=need,
+                package_amount=pkg_amount, package_count=pkg_count, weeks_bought=len(history),
+                weeks=REGULAR_WEEKS, always=bool(st and st.regular == "always"),
+                is_snack=is_snack(product, st, cats),
+                est_price=quantize(price[key] * qty, "0.01") if key in price else None,
+            ))
+        found.sort(key=lambda r: (not r.always, -r.weeks_bought, r.name))
+        # квота снеков: потрачено за эту неделю + то, что предложим, — не больше квоты
+        spent = await self.snack_spent(household_id, monday(today), today)
+        running, hidden, out = spent, 0, []
+        for r in found:
+            if r.is_snack and quota is not None:
+                if running + _d(r.est_price) > quota:
+                    hidden += 1
+                    continue
+                running += _d(r.est_price)
+            out.append(r)
+        return RegularOut(items=out, snacks=SnackQuota(spent=quantize(spent, "0.01"), quota=quota, hidden=hidden))
 
     # ================================================================ сводка
     async def summary(self, household_id: int, today: date) -> list[StockItem]:
@@ -481,6 +592,9 @@ class StockService:
                 is_staple=bool(s and s.is_staple),
                 is_low=bool(s and s.is_low),
                 needs_check=bool(s and s.needs_check),
+                regular=(s.regular if s and s.regular else "auto"),
+                regular_qty=s.regular_qty if s else None,
+                is_snack=bool(s and s.is_snack),
                 lots=[LotResponse(
                     id=lot.id, product_id=lot.product_id, brand=brand_of(lot.product), variant_id=lot.variant_id,
                     quantity=lot.quantity, remaining=lot.remaining, price=lot.price,

@@ -65,7 +65,8 @@ class StockRepository(BaseRepository[StockLot]):
     async def get_or_create_settings(self, household_id: int, key: str) -> HouseholdProduct:
         s = await self.settings(household_id, key)
         if s is None:
-            s = HouseholdProduct(household_id=household_id, item_key=key, is_staple=False, is_low=False, needs_check=False)
+            s = HouseholdProduct(household_id=household_id, item_key=key, is_staple=False, is_low=False, needs_check=False,
+                                 regular="auto", is_snack=False)
             self._session.add(s)
             await self._session.flush()
         return s
@@ -121,6 +122,21 @@ class StockRepository(BaseRepository[StockLot]):
         for pid, remaining in (await self._session.execute(stmt)).all():
             out[pid] = out.get(pid, Decimal("0")) + Decimal(str(remaining))
         return out
+
+    async def purchases_between(self, household_id: int, start: date, end: date) -> list[StockLot]:
+        """Покупки (партии purchase/manual, в т. ч. из чеков) за дни start…end — с продуктом и категорией."""
+        stmt = (
+            self._lots_query(household_id)
+            .where(StockLot.purchased_on >= start, StockLot.purchased_on <= end,
+                   StockLot.source.in_(("purchase", "manual")))
+            .order_by(StockLot.purchased_on, StockLot.id)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def planner(self, household_id: int):
+        """Настройки планировщика семьи (снеки и квота) — None, если не заданы."""
+        from app.models.household import PlannerSettings
+        return await self._session.get(PlannerSettings, household_id)
 
     async def spent_between(self, household_id: int, start: date, end: date) -> Decimal:
         """Сколько потрачено на покупки (партии с ценой) за дни start…end."""

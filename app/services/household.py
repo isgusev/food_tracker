@@ -81,6 +81,8 @@ def planner_out(s) -> PlannerSettingsOut:
         no_cook_days=s.no_cook_days or [],
         special_days=s.special_days or [],
         max_special_per_week=s.max_special_per_week if s.max_special_per_week is not None else 1,
+        snack_categories=s.snack_categories or [],
+        snack_quota=s.snack_quota,
     )
 
 
@@ -164,6 +166,10 @@ class HouseholdService:
                 setattr(s, key, fields[key] or None)
         if data.max_special_per_week is not None:
             s.max_special_per_week = data.max_special_per_week
+        if "snack_categories" in fields:
+            s.snack_categories = sorted(set(data.snack_categories or [])) or None
+        if "snack_quota" in fields:
+            s.snack_quota = data.snack_quota or None
         await self._households.flush()
         return planner_out(s)
 

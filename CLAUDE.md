@@ -95,6 +95,14 @@
   черновика («Принять всё»/«Убрать»), действия ✓ 📌 🔄 ✕ у предложения; предложения — «карандашом» (`.entry.auto`),
   принятое — с полосой состояния (`.st-to_cook`/`.st-in_fridge`/`.st-product`); «Семья → Планировщик»
   (`PlannerSettingsCard` в `views/misc.js`); «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
+  Этап 3: шаг 2 генерации — регулярные готовые продукты (`_regulars` в `autoplan.py`: тот же день недели и приём ≥ 4 из
+  8 недель; «сам по себе» → пустая ячейка, source `regular`; «к блюду» → к ячейке с авто-блюдом, source `side`).
+- **Обычно берём и снеки** (этап 3, миграция 0024): `HouseholdProduct.regular` (auto/always/never), `regular_qty`,
+  `is_snack` — `PATCH /stock/items/{product_id}`; `GET /shopping-list/regular` (`StockService.regular`: покупки ≥ 4 из
+  8 полных недель, медиана в неделю − запасы − список; снеки сверх `PlannerSettings.snack_quota` за неделю скрыты);
+  `snack_categories` — в настройках планировщика; `FinanceSummary.snack_spent`. Веб: `RegularBlock` в `views/shopping.js`
+  (предложение «карандашом», «+»/«Добавить всё» через `POST /shopping-lists/{id}/lines`), «Обычно берём» в карточке
+  товара запасов, снеки в «Планировщике» и «Деньгах».
 - **Товар** (`Item`, ключ строкой `items.key`) — базовое наименование без бренда («Кефир 3,2%»); у продукта
   `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
   единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
@@ -139,8 +147,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 125 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0023)
+.venv/bin/python -m pytest -q              # 128 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0024)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)

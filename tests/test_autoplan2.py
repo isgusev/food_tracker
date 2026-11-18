@@ -84,12 +84,13 @@ def test_scoring_rest_expiry_share_repeat():
 async def test_planner_settings(client):
     h = await register_and_login(client, "pl1", "pl1@test.com")
     r = await client.get("/api/v1/household/planner", headers=h)
-    assert r.json() == {"meal_types": None, "no_cook_days": [], "special_days": [], "max_special_per_week": 1}
+    assert r.json() == {"meal_types": None, "no_cook_days": [], "special_days": [], "max_special_per_week": 1,
+                        "snack_categories": [], "snack_quota": None}
     r = await client.patch("/api/v1/household/planner", headers=h, json={
         "meal_types": ["dinner", "lunch"], "no_cook_days": [4, 4], "special_days": [5], "max_special_per_week": 2})
     assert r.status_code == 200, r.text
     assert r.json() == {"meal_types": ["lunch", "dinner"], "no_cook_days": [4], "special_days": [5],
-                        "max_special_per_week": 2}
+                        "max_special_per_week": 2, "snack_categories": [], "snack_quota": None}
     r = await client.patch("/api/v1/household/planner", headers=h, json={"meal_types": None, "no_cook_days": []})
     assert r.json()["meal_types"] is None and r.json()["no_cook_days"] == [] and r.json()["special_days"] == [5]
     assert (await client.patch("/api/v1/household/planner", headers=h, json={"no_cook_days": [7]})).status_code == 422
