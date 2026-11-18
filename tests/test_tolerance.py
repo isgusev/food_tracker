@@ -124,3 +124,17 @@ async def test_shopping_skips_extra_pack_and_small_shortfall(client):
     assert float(line["to_buy"]) == 400 and line["package_count"] == 1      # одна пачка 360 г
     await client.post("/api/v1/stock/lots", json={"product_id": beef["id"], "quantity": 360}, headers=h)
     assert await beef_line() is None                                        # 40 г докупать не надо
+
+
+def test_pot_rules_are_pure():
+    """Правила кастрюли (app/services/pots.py) — без базы: влезает ли с допуском и как уменьшаются порции."""
+    from decimal import Decimal as D
+
+    from app.services.pots import fit_weights, fits, shrink
+    assert fits(D(400), D(350), D("0.15")) and not fits(D(400), D(330), D("0.15"))
+    # доли сохраняются, вниз до грамма, сумма не больше остатка
+    assert shrink({"я": D(300), "ребёнок": D(150)}, D(400)) == {"я": D(266), "ребёнок": D(133)}
+    assert shrink({"я": D(300)}, D(500)) == {"я": D(300)}                       # хватает — как есть
+    assert fit_weights({"я": D(300), "ребёнок": D(150)}, D(400), D("0.15")) == {"я": D(266), "ребёнок": D(133)}
+    assert fit_weights({"я": D(300), "ребёнок": D(150)}, D(300), D("0.15")) is None   # не влезает и с допуском
+    assert fit_weights({}, D(300), D("0.15")) is None

@@ -7,7 +7,6 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
     ZERO,
@@ -23,6 +22,7 @@ from app.models.recipe import (
     RecipeTemplateIngredient,
 )
 from app.repositories.plan import PlanRepository
+from app.services.pots import PotService, set_remaining
 from app.services.stock import StockService
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import (
@@ -127,7 +127,9 @@ class RecipeService:
         variants: VariantRepository,
         plan: PlanRepository,
         stock: StockService,
+        pots: PotService,
     ) -> None:
+        self._pot_svc = pots
         self._recipes = recipes
         self._categories = categories
         self._cooking_logs = cooking_logs
@@ -310,10 +312,7 @@ class RecipeService:
         # Блюда плана по этому рецепту резервируются в свежей кастрюле —
         # начиная с сегодняшнего дня и только сколько влезает в выход блюда
         # (вышло чуть меньше плана — в пределах допуска семьи порции уменьшаются пропорционально)
-        await self._plan.attach_to_new_pot(
-            household_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight,
-            tolerance=await self._plan.tolerance(household_id),
-        )
+        await self._pot_svc.attach_new(pot, from_date=today)
 
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
@@ -398,14 +397,11 @@ class RecipeService:
         remainder = data.current_remaining_weight
         if remainder > pot.total_cooked_weight:
             raise ValidationError("Остаток не может превышать общий вес готового блюда")
-        pot.current_remaining_weight = remainder
-        pot.is_finished = remainder <= ZERO
+        set_remaining(pot, remainder)
         await self._cooking_logs.flush()
         # остатка стало меньше: в пределах допуска — порции уменьшаются пропорционально,
         # иначе поздние блюда, которым не хватает, снова «надо приготовить»
-        await self._plan.release_overbooked(
-            pot.id, remainder, tolerance=await self._plan.tolerance(pot.household_id)
-        )
+        await self._pot_svc.release(pot.id, shrink_ok=True)
         return pot
 
     # --- АРХИВ ХОЛОДИЛЬНИКА ---
@@ -495,8 +491,7 @@ class RecipeService:
         сохранилась в архиве холодильника.
         """
         pot.is_discarded = True
-        pot.is_finished = True
-        pot.current_remaining_weight = ZERO
+        set_remaining(pot, ZERO)
         # несъеденные блюда плана снова «надо приготовить» по шаблону
         await self._plan.detach_from_pot(pot.id)
         await self._cooking_logs.flush()
@@ -505,7 +500,7 @@ class RecipeService:
         return full
 
     async def replace_pot_ingredients(
-        self, pot: RecipeCookingLog, data: CookingLogUpdateIngredients
+        self, pot: RecipeCookingLog, data: CookingLogUpdateIngredients, today: date
     ) -> RecipeCookingLog:
         """Полная замена фактической закладки кастрюли с пересчётом КБЖУ.
 
@@ -531,6 +526,6 @@ class RecipeService:
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
         await self._stock.adjust_pot(
-            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, clock.today()
+            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, today
         )
         return full

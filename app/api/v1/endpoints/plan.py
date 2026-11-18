@@ -155,7 +155,7 @@ async def delete_item(item_id: int, service: PlanServiceDep, me: CurrentMemberDe
 async def eat_all(item_id: int, service: PlanServiceDep, me: CurrentMemberDep):
     """«Все поели»: все несъеденные порции — съедено по плану."""
     item = await service.get_owned_item(item_id, me.household_id)
-    return await service.eat_all(item)
+    return await service.eat_all(item, clock.today())
 
 
 @router.post("/{item_id}/portions", response_model=MealItemResponse, status_code=201)
@@ -169,7 +169,7 @@ async def update_portion(
     portion_id: int, payload: PortionWeightIn, service: PlanServiceDep, me: CurrentMemberDep
 ):
     item, portion = await service.get_owned_portion(portion_id, me.household_id)
-    return await service.update_portion(item, portion, payload.weight_g)
+    return await service.update_portion(item, portion, payload.weight_g, clock.today())
 
 
 @router.delete("/portions/{portion_id}", response_model=MealItemResponse | None)
@@ -186,7 +186,7 @@ async def eat_portion(
 ):
     """Съедено (вес по факту; без веса — как в плане). Списывается из кастрюли."""
     item, portion = await service.get_owned_portion(portion_id, me.household_id)
-    return await service.eat_portion(item, portion, payload.weight_g)
+    return await service.eat_portion(item, portion, payload.weight_g, clock.today())
 
 
 @router.post("/portions/{portion_id}/uneat", response_model=MealItemResponse)

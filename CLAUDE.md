@@ -58,7 +58,8 @@
 - Общие помощники: `app/domain.py` — `dec()` (что угодно → Decimal), `monday()`; `app/services/naming.py` —
   `brand_of`, `display_name` (показ продукта без «Без бренда»); `app/schemas/common.py` — `meal_type`/`meal_list`
   (одна проверка приёмов пищи для всех схем). Новые копии `_d`/`_now`/`monday` не заводить.
-- Время: «сегодня» для учёта — только `app/core/clock.today()` (пояс семьи `APP_TIMEZONE`, по умолчанию
+- Время: «сегодня» для учёта — только `app/core/clock.today()`, и вызывает его роутер: сервисы получают `today`
+  параметром (не зовут `clock.today()` сами) (пояс семьи `APP_TIMEZONE`, по умолчанию
   `Europe/Moscow`; сервер на Amvera в UTC). Метки времени в базе — UTC без пояса (`clock.utc_now()`);
   выборка за местные дни — `clock.utc_bounds(start, end)` (полуинтервал). `date.today()` в коде не использовать.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
@@ -77,8 +78,12 @@
   **Допуск** `Household.portion_tolerance` (%, по умолчанию 15, 0…30, `PATCH /household`, «Семья → Допуск по весу»):
   вышло/осталось меньше плана в пределах допуска — блюда остаются привязанными, а их несъеденные порции
   уменьшаются пропорционально (`scale_portions`, вниз до грамма). Только события кастрюли: готовка
-  (`attach_to_new_pot`), правка остатка, «съели» (`_release(shrink=True)`); правки порций в плане — без допуска
-  (заданный вес не урезается). Долю отдаёт `BaseRepository.tolerance(household_id)`.
+  (`PotService.attach_new`), правка остатка, «съели» (`PotService.release(shrink_ok=True)`); правки порций в плане —
+  без допуска (заданный вес не урезается). Долю отдаёт `BaseRepository.tolerance(household_id)`.
+  **Все правила кастрюли — в `app/services/pots.py`** (рефакторинг Р3): чистые `remaining_weight`, `fits`, `shrink`,
+  `fit_weights`, `scale_portions`, `set_remaining` (остаток + «пуста») и `PotService` (привязка/освобождение блюд);
+  в `PlanRepository` — только выборки (`unattached_for_recipe`, `attached_newest_first`). Остаток кастрюли не
+  менять напрямую — через `set_remaining`; автоплан берёт порции из кастрюли через `fit_weights`.
 - **Автоплан** (`docs/AUTOPLAN.md`, `app/services/autoplan.py`, этап 1): у рецепта `in_rotation`, `effort` (easy/special),
   `meal_types` (JSON; NULL — любой приём пищи), `keeps_days` (по умолч. 2), `is_freezable`; у блюда плана
   `MealItem.origin` (manual/auto), `pinned`, `auto_reason` — ручная правка auto-блюда (перенос, порции) делает его manual
@@ -154,7 +159,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 129 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 130 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0024)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
