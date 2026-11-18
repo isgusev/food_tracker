@@ -3,6 +3,8 @@ from __future__ import annotations
 
 
 from sqlalchemy import (
+    CheckConstraint,
+    Index,
     JSON,
     Boolean,
     Column,
@@ -37,9 +39,9 @@ class MealItem(Base):
     date_day = Column(Date, nullable=False, index=True)
     meal_type = Column(String(20), nullable=False)
 
-    recipe_id = Column(Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True)
+    recipe_id = Column(Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True, index=True)
     variant_id = Column(
-        Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=True
+        Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     # «Именно этот вариант» готового продукта: в покупки — этот бренд, а не любой того же товара
     exact = Column(Boolean, default=False, nullable=False, server_default="false")
@@ -67,6 +69,12 @@ class MealItem(Base):
         back_populates="item",
         cascade="all, delete-orphan",
         order_by="MealPortion.id",
+    )
+
+    __table_args__ = (
+        Index("ix_meal_items_household_date", "household_id", "date_day"),   # план семьи за период
+        CheckConstraint("meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')", name="meal_type"),
+        CheckConstraint("origin IN ('manual', 'auto')", name="origin"),
     )
 
 

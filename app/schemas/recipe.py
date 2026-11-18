@@ -124,7 +124,7 @@ class CookingLogUpdateIngredients(BaseModel):
 
 class RecipeResponse(ORMModel):
     id: int
-    user_id: int
+    user_id: Optional[int] = None   # автор; NULL — пользователь удалён
     recipe_category_id: int
     name: str
     cooking_time_minutes: Optional[int]
@@ -161,7 +161,7 @@ class RecipeCookingLogCreate(BaseModel):
 class RecipeCookingLogResponse(ORMModel):
     id: int
     recipe_id: Optional[int]
-    user_id: int
+    user_id: Optional[int] = None   # автор; NULL — пользователь удалён
     cooked_at: Optional[datetime] = None
     total_raw_weight: Decimal
     total_cooked_weight: Decimal
