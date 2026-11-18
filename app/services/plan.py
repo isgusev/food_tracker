@@ -249,13 +249,31 @@ class PlanService:
             item.auto_reason = None
 
     async def move(self, item: MealItem, data: MealItemMove) -> MealItemResponse:
-        self._touch(item)
+        """Перенос (ручная правка — блюдо становится обычным) и/или 📌 закрепление."""
+        if data.date_day is not None or data.meal_type is not None:
+            self._touch(item)
+        if data.pinned is not None:
+            item.pinned = data.pinned
         if data.date_day is not None:
             item.date_day = data.date_day
         if data.meal_type is not None:
             item.meal_type = data.meal_type
         await self._plan.flush()
         return await self.response(item.id)
+
+    async def accept(self, item: MealItem) -> MealItemResponse:
+        """«✓ Принять» предложение: блюдо становится обычным (manual)."""
+        self._touch(item)
+        await self._plan.flush()
+        return await self.response(item.id)
+
+    async def accept_range(self, household_id: int, start: date, end: date) -> int:
+        """«Принять всё» за период: все auto-блюда → manual."""
+        items = [i for i in await self._plan.list_in_range(household_id, start, end) if i.origin == "auto"]
+        for i in items:
+            self._touch(i)
+        await self._plan.flush()
+        return len(items)
 
     async def delete_item(self, item: MealItem) -> None:
         """Удалить блюдо: съеденное из кастрюли возвращается в неё."""

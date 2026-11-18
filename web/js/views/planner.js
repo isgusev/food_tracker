@@ -10,6 +10,9 @@ import {
   MEALS, MEAL_ORDER, addDays, fmt, fmtDayMonth, fmtDayMonthLong, fmtWeekday, fmtWeekdayLong,
   grams, local, n, range, startOfWeek, today,
 } from "../util.js";
+
+const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+const fmtMonth = (d) => MONTHS[Number(d.slice(5, 7)) - 1];
 import {
   AddItemModal, ItemModal, allEaten, itemBadge, itemIcon, memberMacros, portionOf, portionsSummary,
 } from "./plan-modals.js";
@@ -147,14 +150,40 @@ export const PlannerView = {
       };
     });
 
-    // Автоплан, этап 1: пустые ячейки недели — тем, что уже приготовлено (холодильник, морозилка)
-    async function fillFromFridge() {
+    // Автоплан: «✨ Предложить» заполняет пустые ячейки (прежние предложения без 📌 — заменяет)
+    const suggesting = ref("");   // "" | "week" | дата дня | "fridge"
+    const firstOpen = computed(() => (weekStart.value < today() ? today() : weekStart.value));
+    async function suggest(start, end, key, extra = {}) {
+      suggesting.value = key;
       try {
-        const r = await api.post("/plan/autofill", { start: weekStart.value, end: weekEnd.value });
-        toast(r.items.length ? `Добавлено из холодильника: ${r.items.length}` : "Нечего добавить: свободных остатков нет или ячейки заняты");
-        if (r.items.length) await load();
-      } catch (e) { toastError(e); }
+        const r = await api.post("/plan/autofill", { start, end, ...extra });
+        const k = r.items.length;
+        toast(k
+          ? `Предложено блюд: ${k}${r.replaced ? ` (прежних предложений заменено: ${r.replaced})` : ""}. Правьте или принимайте`
+          : "Нечего предложить: ячейки заняты или нет рецептов в ротации");
+        await load();
+      } catch (e) { toastError(e); } finally { suggesting.value = ""; }
     }
+    const suggestWeek = () => suggest(firstOpen.value, weekEnd.value, "week");
+    const suggestDay = (d) => suggest(d, d, d);
+    const fillFromFridge = () => suggest(firstOpen.value, weekEnd.value, "fridge", { cook: false });
+
+    const drafts = computed(() => items.value.filter((it) => it.origin === "auto"));
+    const loose = computed(() => drafts.value.filter((it) => !it.pinned && !it.cooking_log_id && !it.portions.some((p) => p.is_eaten)));
+    async function act(fn, msg) {
+      try { await fn(); if (msg) toast(msg); await load(); } catch (e) { toastError(e); }
+    }
+    const acceptAll = () => act(() => api.post("/plan/accept", { start: weekStart.value, end: weekEnd.value }), "Предложения приняты — теперь это обычный план");
+    async function clearDrafts() {
+      if (!confirm(`Убрать предложения без 📌 (${loose.value.length})?`)) return;
+      await act(async () => { for (const it of loose.value) await api.del(`/plan/${it.id}`); }, "Предложения убраны");
+    }
+    const accept = (it) => act(() => api.post(`/plan/${it.id}/accept`));
+    const pin = (it) => act(() => api.patch(`/plan/${it.id}`, { pinned: !it.pinned }), it.pinned ? "Откреплено" : "Закреплено — перегенерация не тронет");
+    const other = (it) => act(() => api.post(`/plan/${it.id}/alternative`));
+    const drop = (it) => act(() => api.del(`/plan/${it.id}`));
+    const canSwap = (it) => it.kind === "recipe" && !it.cooking_log_id && !it.portions.some((p) => p.is_eaten);
+
     async function copyPrevWeek() {
       const src = await api.get("/plan", { start_date: addDays(weekStart.value, -7), end_date: addDays(weekStart.value, -1) });
       if (!src.length) { toast("На прошлой неделе нет блюд"); return; }
@@ -185,7 +214,8 @@ export const PlannerView = {
     return {
       weekStart, weekEnd, days, dayInfo, weekStats, loading, adding, opened, me, targets, MEALS, state,
       templates, dragId, dropTarget, dropTo, load,
-      copyPrevWeek, fillFromFridge, shopHref, onChanged, itemIcon, itemBadge, portionOf, portionsSummary, allEaten,
+      copyPrevWeek, fillFromFridge, shopHref, suggesting, suggestWeek, suggestDay, drafts, loose, acceptAll, clearDrafts,
+      accept, pin, other, drop, canSwap, dayNum: (d) => Number(d.slice(8, 10)), fmtMonth, onChanged, itemIcon, itemBadge, portionOf, portionsSummary, allEaten,
       prev: () => (weekStart.value = addDays(weekStart.value, -7)),
       next: () => (weekStart.value = addDays(weekStart.value, 7)),
       thisWeek: () => (weekStart.value = startOfWeek(today())),
@@ -193,26 +223,40 @@ export const PlannerView = {
     };
   },
   template: `
-    <div>
+    <div class="planner">
       <div class="page-head">
         <div class="row">
           <h1>План семьи</h1>
           <div class="row tight">
             <button class="icon" @click="prev" aria-label="Предыдущая неделя">‹</button>
-            <span class="num" style="min-width: 150px; text-align: center">{{ fmtDayMonth(weekStart) }} — {{ fmtDayMonth(weekEnd) }}</span>
+            <span class="num week-range">{{ fmtDayMonth(weekStart) }} — {{ fmtDayMonth(weekEnd) }}</span>
             <button class="icon" @click="next" aria-label="Следующая неделя">›</button>
             <button class="sm ghost" @click="thisWeek" v-if="weekStart > today || weekEnd < today">Текущая</button>
           </div>
         </div>
         <div class="row">
-          <button @click="fillFromFridge" title="Поставить в пустые приёмы пищи остатки из холодильника и заготовки, которым скоро истекает срок">🧊 Доесть из холодильника</button>
-          <button @click="copyPrevWeek" title="Повторить план прошлой недели">⧉ Копировать прошлую неделю</button>
+          <button class="suggest-btn" :disabled="!!suggesting || weekEnd < today" @click="suggestWeek"
+                  title="Заполнить пустые приёмы пищи: остатки, заготовки, затем готовки из рецептов в ротации. Ваш план не трогается">
+            <span aria-hidden="true">✨</span>{{ suggesting === 'week' ? 'Подбираю…' : 'Предложить неделю' }}
+          </button>
+          <button :disabled="!!suggesting || weekEnd < today" @click="fillFromFridge" title="Только остатки из холодильника и заготовки — без новых готовок">🧊 Только остатки</button>
+          <button @click="copyPrevWeek" title="Повторить план прошлой недели">⧉ Прошлая неделя</button>
           <button @click="templates = true">Шаблоны</button>
-          <a class="btn" :href="shopHref" style="background: var(--accent); color: #fff; border-color: var(--accent)">🛒 Покупки на неделю</a>
+          <a class="btn shop-link" :href="shopHref">🛒 Покупки на неделю</a>
         </div>
       </div>
 
-      <div class="row" style="margin-bottom: 12px; gap: 16px">
+      <div v-if="drafts.length" class="draft-bar" role="status">
+        <span class="draft-swatch" aria-hidden="true"></span>
+        <div class="grow">
+          <b>Черновик: {{ drafts.length }} {{ drafts.length === 1 ? 'предложение' : drafts.length < 5 ? 'предложения' : 'предложений' }}</b>
+          <div class="tiny muted">Карандашом — то, что предложил планировщик. Правка, ✓ или «Принять всё» делают блюдо обычным; 📌 — оставить при новом подборе.</div>
+        </div>
+        <button class="sm ghost" v-if="loose.length" @click="clearDrafts">Убрать</button>
+        <button class="sm primary" @click="acceptAll">✓ Принять всё</button>
+      </div>
+
+      <div class="row week-stats">
         <MemberSwitch />
         <span class="small muted">Блюд: <b class="num">{{ weekStats.total }}</b></span>
         <span class="small muted">Приготовить: <b class="num">{{ weekStats.toCook }}</b></span>
@@ -222,43 +266,57 @@ export const PlannerView = {
       </div>
 
       <div class="week">
-        <div v-for="d in days" :key="d" class="day" :class="{ today: d === today }">
-          <a class="day-head" :href="'#/day/' + d" style="text-decoration: none; color: inherit; display: block">
-            <div class="row between">
-              <span class="day-title">{{ fmtWeekday(d) }}, {{ fmtDayMonth(d) }}</span>
-              <span class="small num muted" :title="me ? 'КБЖУ: ' + me.name : ''">{{ fmt(dayInfo[d].all.calories) }} ккал</span>
-            </div>
-            <div class="meter k" style="margin-top: 6px"><i :class="{ over: dayInfo[d].all.calories > targets.calories * 1.1 }" :style="{ width: dayInfo[d].pct + '%' }"></i></div>
-            <div class="tiny muted num" style="margin-top: 4px">
+        <section v-for="d in days" :key="d" class="day" :class="{ today: d === today, past: d < today }">
+          <header class="day-head">
+            <a class="day-date" :href="'#/day/' + d" :aria-label="'Открыть день ' + fmtDayMonth(d)">
+              <span class="day-num num">{{ dayNum(d) }}</span>
+              <span class="day-word"><b>{{ fmtWeekday(d) }}</b><span>{{ d === today ? 'сегодня' : fmtMonth(d) }}</span></span>
+            </a>
+            <span class="day-kcal num" :title="me ? 'КБЖУ: ' + me.name : ''">{{ fmt(dayInfo[d].all.calories) }}<small> ккал</small></span>
+            <button v-if="d >= today" class="day-suggest" :disabled="!!suggesting" @click="suggestDay(d)"
+                    :aria-label="'Предложить на ' + fmtDayMonth(d)" title="Предложить на этот день">{{ suggesting === d ? '…' : '✨' }}</button>
+          </header>
+          <div class="day-meter">
+            <div class="meter k"><i :class="{ over: dayInfo[d].all.calories > targets.calories * 1.1 }" :style="{ width: dayInfo[d].pct + '%' }"></i></div>
+            <div class="tiny muted num">
               Б {{ fmt(dayInfo[d].all.proteins) }} · Ж {{ fmt(dayInfo[d].all.fats) }} · У {{ fmt(dayInfo[d].all.carbs) }}
               <span v-if="dayInfo[d].eaten.calories"> · съедено {{ fmt(dayInfo[d].eaten.calories) }}</span>
             </div>
-          </a>
-          <div v-for="m in MEALS" :key="m.key" class="meal" :class="{ 'drop-on': dropTarget === d + m.key }"
+          </div>
+          <div v-for="m in MEALS" :key="m.key" class="meal" :class="{ 'drop-on': dropTarget === d + m.key, empty: !dayInfo[d].meals[m.key].length }"
                @dragover.prevent="dropTarget = d + m.key" @dragleave="dropTarget === d + m.key && (dropTarget = '')" @drop.prevent="dropTo(d, m.key)">
             <div class="meal-head">
               <span>{{ m.label }}</span>
               <button class="add-btn" @click="adding = { date: d, meal: m.key }" :aria-label="'Добавить: ' + m.label">+</button>
             </div>
-            <div v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry" :class="{ fact: allEaten(it), dragging: dragId === it.id, auto: it.origin === 'auto' }"
+            <article v-for="it in dayInfo[d].meals[m.key]" :key="it.id" class="entry"
+                 :class="['st-' + (it.kind === 'product' ? 'product' : it.state), { fact: allEaten(it), dragging: dragId === it.id, auto: it.origin === 'auto', pinned: it.pinned }]"
                  draggable="true" @dragstart="dragId = it.id; $event.dataTransfer.effectAllowed = 'move'" @dragend="dragId = null; dropTarget = ''"
-                 @click="opened = it" title="Перетащите на другой день или приём пищи">
-              <span class="ico">{{ itemIcon(it) }}</span>
-              <div class="grow">
-                <div class="name">{{ it.name }}</div>
-                <div class="meta">
-                  <template v-if="portionOf(it, state.viewMemberId)">
-                    {{ grams(portionOf(it, state.viewMemberId).weight_g) }} · {{ fmt(portionOf(it, state.viewMemberId).calories) }} ккал<span v-if="portionOf(it, state.viewMemberId).is_eaten"> ✓</span>
-                  </template>
-                  <template v-else>без {{ me?.name || 'вас' }}</template>
-                  <span v-if="it.portions.length > 1"> · ещё {{ it.portions.length - (portionOf(it, state.viewMemberId) ? 1 : 0) }}</span>
+                 @click="opened = it" title="Открыть; перетащите на другой день или приём пищи">
+              <div class="entry-main">
+                <span class="ico">{{ itemIcon(it) }}</span>
+                <div class="grow">
+                  <div class="name">{{ it.name }}<span v-if="it.pinned" class="pin-mark" title="Закреплено">📌</span></div>
+                  <div class="meta">
+                    <template v-if="portionOf(it, state.viewMemberId)">
+                      {{ grams(portionOf(it, state.viewMemberId).weight_g) }} · {{ fmt(portionOf(it, state.viewMemberId).calories) }} ккал<span v-if="portionOf(it, state.viewMemberId).is_eaten"> ✓</span>
+                    </template>
+                    <template v-else>без {{ me?.name || 'вас' }}</template>
+                    <span v-if="it.portions.length > 1"> · ещё {{ it.portions.length - (portionOf(it, state.viewMemberId) ? 1 : 0) }}</span>
+                  </div>
+                  <div v-if="!allEaten(it) && itemBadge(it).cls === 'warn'" class="tiny warn-text">{{ itemBadge(it).text }}</div>
+                  <div v-if="it.origin === 'auto' && it.auto_reason" class="reason">{{ it.auto_reason }}</div>
                 </div>
-                <div v-if="!allEaten(it) && itemBadge(it).cls === 'warn'" class="tiny" style="color: var(--warn)">{{ itemBadge(it).text }}</div>
-                <div v-if="it.origin === 'auto' && it.auto_reason" class="tiny muted">✨ {{ it.auto_reason }}</div>
               </div>
-            </div>
+              <div v-if="it.origin === 'auto'" class="draft-actions" @click.stop>
+                <button class="da" @click="accept(it)" title="Принять — станет обычным блюдом" aria-label="Принять">✓</button>
+                <button class="da" :class="{ on: it.pinned }" @click="pin(it)" :title="it.pinned ? 'Открепить' : 'Закрепить: новый подбор не заменит'" :aria-label="it.pinned ? 'Открепить' : 'Закрепить'">📌</button>
+                <button class="da" v-if="canSwap(it)" @click="other(it)" title="Другой вариант" aria-label="Другой вариант">🔄</button>
+                <button class="da" @click="drop(it)" title="Убрать из плана" aria-label="Убрать">✕</button>
+              </div>
+            </article>
           </div>
-        </div>
+        </section>
       </div>
 
       <AddItemModal v-if="adding" :date="adding.date" :meal="adding.meal" :days="days" @close="adding = null" @saved="adding = null; onChanged()" />

@@ -12,6 +12,8 @@ from app.schemas.household import (
     JoinRequest,
     MemberCreate,
     MemberUpdate,
+    PlannerSettingsOut,
+    PlannerSettingsUpdate,
     TargetsCalcIn,
     TargetsCalcOut,
 )
@@ -30,6 +32,17 @@ async def get_household(me: CurrentMemberDep, service: HouseholdServiceDep):
 async def update_household(payload: HouseholdUpdate, me: CurrentMemberDep, service: HouseholdServiceDep):
     """Название семьи, допуск кастрюли и упаковок (%)."""
     return await service.update(me, payload)
+
+
+@router.get("/planner", response_model=PlannerSettingsOut)
+async def get_planner(me: CurrentMemberDep, service: HouseholdServiceDep):
+    """Настройки автоплана: какие приёмы заполнять, дни без готовки и для «эдакого»."""
+    return await service.planner(me)
+
+
+@router.patch("/planner", response_model=PlannerSettingsOut)
+async def update_planner(payload: PlannerSettingsUpdate, me: CurrentMemberDep, service: HouseholdServiceDep):
+    return await service.update_planner(me, payload)
 
 
 @router.post("/members", response_model=HouseholdResponse, status_code=201)

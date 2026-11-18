@@ -313,29 +313,102 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .target-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 @media (max-width: 560px) { .target-grid { grid-template-columns: 1fr 1fr; } }
 
-/* ---------- Planner ---------- */
-.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+/* ---------- Planner ----------
+   «Карандаш и чернила»: предложения автоплана — набросок графитом (пунктир, штриховка, курсив причины),
+   принятое — чернилами: сплошная карточка, слева полоса по состоянию блюда. */
+:root {
+  --graphite: #6f747c;
+  --graphite-soft: rgba(111, 116, 124, .07);
+  --st-cook: #c98a2b;      /* надо приготовить */
+  --st-fridge: var(--accent);
+  --st-product: var(--info);
+}
+:root[data-theme="dark"] { --graphite: #a2a8b0; --graphite-soft: rgba(162, 168, 176, .08); --st-cook: #e0a84a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --graphite: #a2a8b0; --graphite-soft: rgba(162, 168, 176, .08); --st-cook: #e0a84a; }
+}
+.week-range { min-width: 150px; text-align: center; }
+.week-stats { margin-bottom: 12px; gap: 16px; }
+.shop-link { background: var(--accent); color: #fff; border-color: var(--accent); }
+.suggest-btn { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 600; }
+.suggest-btn:hover:not(:disabled) { background: var(--text); filter: brightness(1.25); }
+
+.draft-bar {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px;
+  border: 1px dashed var(--graphite); border-radius: var(--radius); background: var(--graphite-soft);
+}
+.draft-swatch {
+  width: 28px; height: 28px; flex: none; border-radius: 7px; border: 1.5px dashed var(--graphite);
+  background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--graphite-soft) 4px 5px), var(--surface);
+}
+
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; align-items: start; }
 @media (max-width: 1280px) { .week { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 980px) { .week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .week { grid-template-columns: 1fr; } }
 .day { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; min-width: 0; }
 .day.today { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.day-head { padding: 10px 12px 8px; border-bottom: 1px solid var(--border); cursor: pointer; }
-.day-head:hover { background: var(--surface-2); border-radius: var(--radius) var(--radius) 0 0; }
-.day-title { font-weight: 650; }
-.meal { padding: 8px 10px 6px; border-bottom: 1px dashed var(--border); }
-.meal:last-child { border-bottom: none; }
-.meal-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
-.entry { display: flex; gap: 6px; align-items: flex-start; padding: 5px 6px; margin: 3px -4px 0; border-radius: 8px; cursor: pointer; }
-.entry:hover { background: var(--surface-2); }
-/* предложено автопланом — черновик: пунктирная рамка, пока не поправили вручную */
-.entry.auto { outline: 1px dashed var(--accent); outline-offset: -1px; }
-.entry .ico { width: 18px; flex: none; text-align: center; font-size: 13px; padding-top: 1px; }
-.entry .name { font-size: 14px; line-height: 1.3; word-break: break-word; }
-.entry.fact .name { color: var(--muted); }
-.entry .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.day.past { opacity: .82; }
+.day-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 4px 12px; }
+.day-date { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; min-width: 0; flex: 1; border-radius: 8px; }
+.day-date:hover .day-num { color: var(--accent); }
+.day-num { font-size: 30px; line-height: 1; font-weight: 300; letter-spacing: -.03em; }
+.day.today .day-num { color: var(--accent); font-weight: 500; }
+.day-word { display: flex; flex-direction: column; line-height: 1.15; font-size: 13px; }
+.day-word b { font-weight: 650; }
+.day-word span { color: var(--muted); font-size: 12px; }
+.day-kcal { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.day-kcal small { font-weight: 400; color: var(--muted); font-size: 11px; }
+.day-suggest { border: 1px dashed var(--graphite); background: transparent; padding: 3px 6px; border-radius: 8px; font-size: 13px; }
+.day-suggest:hover:not(:disabled) { background: var(--graphite-soft); }
+.day-meter { padding: 4px 12px 8px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.meal { padding: 6px 8px 8px; }
+.meal + .meal { border-top: 1px solid var(--surface-2); }
+.meal.empty { padding-bottom: 4px; }
+.meal-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); font-weight: 600; padding: 0 2px; }
 .meal.drop-on { background: var(--accent-soft); border-radius: 8px; }
+
+.entry {
+  position: relative; margin-top: 4px; padding: 6px 8px 6px 10px; border-radius: 8px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid transparent;
+}
+/* чернила: полоса слева — состояние блюда */
+.entry::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: var(--border); }
+.entry.st-to_cook::before { background: var(--st-cook); }
+.entry.st-in_fridge::before { background: var(--st-fridge); }
+.entry.st-product::before { background: var(--st-product); }
+.entry:hover { border-color: var(--border); }
+.entry-main { display: flex; gap: 6px; align-items: flex-start; }
+.entry .ico { width: 16px; flex: none; text-align: center; font-size: 12px; padding-top: 2px; color: var(--muted); }
+.entry .name { font-size: 14px; line-height: 1.3; word-break: break-word; }
+.entry .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.entry.fact { background: transparent; }
+.entry.fact .name { color: var(--muted); }
 .entry.dragging { opacity: .4; }
+.warn-text { color: var(--warn); }
+.pin-mark { font-size: 11px; margin-left: 4px; }
+
+/* карандаш: черновик автоплана */
+.entry.auto {
+  background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--graphite-soft) 6px 7px), var(--surface);
+  border: 1px dashed var(--graphite);
+}
+.entry.auto::before { opacity: .45; }
+.entry.auto .name { color: var(--graphite); }
+.entry.auto.pinned { border-style: solid; }
+.entry .reason { font-size: 12px; font-style: italic; color: var(--graphite); line-height: 1.3; margin-top: 1px; }
+.draft-actions { display: flex; gap: 2px; margin: 5px -2px -2px 20px; }
+.draft-actions .da {
+  border: none; background: transparent; padding: 3px 7px; font-size: 13px; line-height: 1; border-radius: 6px; color: var(--graphite);
+}
+.draft-actions .da:hover { background: var(--surface-2); color: var(--text); }
+.draft-actions .da.on { background: var(--surface-2); }
+@media (hover: hover) and (min-width: 601px) {
+  /* на компьютере действия черновика — при наведении/фокусе, чтобы неделя не пестрила */
+  .entry.auto .draft-actions { opacity: 0; transition: opacity .12s; }
+  .entry.auto:hover .draft-actions, .entry.auto:focus-within .draft-actions { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .entry.auto .draft-actions { transition: none; } }
 .add-btn { font-size: 18px; line-height: 1; padding: 0 6px; color: var(--muted); border: none; background: none; }
 .add-btn:hover { color: var(--accent); background: none !important; }
 
@@ -363,3 +436,7 @@ table.tbl { width: 100%; border-collapse: collapse; }
 
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .login-card { width: 100%; max-width: 380px; }
+
+/* Переключатели-«фишки» (настройки планировщика) */
+button.chip { border-radius: 99px; }
+button.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }

@@ -1,13 +1,19 @@
 """Автоплан (docs/AUTOPLAN.md): предложения плана поверх обычной модели.
 
-Этап 1 — типичные порции (3.5) и заполнение пустых ячеек тем, что уже приготовлено:
-остатки в холодильнике (пока свежие) и заготовки из морозилки, которым скоро истекает срок.
-Ручной план не трогаем: заполняются только ПУСТЫЕ ячейки (день + приём пищи), предложенное
-помечается origin=auto с причиной; ручная правка делает его обычным (PlanService._touch).
+Шаги генерации (4.1): 1) остатки в холодильнике (пока свежие) и заготовки из морозилки — те, которым
+скоро истекает срок, и любые в дни «без готовки»; 2) регулярные готовые продукты — этап 3;
+3) готовки: в каждую пустую ячейку — лучший по оценке (4.2) рецепт в ротации, его закладка закрывает
+тот же приём следующих дней в пределах keeps_days и выхода; 4) оценки пересчитываются после каждого
+выбора; 5) порции — типичные (3.5).
+
+Ручной план не трогаем: заполняются только ПУСТЫЕ ячейки, предложенное — origin=auto с причиной;
+повторная генерация заменяет только auto без 📌, без кастрюли и без съеденного. Ручная правка
+делает блюдо обычным (PlanService._touch).
 """
 from __future__ import annotations
 
 
+import calendar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
@@ -20,10 +26,14 @@ from app.models.plan import MealItem, MealPortion
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
 from app.repositories.plan import PlanRepository, fits
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
+from app.models.recipe import Recipe
+from app.repositories.household import HouseholdRepository
+from app.repositories.stock import StockRepository
+from app.services.household import planner_out
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
-from app.schemas.plan import AutofillPortion, AutofillSuggestion, TypicalPortion
+from app.schemas.plan import AutofillOut, AutofillPortion, AutofillSuggestion, TypicalPortion
 
 ZERO = Decimal("0")
 HISTORY_DAYS = 90
@@ -33,6 +43,18 @@ DEFAULT_KCAL = Decimal("2000")
 # Заготовку из морозилки предлагаем сама, если ей осталось не больше стольких дней
 FREEZER_SOON_DAYS = 14
 MIN_PORTION, MAX_PORTION = Decimal("10"), Decimal("2000")
+
+# Оценка блюда (4.2): веса составляющих
+W_REST = 1.0      # давно не готовили (насыщение к 14 дням)
+W_EXPIRY = 0.8    # доля состава из запасов, которым срок ≤ 3 дней
+W_SHARE = 0.4     # доля товаров, общих с уже выбранными на период
+W_COST = 0.5      # дороже средней порции — минус, если бюджет месяца тратится быстрее срока
+W_KBJU = 0.3      # закрывает белок по целям едоков
+W_SPECIAL = 0.5   # «эдакое» в отмеченный для него день
+REPEAT_PENALTY = 1.0   # то же блюдо в последние 2 дня
+REST_DAYS = 14
+EXPIRY_DAYS = 3
+CONTINUE_PREFIX = "та же закладка"
 
 
 def _round5(x: Decimal) -> Decimal:
@@ -81,25 +103,141 @@ def standard_portion(recipe) -> Decimal | None:
     return Decimal(str(recipe.estimated_cooked_weight)) / recipe.default_servings
 
 
+
+def _monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _keys(recipe: Recipe) -> dict[str, str]:
+    """Товары состава рецепта: item_key → название (для причины)."""
+    out: dict[str, str] = {}
+    for ing in recipe.template_ingredients:
+        product = ing.variant.manufacturer.product if ing.variant and ing.variant.manufacturer else None
+        if product is not None and product.item_key:
+            out.setdefault(product.item_key, product.name)
+    return out
+
+
+def allowed_meals(recipe: Recipe) -> list[str]:
+    """Уместные приёмы пищи; NULL — любой (решение 19.11)."""
+    return list(recipe.meal_types or MEAL_ORDER)
+
+
 @dataclass
 class _Board:
-    """Занятость периода: ячейки (день, приём) и рецепты по дням."""
+    """Занятость периода: ячейки (день, приём), рецепты по дням и «эдакое» по неделям."""
 
     cells: set[tuple[date, str]] = field(default_factory=set)
     recipes: set[tuple[date, int]] = field(default_factory=set)
+    recipe_days: dict[int, set[date]] = field(default_factory=dict)
+    special_weeks: dict[date, int] = field(default_factory=dict)
+    chosen_keys: dict[str, dict[int, str]] = field(default_factory=dict)   # товар → {рецепт: название}
+
+    def put(self, day: date, meal: str, recipe: Recipe | None, keys: dict[str, str] | None = None,
+            count_special: bool = True) -> None:
+        self.cells.add((day, meal))
+        if recipe is None:
+            return
+        self.recipes.add((day, recipe.id))
+        self.recipe_days.setdefault(recipe.id, set()).add(day)
+        if count_special and recipe.effort == "special":
+            w = _monday(day)
+            self.special_weeks[w] = self.special_weeks.get(w, 0) + 1
+        for k in (keys or {}):
+            self.chosen_keys.setdefault(k, {})[recipe.id] = recipe.name
+
+
+@dataclass
+class Scoring:
+    """Данные для оценки блюда (4.2): не зависят от БД — тестируются отдельно."""
+
+    keys: dict[int, dict[str, str]]                 # рецепт → товары состава
+    last_cooked: dict[int, date]                    # рецепт → последняя готовка/план до периода
+    expiring: dict[str, tuple[date, str]]           # товар → (срок, название) запасов
+    cost: dict[int, Decimal] = field(default_factory=dict)   # рецепт → цена порции
+    budget_tight: bool = False
+    protein_target: float = 0.15                    # доля ккал из белка в целях едоков
+    special_days: set[int] = field(default_factory=set)
+
+    def score(self, recipe: Recipe, day: date, board: _Board) -> tuple[float, str]:
+        """Оценка и причина выбора: истекающий срок продукта, если он есть, иначе самая весомая
+        положительная составляющая."""
+        parts: list[tuple[float, str]] = []   # (вклад, причина); причина "" — не объясняет выбор
+        urgent = ""
+        # давно не готовили: последняя готовка до периода или блюдо раньше в этом плане
+        before = [d for d in board.recipe_days.get(recipe.id, ()) if d < day]
+        last = max(before + ([self.last_cooked[recipe.id]] if recipe.id in self.last_cooked else []), default=None)
+        if last is None:
+            parts.append((W_REST, "давно не было в плане"))
+        else:
+            gap = (day - last).days
+            parts.append((W_REST * min(gap / REST_DAYS, 1.0), f"не готовили {gap} дн"))
+        keys = self.keys.get(recipe.id, {})
+        if keys:
+            exp = [self.expiring[k] for k in keys
+                   if k in self.expiring and day <= self.expiring[k][0] <= day + timedelta(days=EXPIRY_DAYS)]
+            if exp:
+                until, name = min(exp)
+                urgent = f"{name.lower()} до {until:%d.%m}"
+                parts.append((W_EXPIRY * len(exp) / len(keys), urgent))
+            # общие товары — только с ДРУГИМИ блюдами периода
+            others = {k: [n for rid, n in board.chosen_keys.get(k, {}).items() if rid != recipe.id] for k in keys}
+            shared = [k for k, names in others.items() if names]
+            if shared:
+                parts.append((W_SHARE * len(shared) / len(keys), f"общий товар с «{others[shared[0]][0]}»"))
+        if self.budget_tight and recipe.id in self.cost:
+            avg = sum(self.cost.values(), ZERO) / len(self.cost)
+            if avg > 0 and self.cost[recipe.id] > avg:
+                parts.append((-W_COST * float((self.cost[recipe.id] - avg) / avg), ""))
+        kcal = float(recipe.calories_per_100g or 0)
+        if kcal > 0 and self.protein_target > 0:
+            share = float(recipe.proteins_per_100g or 0) * 4 / kcal
+            parts.append((W_KBJU * min(share / self.protein_target, 1.0), "белок по целям"))
+        if recipe.effort == "special" and day.weekday() in self.special_days:
+            parts.append((W_SPECIAL, "день для особого блюда"))
+        if any(day - timedelta(days=k) in board.recipe_days.get(recipe.id, ()) for k in (1, 2)):
+            parts.append((-REPEAT_PENALTY, ""))
+        total = sum(p for p, _ in parts)
+        reasons = [(p, r) for p, r in parts if r and p > 0]
+        reason = urgent or (max(reasons, key=lambda x: x[0])[1] if reasons else "в ротации")
+        return total, reason
+
+
+@dataclass
+class _Ctx:
+    """Всё для генерации на период: настройки, рецепты, доска, оценка."""
+
+    household_id: int
+    user_id: int
+    first: date
+    end: date
+    wanted: list[str]
+    no_cook: set[int]
+    special_days: set[int]
+    max_special: int
+    tolerance: Decimal
+    rotation: list[Recipe]
+    scoring: Scoring
+    board: _Board
+    dry_run: bool
+    typical: dict[tuple[int, str], dict[int, tuple[Decimal, str]]] = field(default_factory=dict)
 
 
 class AutoplanService:
     def __init__(
         self, plan: PlanRepository, cooking_logs: CookingLogRepository, members: MemberRepository,
         recipes: RecipeRepository, variants: VariantRepository,
+        households: HouseholdRepository | None = None, stock: StockRepository | None = None,
+        finance=None,
     ) -> None:
         self._plan = plan
         self._pots = cooking_logs
         self._members = members
         self._recipes = recipes
         self._variants = variants
-
+        self._households = households
+        self._stock = stock
+        self._finance = finance
     async def typical_for(
         self, household_id: int, meal_type: str, recipe_id: int | None, variant_id: int | None
     ) -> list[TypicalPortion]:
@@ -135,89 +273,279 @@ class AutoplanService:
             history.setdefault(member_id, []).append(w)
         return typical_from(members, history, meal_type, kcal_per_100g, standard)
 
-    # ------------------------------------------------- заполнение из холодильника
+    # ------------------------------------------------------------- генерация
+    async def _context(
+        self, household_id: int, user_id: int, first: date, end: date,
+        meal_types: list[str] | None, dry_run: bool, today: date,
+    ) -> _Ctx:
+        settings = planner_out(await self._households.planner(household_id)) if self._households else None
+        wanted_set = set(meal_types or MEAL_ORDER)
+        if settings and settings.meal_types and meal_types is None:
+            wanted_set &= set(settings.meal_types)
+        recipes = await self._recipes.list_full(household_id=household_id, limit=2000)
+        keys = {r.id: _keys(r) for r in recipes}
+        last = await self._plan.last_recipe_dates(household_id, first)
+        for rid, d in (await self._pots.last_cooked(household_id)).items():
+            if d < first:
+                last[rid] = max(d, last.get(rid, d))
+        expiring: dict[str, tuple[date, str]] = {}
+        if self._stock is not None:
+            horizon = end + timedelta(days=EXPIRY_DAYS)
+            for lot in await self._stock.open_lots(household_id):
+                if lot.expires_on is None or not (today <= lot.expires_on <= horizon):
+                    continue
+                k = lot.product.item_key
+                if k not in expiring or lot.expires_on < expiring[k][0]:
+                    expiring[k] = (lot.expires_on, lot.product.name)
+        cost: dict[int, Decimal] = {}
+        tight = False
+        if self._finance is not None:
+            cost = {c.recipe_id: c.per_portion for c in await self._finance.recipe_costs(household_id)
+                    if c.per_portion is not None}
+            tight = await self._budget_tight(household_id, today)
+        members = await self._members.active_in(household_id)
+        shares = [float(m.target_proteins) * 4 / float(m.target_calories)
+                  for m in members if m.target_proteins and m.target_calories]
+        scoring = Scoring(
+            keys=keys, last_cooked=last, expiring=expiring, cost=cost, budget_tight=tight,
+            protein_target=sum(shares) / len(shares) if shares else 0.15,
+            special_days=set(settings.special_days) if settings else set(),
+        )
+        return _Ctx(
+            household_id=household_id, user_id=user_id, first=first, end=end,
+            wanted=[m for m in MEAL_ORDER if m in wanted_set],
+            no_cook=set(settings.no_cook_days) if settings else set(),
+            special_days=scoring.special_days,
+            max_special=settings.max_special_per_week if settings else 1,
+            tolerance=await self._plan.tolerance(household_id),
+            rotation=[r for r in recipes if r.in_rotation],
+            scoring=scoring, board=_Board(), dry_run=dry_run,
+        )
+
+    async def _budget_tight(self, household_id: int, today: date) -> bool:
+        """Бюджет месяца тратится быстрее, чем идёт месяц (траты / бюджет > прошедшая доля месяца)."""
+        household = await self._households.get(household_id) if self._households else None
+        if household is None or not household.monthly_budget or self._stock is None:
+            return False
+        month_start = today.replace(day=1)
+        spent = await self._stock.spent_between(household_id, month_start, today)
+        days = calendar.monthrange(today.year, today.month)[1]
+        return spent / Decimal(str(household.monthly_budget)) > Decimal(today.day) / days
+
+    @staticmethod
+    def _replaceable(item: MealItem) -> bool:
+        """Прежнее предложение, которое перегенерация может заменить."""
+        return (
+            item.origin == "auto" and not item.pinned and item.cooking_log_id is None
+            and not any(p.is_eaten for p in item.portions)
+        )
+
     async def autofill(
         self, household_id: int, user_id: int, start: date, end: date,
-        meal_types: list[str] | None, dry_run: bool, today: date,
-    ) -> list[AutofillSuggestion]:
+        meal_types: list[str] | None, dry_run: bool, today: date, cook: bool = True,
+    ) -> AutofillOut:
         first = max(start, today)
         if first > end:
-            return []
-        wanted = [m for m in MEAL_ORDER if meal_types is None or m in meal_types]
-        board = _Board()
-        for item in await self._plan.list_in_range(household_id, first, end):
-            board.cells.add((item.date_day, item.meal_type))
-            if item.recipe_id is not None:
-                board.recipes.add((item.date_day, item.recipe_id))
+            return AutofillOut(items=[], dry_run=dry_run)
+        ctx = await self._context(household_id, user_id, first, end, meal_types, dry_run, today)
+        # соседние дни (до периода и внутри) — для повторов, «эдакого» за неделю и общих товаров
+        replaced = 0
+        for item in await self._plan.list_in_range(household_id, _monday(first) - timedelta(days=2), end):
+            if (first <= item.date_day and item.meal_type in ctx.wanted and cook
+                    and self._replaceable(item)):
+                replaced += 1
+                if not dry_run:
+                    await self._plan.delete(item)
+                continue
+            if item.date_day >= first:
+                ctx.board.cells.add((item.date_day, item.meal_type))
+            if item.recipe is not None:
+                ctx.board.put(item.date_day, item.meal_type, item.recipe, ctx.scoring.keys.get(item.recipe_id))
+        if not dry_run and replaced:
+            await self._plan.flush()
+        # put() добавил и ячейки до периода — они не мешают: генерация идёт с first
 
-        tolerance = await self._plan.tolerance(household_id)
-        reserved = await self._plan.reserved_by_pot(household_id)
-        pots = await self._pots.active_with_recipe(household_id)
+        out = await self._fill_from_pots(ctx, today)
+        if cook:
+            out += await self._fill_cooking(ctx)
+        if not dry_run:
+            await self._plan.flush()
+        out.sort(key=lambda s: (s.date_day, MEAL_ORDER.index(s.meal_type)))
+        return AutofillOut(items=out, replaced=replaced, dry_run=dry_run)
+
+    async def _fill_from_pots(self, ctx: _Ctx, today: date) -> list[AutofillSuggestion]:
+        reserved = await self._plan.reserved_by_pot(ctx.household_id)
+        pots = await self._pots.active_with_recipe(ctx.household_id)
         fridge = sorted((p for p in pots if not p.is_frozen), key=lambda p: (p.good_until, p.id))
-        freezer = sorted(
-            (p for p in pots if p.is_frozen and p.good_until <= today + timedelta(days=FREEZER_SOON_DAYS)),
-            key=lambda p: (p.good_until, p.id),
-        )
+        soon = today + timedelta(days=FREEZER_SOON_DAYS)
+        freezer = sorted((p for p in pots if p.is_frozen), key=lambda p: (p.good_until, p.id))
         out: list[AutofillSuggestion] = []
         for pot in fridge + freezer:
             free = Decimal(str(pot.current_remaining_weight)) - reserved.get(pot.id, ZERO)
-            out += await self._place_pot(household_id, user_id, pot, free, first, end, wanted, board, tolerance, dry_run)
-        if not dry_run:
-            await self._plan.flush()
+            # заготовка: скоро истекает — в любой день, иначе только в дни «без готовки»
+            only = None if (not pot.is_frozen or pot.good_until <= soon) else ctx.no_cook
+            if only is not None and not only:
+                continue
+            out += await self._place_pot(ctx, pot, free, only)
         return out
 
+    async def _typical(self, ctx: _Ctx, recipe: Recipe, meal: str, per100: Decimal) -> dict[int, Decimal]:
+        key = (recipe.id, meal)
+        if key not in ctx.typical:
+            ctx.typical[key] = await self.typical_portions(
+                ctx.household_id, meal, per100, recipe_id=recipe.id, standard=standard_portion(recipe)
+            )
+        return {mid: w for mid, (w, _) in ctx.typical[key].items()}
+
+    async def _add_item(
+        self, ctx: _Ctx, day: date, meal: str, recipe: Recipe, weights: dict[int, Decimal],
+        reason: str, source: str, pot_id: int | None = None,
+    ) -> AutofillSuggestion:
+        item_id = None
+        if not ctx.dry_run:
+            item = MealItem(
+                household_id=ctx.household_id, date_day=day, meal_type=meal, recipe_id=recipe.id,
+                cooking_log_id=pot_id, origin="auto", auto_reason=reason[:200], created_by_user_id=ctx.user_id,
+                portions=[MealPortion(member_id=mid, weight_g=w) for mid, w in weights.items()],
+            )
+            self._plan.add(item)
+            await self._plan.flush()
+            item_id = item.id
+        return AutofillSuggestion(
+            date_day=day, meal_type=meal, recipe_id=recipe.id, name=recipe.name, cooking_log_id=pot_id,
+            portions=[AutofillPortion(member_id=mid, weight_g=w) for mid, w in weights.items()],
+            auto_reason=reason, source=source, item_id=item_id,
+        )
+
     async def _place_pot(
-        self, household_id: int, user_id: int, pot: RecipeCookingLog, free: Decimal,
-        first: date, end: date, wanted: list[str], board: _Board, tolerance: Decimal, dry_run: bool,
+        self, ctx: _Ctx, pot: RecipeCookingLog, free: Decimal, only_weekdays: set[int] | None,
     ) -> list[AutofillSuggestion]:
         recipe = pot.recipe
-        meals = [m for m in (recipe.meal_types or MEAL_ORDER) if m in wanted]   # NULL — любой приём
-        last = min(end, pot.good_until)
+        meals = [m for m in allowed_meals(recipe) if m in ctx.wanted]
+        last = min(ctx.end, pot.good_until)
         reason = (
             f"заготовка в морозилке, годна до {pot.good_until:%d.%m}" if pot.is_frozen
             else f"остаток в холодильнике, съесть до {pot.good_until:%d.%m}"
         )
         per100 = Decimal(str(pot.calories_per_100g))
-        typical: dict[str, dict[int, tuple[Decimal, str]]] = {}
         out: list[AutofillSuggestion] = []
-        day = first
+        day = ctx.first
         while day <= last and free > 0:
-            if (day, recipe.id) in board.recipes:   # одно блюдо — не дважды за день
+            if (day, recipe.id) in ctx.board.recipes or (
+                only_weekdays is not None and day.weekday() not in only_weekdays
+            ):
                 day += timedelta(days=1)
                 continue
             for meal in meals:
-                if (day, meal) in board.cells:
+                if (day, meal) in ctx.board.cells:
                     continue
-                if meal not in typical:
-                    typical[meal] = await self.typical_portions(
-                        household_id, meal, per100, recipe_id=recipe.id, standard=standard_portion(recipe)
-                    )
-                weights = {mid: w for mid, (w, _) in typical[meal].items()}
+                weights = await self._typical(ctx, recipe, meal, per100)
                 need = sum(weights.values(), ZERO)
-                if not weights or not fits(need, free, tolerance):
+                if not weights or not fits(need, free, ctx.tolerance):
                     return out          # дальше в этой кастрюле не хватит
                 if need > free:          # чуть меньше нужного — порции пропорционально (допуск)
                     k = free / need
                     weights = {mid: (w * k).to_integral_value(rounding=ROUND_FLOOR) for mid, w in weights.items()}
                     need = sum(weights.values(), ZERO)
                 free -= need
-                board.cells.add((day, meal))
-                board.recipes.add((day, recipe.id))
-                item_id = None
-                if not dry_run:
-                    item = MealItem(
-                        household_id=household_id, date_day=day, meal_type=meal, recipe_id=recipe.id,
-                        cooking_log_id=pot.id, origin="auto", auto_reason=reason, created_by_user_id=user_id,
-                        portions=[MealPortion(member_id=mid, weight_g=w) for mid, w in weights.items()],
-                    )
-                    self._plan.add(item)
-                    await self._plan.flush()
-                    item_id = item.id
-                out.append(AutofillSuggestion(
-                    date_day=day, meal_type=meal, recipe_id=recipe.id, name=recipe.name, cooking_log_id=pot.id,
-                    portions=[AutofillPortion(member_id=mid, weight_g=w) for mid, w in weights.items()],
-                    auto_reason=reason, item_id=item_id,
-                ))
+                ctx.board.put(day, meal, recipe, count_special=False)
+                out.append(await self._add_item(
+                    ctx, day, meal, recipe, weights, reason, "freezer" if pot.is_frozen else "fridge", pot.id))
                 break   # следующий день
             day += timedelta(days=1)
         return out
+
+    def _candidates(self, ctx: _Ctx, day: date, meal: str) -> list[tuple[float, Recipe, str]]:
+        """Рецепты, уместные в ячейке, по убыванию оценки (при равенстве — по id)."""
+        out = []
+        week = _monday(day)
+        for r in ctx.rotation:
+            if meal not in allowed_meals(r) or (day, r.id) in ctx.board.recipes:
+                continue
+            if r.effort == "special":
+                if ctx.board.special_weeks.get(week, 0) >= ctx.max_special:
+                    continue
+                if ctx.special_days and day.weekday() not in ctx.special_days:
+                    continue
+            score, reason = ctx.scoring.score(r, day, ctx.board)
+            out.append((score, r, reason))
+        out.sort(key=lambda x: (-x[0], x[1].id))
+        return out
+
+    async def _cook_at(
+        self, ctx: _Ctx, day: date, meal: str, recipe: Recipe, reason: str,
+    ) -> list[AutofillSuggestion]:
+        """Готовка в ячейке + та же закладка в тот же приём следующих дней (keeps_days, выход)."""
+        per100 = Decimal(str(recipe.calories_per_100g))
+        weights = await self._typical(ctx, recipe, meal, per100)
+        if not weights:
+            return []
+        ctx.board.put(day, meal, recipe, ctx.scoring.keys.get(recipe.id))
+        out = [await self._add_item(ctx, day, meal, recipe, weights, reason, "cook")]
+        batch = Decimal(str(recipe.estimated_cooked_weight or 0))
+        used = sum(weights.values(), ZERO)
+        for k in range(1, max(1, recipe.keeps_days or 2)):
+            d = day + timedelta(days=k)
+            if d > ctx.end or (d, meal) in ctx.board.cells or (d, recipe.id) in ctx.board.recipes:
+                break
+            more = await self._typical(ctx, recipe, meal, per100)
+            need = sum(more.values(), ZERO)
+            if used + need > batch:      # закладки не хватит — дальше готовим заново
+                break
+            used += need
+            ctx.board.put(d, meal, recipe, count_special=False)
+            out.append(await self._add_item(
+                ctx, d, meal, recipe, more, f"{CONTINUE_PREFIX} от {day:%d.%m}", "continue"))
+        return out
+
+    async def _fill_cooking(self, ctx: _Ctx) -> list[AutofillSuggestion]:
+        out: list[AutofillSuggestion] = []
+        day = ctx.first
+        while day <= ctx.end:
+            if day.weekday() not in ctx.no_cook:
+                for meal in ctx.wanted:
+                    if (day, meal) in ctx.board.cells:
+                        continue
+                    cands = self._candidates(ctx, day, meal)
+                    if cands:
+                        _, recipe, reason = cands[0]
+                        out += await self._cook_at(ctx, day, meal, recipe, reason)
+            day += timedelta(days=1)
+        return out
+
+    # ------------------------------------------------------- другой вариант
+    async def alternative(self, item: MealItem, user_id: int, today: date) -> int | None:
+        """🔄 Следующий по оценке рецепт на ту же ячейку (по кругу, без повторов подряд).
+        Та же закладка на следующие дни заменяется вместе с ним."""
+        if item.recipe_id is None:
+            raise ValidationError("Другой вариант — только для блюд по рецепту")
+        if item.cooking_log_id is not None or any(p.is_eaten for p in item.portions):
+            raise ValidationError("Блюдо уже приготовлено или съедено — замените его вручную")
+        day, meal, current = item.date_day, item.meal_type, item.recipe_id
+        ctx = await self._context(item.household_id, user_id, day, day + timedelta(days=14), [meal], False, today)
+        keeps = item.recipe.keeps_days if item.recipe is not None else 2
+        drop: list[MealItem] = []
+        for other in await self._plan.list_in_range(item.household_id, _monday(day) - timedelta(days=2), ctx.end):
+            if other.id == item.id:
+                continue
+            if (other.recipe_id == current and other.meal_type == meal and self._replaceable(other)
+                    and day < other.date_day < day + timedelta(days=keeps)
+                    and (other.auto_reason or "").startswith(CONTINUE_PREFIX)):
+                drop.append(other)
+                continue
+            ctx.board.cells.add((other.date_day, other.meal_type))
+            if other.recipe is not None:
+                ctx.board.put(other.date_day, other.meal_type, other.recipe, ctx.scoring.keys.get(other.recipe_id))
+        cands = self._candidates(ctx, day, meal)
+        ids = [r.id for _, r, _ in cands]
+        if not cands or ids == [current]:
+            raise ValidationError("Других подходящих рецептов в ротации нет")
+        idx = ids.index(current) if current in ids else -1
+        _, recipe, reason = next(c for c in cands[idx + 1:] + cands[:idx + 1] if c[1].id != current)
+        for other in drop:
+            await self._plan.delete(other)
+        await self._plan.delete(item)
+        await self._plan.flush()
+        ctx.end = day + timedelta(days=max(1, recipe.keeps_days or 2) - 1)
+        created = await self._cook_at(ctx, day, meal, recipe, reason)
+        return created[0].item_id if created else None

@@ -24,6 +24,8 @@ from app.schemas.household import (
     MemberCreate,
     MemberResponse,
     MemberUpdate,
+    PlannerSettingsOut,
+    PlannerSettingsUpdate,
     Targets,
     TargetsCalcIn,
     TargetsCalcOut,
@@ -68,6 +70,18 @@ def _apply_targets(member: HouseholdMember, t: Targets) -> None:
     member.target_proteins = t.proteins
     member.target_fats = t.fats
     member.target_carbs = t.carbs
+
+
+def planner_out(s) -> PlannerSettingsOut:
+    """Настройки автоплана; нет строки — значения по умолчанию."""
+    if s is None:
+        return PlannerSettingsOut()
+    return PlannerSettingsOut(
+        meal_types=s.meal_types or None,
+        no_cook_days=s.no_cook_days or [],
+        special_days=s.special_days or [],
+        max_special_per_week=s.max_special_per_week if s.max_special_per_week is not None else 1,
+    )
 
 
 class HouseholdService:
@@ -135,6 +149,23 @@ class HouseholdService:
             household.portion_tolerance = data.portion_tolerance
         await self._households.flush()
         return await self.get(me)
+
+    async def planner(self, me: HouseholdMember) -> PlannerSettingsOut:
+        return planner_out(await self._households.planner(me.household_id))
+
+    async def update_planner(self, me: HouseholdMember, data: PlannerSettingsUpdate) -> PlannerSettingsOut:
+        """Настройки автоплана; meal_types=null — все приёмы, пустые списки дней — не заданы."""
+        s = await self._households.planner_or_create(me.household_id)
+        fields = data.model_dump(exclude_unset=True)
+        if "meal_types" in fields:
+            s.meal_types = data.meal_types
+        for key in ("no_cook_days", "special_days"):
+            if key in fields:
+                setattr(s, key, fields[key] or None)
+        if data.max_special_per_week is not None:
+            s.max_special_per_week = data.max_special_per_week
+        await self._households.flush()
+        return planner_out(s)
 
     async def regenerate_code(self, me: HouseholdMember) -> HouseholdResponse:
         household = await self._households.get(me.household_id)

@@ -128,6 +128,18 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
         )
         return list((await self._session.execute(stmt)).scalars().all())
 
+    async def last_cooked(self, household_id: int) -> dict:
+        """Последняя готовка каждого рецепта семьи — местный день."""
+        from sqlalchemy import func
+
+        from app.core import clock
+        stmt = (
+            select(RecipeCookingLog.recipe_id, func.max(RecipeCookingLog.cooked_at))
+            .where(RecipeCookingLog.household_id == household_id, RecipeCookingLog.recipe_id.isnot(None))
+            .group_by(RecipeCookingLog.recipe_id)
+        )
+        return {int(r): clock.local_date(t) for r, t in (await self._session.execute(stmt)).all() if t is not None}
+
     async def find_active_pot(self, household_id: int, recipe_id: int) -> RecipeCookingLog | None:
         """Самая свежая недоеденная кастрюля семьи по рецепту."""
         stmt = (

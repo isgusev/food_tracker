@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -66,3 +66,16 @@ class HouseholdMember(Base):
 
     household = relationship("Household", back_populates="members")
     user = relationship("User")
+
+
+class PlannerSettings(Base):
+    """Настройки автоплана семьи (docs/AUTOPLAN.md, 3.3). Нет строки — значения по умолчанию."""
+
+    __tablename__ = "planner_settings"
+
+    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), primary_key=True)
+    meal_types = Column(JSON, nullable=True)          # какие приёмы заполнять; NULL — все
+    no_cook_days = Column(JSON, nullable=True)        # дни недели без готовки (0 = пн)
+    special_days = Column(JSON, nullable=True)        # дни для «эдакого»; пусто — любой
+    max_special_per_week = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

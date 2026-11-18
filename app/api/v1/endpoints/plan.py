@@ -12,6 +12,8 @@ from app.core import clock
 from app.core.exceptions import ValidationError
 from app.domain import MEAL_TYPES
 from app.schemas.plan import (
+    AcceptIn,
+    AcceptOut,
     AutofillIn,
     AutofillOut,
     TypicalPortion,
@@ -59,13 +61,20 @@ async def typical_portions(
 
 @router.post("/autofill", response_model=AutofillOut)
 async def autofill(payload: AutofillIn, service: AutoplanServiceDep, me: CurrentMemberDep, user: CurrentUserDep):
-    """Заполнить ПУСТЫЕ ячейки периода тем, что уже приготовлено: остатки в холодильнике (пока свежие)
-    и заготовки из морозилки, которым скоро истекает срок. Ручной план не трогается;
-    предложенное — origin=auto с причиной. dry_run — только показать."""
-    items = await service.autofill(
-        me.household_id, user.id, payload.start, payload.end, payload.meal_types, payload.dry_run, clock.today()
+    """✨ Предложить: заполнить ПУСТЫЕ ячейки периода — остатки в холодильнике, заготовки из морозилки
+    (скоро истекает срок или день «без готовки»), затем готовки по оценке (docs/AUTOPLAN.md, 4.1–4.2).
+    Прежние предложения (auto без 📌, без кастрюли и съеденного) заменяются; ручной план не трогается.
+    cook=false — только приготовленное; dry_run — только показать."""
+    return await service.autofill(
+        me.household_id, user.id, payload.start, payload.end, payload.meal_types, payload.dry_run,
+        clock.today(), cook=payload.cook,
     )
-    return AutofillOut(items=items, dry_run=payload.dry_run)
+
+
+@router.post("/accept", response_model=AcceptOut)
+async def accept_range(payload: AcceptIn, service: PlanServiceDep, me: CurrentMemberDep):
+    """«Принять всё»: предложения автоплана за период становятся обычными блюдами."""
+    return AcceptOut(accepted=await service.accept_range(me.household_id, payload.start, payload.end))
 
 
 @router.post("", response_model=MealItemResponse, status_code=201)
@@ -114,9 +123,25 @@ async def pot_status(
 
 @router.patch("/{item_id}", response_model=MealItemResponse)
 async def move_item(item_id: int, payload: MealItemMove, service: PlanServiceDep, me: CurrentMemberDep):
-    """Перенести блюдо на другой день / приём пищи."""
+    """Перенести блюдо на другой день / приём пищи; pinned — «📌 закрепить» (перегенерация не тронет)."""
     item = await service.get_owned_item(item_id, me.household_id)
     return await service.move(item, payload)
+
+
+@router.post("/{item_id}/accept", response_model=MealItemResponse)
+async def accept_item(item_id: int, service: PlanServiceDep, me: CurrentMemberDep):
+    """«✓ Принять» предложение автоплана — блюдо становится обычным."""
+    return await service.accept(await service.get_owned_item(item_id, me.household_id))
+
+
+@router.post("/{item_id}/alternative", response_model=MealItemResponse)
+async def alternative(
+    item_id: int, service: PlanServiceDep, autoplan: AutoplanServiceDep, me: CurrentMemberDep, user: CurrentUserDep
+):
+    """🔄 Другой вариант: следующий по оценке рецепт на ту же ячейку (та же закладка — вместе с ним)."""
+    item = await service.get_owned_item(item_id, me.household_id)
+    new_id = await autoplan.alternative(item, user.id, clock.today())
+    return await service.response(new_id)
 
 
 @router.delete("/{item_id}", status_code=204)

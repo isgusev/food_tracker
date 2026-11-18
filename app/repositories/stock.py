@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -121,6 +121,15 @@ class StockRepository(BaseRepository[StockLot]):
         for pid, remaining in (await self._session.execute(stmt)).all():
             out[pid] = out.get(pid, Decimal("0")) + Decimal(str(remaining))
         return out
+
+    async def spent_between(self, household_id: int, start: date, end: date) -> Decimal:
+        """Сколько потрачено на покупки (партии с ценой) за дни start…end."""
+        stmt = select(func.sum(StockLot.price)).where(
+            StockLot.household_id == household_id, StockLot.price.isnot(None),
+            StockLot.purchased_on >= start, StockLot.purchased_on <= end,
+            StockLot.source.in_(("purchase", "manual")),
+        )
+        return Decimal(str((await self._session.execute(stmt)).scalar() or 0))
 
     async def usual_products(self, household_id: int, keys: set[str]) -> dict[str, int]:
         """«Обычно берёте»: товар → продукт из последней покупки семьи."""
