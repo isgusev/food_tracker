@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.core import clock
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain import (
+    dec,
     ITEM_IN_FRIDGE,
     ITEM_PRODUCT,
     ITEM_TO_COOK,
@@ -43,13 +44,13 @@ from app.schemas.plan import (
     PortionResponse,
     PotSourceStatus,
 )
+from app.services.naming import display_name  # noqa: F401 — показ названия продукта
 from app.services.stock import StockService
 
 ZERO = Decimal("0")
 
 
-def _d(value) -> Decimal:
-    return Decimal(str(value or 0))
+_d = dec
 
 
 def _per_100(source) -> Nutrients:
@@ -62,19 +63,6 @@ def _per_100(source) -> Nutrients:
             _d(source.carbs_per_100g),
         )
     return Nutrients(_d(source.calories), _d(source.proteins), _d(source.fats), _d(source.carbs))
-
-
-def display_name(variant, variant_id: int) -> str:
-    manufacturer = variant.manufacturer if variant is not None else None
-    product = manufacturer.product if manufacturer else None
-    if product is None:
-        return f"Продукт #{variant_id}"
-    brand_name = product.brand.name if product.brand else ""
-    m_name = manufacturer.name or ""
-    # производитель — только если отличается от бренда: «Творог (Простоквашино)»
-    parts = [brand_name] + ([m_name] if m_name and m_name.lower() != brand_name.lower() else [])
-    parts = [x for x in parts if x and x.lower() != "без бренда"]
-    return f"{product.name} ({' / '.join(parts)})" if parts else product.name
 
 
 class PlanService:
@@ -364,7 +352,7 @@ class PlanService:
                     f"требуется {quantize(need)} г"
                 )
             self._set_remaining(pot, remainder)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = clock.utc_now()
         for portion, weight in todo:
             portion.weight_g = weight
             portion.is_eaten = True

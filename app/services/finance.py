@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core import clock
-from app.domain import grams_to_base, quantize
+from app.domain import dec, grams_to_base, quantize
 from app.models.household import Household
 from app.models.plan import MealPortion
 from app.models.product import Product
@@ -43,8 +43,7 @@ ZERO = Decimal("0")
 MONEY = "0.01"
 
 
-def _d(v) -> Decimal:
-    return Decimal(str(v or 0))
+_d = dec
 
 
 def unit_price(lot: StockLot) -> Decimal | None:

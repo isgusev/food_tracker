@@ -6,11 +6,10 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_access_token
-from app.db.session import SessionDep, get_session
+from app.db.session import SessionDep
 from app.models.household import HouseholdMember
 from app.models.user import User
 from app.repositories.household import HouseholdRepository, MemberRepository
@@ -42,7 +41,6 @@ from app.services.product import ProductService
 from app.services.receipt import ReceiptService
 from app.services.recipe import RecipeService
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 # --- АУТЕНТИФИКАЦИЯ ---

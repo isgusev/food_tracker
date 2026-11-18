@@ -33,6 +33,17 @@ NUTRIENTS_TOLERANCE_REL = Decimal("0.15")
 ZERO = Decimal("0.0")
 
 
+def dec(value) -> Decimal:
+    """Число из базы/запроса (Decimal, float, int, строка, None) → Decimal; None — 0."""
+    return Decimal(str(value or 0))
+
+
+def monday(d):
+    """Понедельник недели, в которую входит дата d."""
+    from datetime import timedelta
+    return d - timedelta(days=d.weekday())
+
+
 @dataclass(frozen=True)
 class Nutrients:
     """КБЖУ на 100 г продукта/блюда."""

@@ -7,7 +7,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.common import ORMModel
+from app.schemas.common import ORMModel, meal_list
 
 
 class Targets(BaseModel):
@@ -149,12 +149,7 @@ class PlannerSettingsUpdate(BaseModel):
     @field_validator("meal_types")
     @classmethod
     def _meals(cls, v):
-        from app.domain import MEAL_ORDER
-        if v is None:
-            return v
-        if not v or any(m not in MEAL_ORDER for m in v):
-            raise ValueError(f"meal_types — непустой список из {list(MEAL_ORDER)}")
-        return [m for m in MEAL_ORDER if m in v]
+        return meal_list(v, empty_is_any=False)
 
     @field_validator("no_cook_days", "special_days")
     @classmethod

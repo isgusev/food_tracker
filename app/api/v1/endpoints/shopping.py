@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentMemberDep, CurrentUserDep, StockServiceDep
 from app.core import clock

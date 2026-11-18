@@ -15,7 +15,6 @@ from app.models.user import RegistrationInvite
 from app.repositories.household import HouseholdRepository, MemberRepository
 from app.repositories.user import InviteRepository
 from app.schemas.auth import InviteResponse
-from datetime import date
 
 from app.schemas.household import (
     BodyProfile,
@@ -214,8 +213,8 @@ class HouseholdService:
 
     # --- ПРИГЛАШЕНИЕ ---
     async def join(self, me: HouseholdMember, code: str) -> HouseholdResponse:
-        """Вступить в семью по коду. Всё, что было у вас (рецепты, холодильник,
-        план, члены семьи без аккаунта), переезжает в новую семью."""
+        """Вступить в семью по коду. Всё, что было у вас (рецепты, холодильник, запасы, план,
+        покупки, чеки, члены семьи без аккаунта), переезжает в новую семью."""
         target = await self._households.get_by_invite_code(code)
         if target is None:
             raise NotFoundError("Семья с таким кодом не найдена")
