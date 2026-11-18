@@ -44,6 +44,7 @@ from app.schemas.stock import LineCheck, LotAdd
 from app.services import receipt_client
 from app.services.barcode import _token_score, normalize_query
 from app.services.naming import brand_of
+from app.services.shopping import ShoppingService
 from app.services.stock import StockService
 
 ZERO = Decimal("0")
@@ -329,12 +330,14 @@ class ReceiptService:
         lists: ShoppingListRepository,
         stock_repo: StockRepository,
         stock: StockService,
+        shopping: ShoppingService,
     ) -> None:
         self._receipts = receipts
         self._aliases = aliases
         self._lists = lists
         self._stock_repo = stock_repo
         self._stock = stock
+        self._shopping = shopping
 
     # ------------------------------------------------------------ загрузка
     async def create(self, household_id: int, user_id: int | None, qr: str) -> ReceiptOut:
@@ -577,13 +580,13 @@ class ReceiptService:
     async def _apply_list(
         self, household_id: int, user_id: int | None, item: dict, ln: ApplyLine, price, purchased_on: date
     ) -> tuple[Product, Decimal | None]:
-        lst, line = await self._stock.get_owned_line(ln.shopping_line_id, household_id)
+        lst, line = await self._shopping.get_owned_line(ln.shopping_line_id, household_id)
         if line.is_checked:
             raise ValidationError(f"«{line.product.name}» уже отмечено в списке купленным")
         product = line.product
         qty = ln.quantity or item_quantity(item, product)
         # обычное «Куплено»: партия с ценой; дата покупки — дата чека
-        await self._stock.check(lst, line, LineCheck(quantity=qty, price=price), user_id, purchased_on)
+        await self._shopping.check(lst, line, LineCheck(quantity=qty, price=price), user_id, purchased_on)
         if qty is None and line.lot_id is not None:  # взяли количество по упаковкам строки
             lot = await self._stock_repo.get(line.lot_id)
             qty = Decimal(str(lot.quantity)) if lot is not None else None
@@ -607,12 +610,12 @@ class ReceiptService:
         lst = await self._lists.active(household_id)
         if lst is not None:
             # видно в списке как покупка «вне плана», дальше — обычное «Куплено»
-            await self._stock.add_extra(lst, product.id, qty, merge=False)
+            await self._shopping.add_extra(lst, product.id, qty, merge=False)
             line = max(
                 (x for x in lst.lines if x.is_extra and not x.is_checked and x.product_id == product.id),
                 key=lambda x: x.id,
             )
-            await self._stock.check(lst, line, LineCheck(quantity=qty, price=price), user_id, purchased_on)
+            await self._shopping.check(lst, line, LineCheck(quantity=qty, price=price), user_id, purchased_on)
         else:
             await self._stock.add_lot(
                 household_id, user_id,

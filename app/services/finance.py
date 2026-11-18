@@ -16,18 +16,12 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
-
 from app.core import clock
 from app.domain import dec, grams_to_base, quantize
-from app.models.household import Household
-from app.models.plan import MealPortion
-from app.models.product import Product
-from app.models.recipe import RecipeCookingLog
-from app.models.stock import StockLot, StockMovement
-from app.repositories.recipe import RecipeRepository
+from app.models.stock import StockLot
+from app.repositories.household import HouseholdRepository
+from app.repositories.plan import PlanRepository
+from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.repositories.stock import StockRepository
 from app.schemas.finance import (
     CategorySpend,
@@ -37,7 +31,8 @@ from app.schemas.finance import (
     RecipeCost,
     WasteItem,
 )
-from app.services.stock import StockService
+from app.services.regular import RegularService
+from app.services.shopping import ShoppingService
 
 ZERO = Decimal("0")
 MONEY = "0.01"
@@ -65,27 +60,27 @@ class _Cost:
 class FinanceService:
     def __init__(
         self,
-        session: AsyncSession,
         stock_repo: StockRepository,
+        cooking_logs: CookingLogRepository,
+        plan: PlanRepository,
+        households: HouseholdRepository,
         recipes: RecipeRepository,
-        stock: StockService,
+        shopping: ShoppingService,
+        regular: RegularService,
     ) -> None:
-        self._s = session
         self._stock_repo = stock_repo
+        self._pots = cooking_logs
+        self._plan = plan
+        self._households = households
         self._recipes = recipes
-        self._stock = stock
+        self._shopping = shopping
+        self._regular = regular
 
     # ----------------------------------------------------------------- цены
     async def prices(self, household_id: int) -> dict[str, ItemPrice]:
         """Последняя известная цена единицы каждого товара (своя семья)."""
-        stmt = (
-            select(StockLot)
-            .where(StockLot.household_id == household_id, StockLot.price.isnot(None))
-            .options(joinedload(StockLot.product))
-            .order_by(StockLot.purchased_on.desc(), StockLot.id.desc())
-        )
         out: dict[str, ItemPrice] = {}
-        for lot in (await self._s.execute(stmt)).unique().scalars():
+        for lot in await self._stock_repo.priced_lots(household_id):
             key = lot.product.item_key
             if key in out:
                 continue
@@ -98,14 +93,9 @@ class FinanceService:
     async def _pot_costs(self, pot_ids: list[int]) -> dict[int, _Cost]:
         if not pot_ids:
             return {}
-        stmt = (
-            select(StockMovement)
-            .where(StockMovement.pot_id.in_(pot_ids), StockMovement.reason == "cook")
-            .options(joinedload(StockMovement.lot))
-        )
         costs: dict[int, _Cost] = {pid: _Cost() for pid in pot_ids}
         seen: set[int] = set()
-        for m in (await self._s.execute(stmt)).unique().scalars():
+        for m in await self._stock_repo.cook_movements(pot_ids):
             seen.add(m.pot_id)
             c = costs[m.pot_id]
             up = unit_price(m.lot) if m.lot is not None else None
@@ -119,9 +109,7 @@ class FinanceService:
         return costs
 
     async def pot_costs(self, household_id: int) -> list[PotCost]:
-        pots = list((await self._s.execute(
-            select(RecipeCookingLog).where(RecipeCookingLog.household_id == household_id)
-        )).scalars())
+        pots = await self._pots.of_household(household_id)
         costs = await self._pot_costs([p.id for p in pots])
         out = []
         for p in pots:
@@ -173,12 +161,7 @@ class FinanceService:
         t0, t1 = clock.utc_bounds(start, end)   # метки времени в базе — UTC, дни — местные
 
         # Потрачено: партии, купленные в период
-        lots = list((await self._s.execute(
-            select(StockLot)
-            .where(StockLot.household_id == household_id, StockLot.purchased_on >= start,
-                   StockLot.purchased_on <= end, StockLot.source.in_(("purchase", "manual")))
-            .options(joinedload(StockLot.product).joinedload(Product.category))
-        )).unique().scalars())
+        lots = await self._stock_repo.purchases_between(household_id, start, end)
         spent, unpriced = ZERO, 0
         by_cat: dict[str, Decimal] = {}
         for lot in lots:
@@ -190,12 +173,7 @@ class FinanceService:
             by_cat[cat] = by_cat.get(cat, ZERO) + _d(lot.price)
 
         # Ушло в еду / выброшено: движения в период по цене их партий
-        moves = list((await self._s.execute(
-            select(StockMovement)
-            .where(StockMovement.household_id == household_id, StockMovement.created_at >= t0,
-                   StockMovement.created_at < t1, StockMovement.delta < 0)
-            .options(joinedload(StockMovement.lot).joinedload(StockLot.product))
-        )).unique().scalars())
+        moves = await self._stock_repo.outgoing_between(household_id, t0, t1)
         eaten, wasted = ZERO, ZERO
         waste: dict[str, WasteItem] = {}
         for m in moves:
@@ -212,22 +190,12 @@ class FinanceService:
                 w.value += value
 
         # Выброшенные остатки кастрюль (приготовлены в период)
-        pots = list((await self._s.execute(
-            select(RecipeCookingLog).where(
-                RecipeCookingLog.household_id == household_id, RecipeCookingLog.is_discarded.is_(True),
-                RecipeCookingLog.cooked_at >= t0, RecipeCookingLog.cooked_at < t1,
-            ).options(joinedload(RecipeCookingLog.recipe))
-        )).unique().scalars())
+        pots = await self._pots.discarded_between(household_id, t0, t1)
         if pots:
             costs = await self._pot_costs([p.id for p in pots])
+            eaten_by_pot = await self._plan.eaten_from_pots([p.id for p in pots])
             for p in pots:
-                eaten_g = sum(
-                    (_d(w) for w in (await self._s.execute(
-                        select(MealPortion.weight_g).where(
-                            MealPortion.eaten_from_pot_id == p.id, MealPortion.is_eaten.is_(True))
-                    )).scalars()),
-                    ZERO,
-                )
+                eaten_g = eaten_by_pot.get(p.id, ZERO)
                 total = _d(p.total_cooked_weight)
                 thrown = max(ZERO, total - eaten_g)
                 if total <= 0 or thrown <= 0 or costs[p.id].value <= 0:
@@ -241,11 +209,11 @@ class FinanceService:
                 w.value += value
 
         # Бюджет и прогноз: что ещё предстоит купить до конца периода по плану
-        household = await self._s.get(Household, household_id)
+        household = await self._households.get(household_id)
         planned, unknown = ZERO, 0
         if end >= today:
             prices = await self.prices(household_id)
-            for it in await self._stock.to_buy(household_id, max(start, today), end, today):
+            for it in await self._shopping.to_buy(household_id, max(start, today), end, today):
                 if it.to_buy is None:
                     continue
                 qty = _d(it.package_amount) * it.package_count if it.package_amount and it.package_count else _d(it.to_buy)
@@ -273,16 +241,15 @@ class FinanceService:
             monthly_budget=household.monthly_budget,
             planned_to_buy=money(planned),
             planned_unknown=unknown,
-            snack_spent=money(await self._stock.snack_spent(household_id, start, end)),
+            snack_spent=money(await self._regular.snack_spent(household_id, start, end)),
             snack_quota=await self._snack_quota(household_id),
         )
 
     async def _snack_quota(self, household_id: int) -> Decimal | None:
-        from app.models.household import PlannerSettings
-        s = await self._s.get(PlannerSettings, household_id)
+        s = await self._households.planner(household_id)
         return s.snack_quota if s is not None else None
 
     async def set_budget(self, household_id: int, value: Decimal | None) -> None:
-        household = await self._s.get(Household, household_id)
+        household = await self._households.get(household_id)
         household.monthly_budget = value
-        await self._s.flush()
+        await self._households.flush()

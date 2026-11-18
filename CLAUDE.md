@@ -49,7 +49,7 @@
   (нормализация и сокращения чековых названий, размер упаковки и весовой товар, сопоставление: выученное
   `ReceiptAlias` → строки активного списка → «не еда» → справочник, порог 0,6), модели `Receipt`/`ReceiptAlias`,
   эндпоинты `/receipts` (POST, GET, GET/{id} — переспрашивает «ждём», POST/{id}/apply — через
-  `StockService.check`/`add_extra`/`add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
+  `ShoppingService.check`/`add_extra`, `StockService.add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
   «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: тратит только add-qr (новый чек),
   запрос статуса info — бесплатный. «Ждущие» чеки: окно само опрашивает (4 с первую минуту, 15 с до 3 мин),
   дальше — фоновая задача в lifespan (`app/services/receipt_poller.py`, раз в `RECEIPT_POLL_MINUTES`=10,
@@ -101,7 +101,7 @@
   Этап 3: шаг 2 генерации — регулярные готовые продукты (`_regulars` в `autoplan.py`: тот же день недели и приём ≥ 4 из
   8 недель; «сам по себе» → пустая ячейка, source `regular`; «к блюду» → к ячейке с авто-блюдом, source `side`).
 - **Обычно берём и снеки** (этап 3, миграция 0024): `HouseholdProduct.regular` (auto/always/never), `regular_qty`,
-  `is_snack` — `PATCH /stock/items/{product_id}`; `GET /shopping-list/regular` (`StockService.regular`: покупки ≥ 4 из
+  `is_snack` — `PATCH /stock/items/{product_id}`; `GET /shopping-list/regular` (`RegularService.regular` в `services/regular.py`: покупки ≥ 4 из
   8 полных недель, медиана в неделю − запасы − список; снеки сверх `PlannerSettings.snack_quota` за неделю скрыты);
   `snack_categories` — в настройках планировщика; `FinanceSummary.snack_spent`. Веб: `RegularBlock` в `views/shopping.js`
   (предложение «карандашом», «+»/«Добавить всё» через `POST /shopping-lists/{id}/lines`), «Обычно берём» в карточке
@@ -143,7 +143,11 @@
   `ShoppingList` (один активный на семью), «куплено» сразу создаёт партию. С допуском семьи
   `pick_packages(..., tolerance)` берёт на упаковку меньше, если недобор ≤ допуска (400 г, пачка 360 г → одна),
   а недостачу ≤ допуска при имеющемся запасе не покупает вовсе (только расчёт по плану, не ручные добавки).
-- **Финансы** — из цен партий (`app/services/finance.py`).
+- **Финансы** — из цен партий (`app/services/finance.py`; запросы — только через репозитории).
+- Сервисы запасов и покупок (рефакторинг Р2): `services/stock.py` — `StockService` (партии, расход и отмены, пачки,
+  списание, инвентаризация, настройки товара, сводка; публичный `product(id)`); `services/shopping.py` —
+  `ShoppingService` (потребность плана `needs`, `to_buy`, общий список и отметки, `packages_for`);
+  `services/regular.py` — `RegularService` («обычно берём», `snack_spent`, `is_snack`). DI — `get_*_service` в `deps.py`.
 - **Регистрация** только по одноразовым приглашениям (`RegistrationInvite`), первый
   пользователь — по `FIRST_INVITE_CODE`.
 
