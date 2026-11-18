@@ -90,6 +90,7 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             joinedload(RecipeCookingLog.actual_ingredients).joinedload(
                 RecipeActualIngredient.variant
             ),
+            joinedload(RecipeCookingLog.recipe),
         )
 
     async def get_full(self, log_id: int) -> RecipeCookingLog | None:
@@ -111,6 +112,21 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             stmt = stmt.where(RecipeCookingLog.is_finished.is_(False))
         stmt = stmt.order_by(RecipeCookingLog.cooked_at.desc()).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def active_with_recipe(self, household_id: int) -> list[RecipeCookingLog]:
+        """Недоеденные кастрюли и заготовки семьи (с рецептом) — для автоплана."""
+        stmt = (
+            select(RecipeCookingLog)
+            .options(joinedload(RecipeCookingLog.recipe))
+            .where(
+                RecipeCookingLog.household_id == household_id,
+                RecipeCookingLog.is_finished.is_(False),
+                RecipeCookingLog.is_discarded.is_(False),
+                RecipeCookingLog.recipe_id.isnot(None),
+            )
+            .order_by(RecipeCookingLog.cooked_at, RecipeCookingLog.id)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def find_active_pot(self, household_id: int, recipe_id: int) -> RecipeCookingLog | None:
         """Самая свежая недоеденная кастрюля семьи по рецепту."""

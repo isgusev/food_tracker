@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { Modal, Macros } from "../components.js";
 import { IngredientsEditor, resolveDraftIngredients } from "../product-finder.js";
 import { state, ensureCatalog, loadRecipes, recipeCategoryName, variantLabel, toast, toastError } from "../store.js";
-import { fmt, fuzzyScore, grams, matches, n } from "../util.js";
+import { MEALS, MEAL_LABEL, fmt, fuzzyScore, grams, matches, n } from "../util.js";
 import { CookModal } from "./fridge.js";
 
 const RecipeModal = {
@@ -19,6 +19,12 @@ const RecipeModal = {
       recipe_category_id: r?.recipe_category_id || state.recipeCategories[0]?.id || null,
       default_servings: r?.default_servings || 4,
       allow_half: !!r?.allow_half,
+      // автоплан: в ротации, простое/«эдакое», уместные приёмы пищи (пусто — любые), хранится дней, морозилка
+      in_rotation: r ? r.in_rotation !== false : true,
+      effort: r?.effort || "easy",
+      meal_types: r?.meal_types ? [...r.meal_types] : [],
+      keeps_days: r?.keeps_days || 2,
+      is_freezable: !!r?.is_freezable,
       cooking_time_minutes: r?.cooking_time_minutes ?? null,
       estimated_cooked_weight: n(r?.estimated_cooked_weight) || null,
       instructions: r?.instructions || "",
@@ -55,6 +61,11 @@ const RecipeModal = {
         recipe_category_id: f.recipe_category_id,
         default_servings: Number(f.default_servings) || 1,
         allow_half: !!f.allow_half,
+        in_rotation: !!f.in_rotation,
+        effort: f.effort,
+        meal_types: f.meal_types.length ? f.meal_types : null,
+        keeps_days: Math.min(14, Math.max(1, Number(f.keeps_days) || 2)),
+        is_freezable: !!f.is_freezable,
         cooking_time_minutes: f.cooking_time_minutes === "" || f.cooking_time_minutes == null ? null : Number(f.cooking_time_minutes),
         estimated_cooked_weight: n(f.estimated_cooked_weight) || rawTotal.value,
         instructions: f.instructions || null,
@@ -78,7 +89,8 @@ const RecipeModal = {
         emit("saved");
       } catch (e) { error.value = e.message; }
     }
-    return { r, editing, form, newCat, busy, error, rawTotal, addCategory, save, remove, state, recipeCategoryName, variantLabel, grams, fmt, n };
+    const mealsLine = computed(() => (r?.meal_types?.length ? r.meal_types.map((m) => MEAL_LABEL[m].toLowerCase()).join(", ") : ""));
+    return { MEALS, mealsLine, r, editing, form, newCat, busy, error, rawTotal, addCategory, save, remove, state, recipeCategoryName, variantLabel, grams, fmt, n };
   },
   template: `
     <Modal :title="r ? r.name : 'Новый рецепт'" wide @close="$emit('close')">
@@ -89,6 +101,13 @@ const RecipeModal = {
           <span>· выход {{ grams(r.estimated_cooked_weight) }} (порция ≈ {{ grams(n(r.estimated_cooked_weight) / r.default_servings) }})</span>
           <span v-if="r.cooking_time_minutes">· {{ r.cooking_time_minutes }} мин</span>
           <span v-if="r.allow_half">· можно половиной</span>
+        </div>
+        <div class="row small muted">
+          <span v-if="r.in_rotation === false" class="badge">не в ротации</span>
+          <span v-if="r.effort === 'special'" class="badge">✨ эдакое</span>
+          <span v-if="mealsLine">{{ mealsLine }}</span>
+          <span>· хранится {{ r.keeps_days }} дн.</span>
+          <span v-if="r.is_freezable">· ❄️ можно заморозить</span>
         </div>
         <div class="small"><span class="muted">На 100 г: </span>
           <Macros :m="{ calories: r.calories_per_100g, proteins: r.proteins_per_100g, fats: r.fats_per_100g, carbs: r.carbs_per_100g }" :digits="1" /></div>
@@ -125,6 +144,24 @@ const RecipeModal = {
         <div class="tiny muted">Выход ≠ сырой вес: крупы развариваются, мясо ужаривается. Если пусто — возьмём сырой вес.</div>
         <label class="row small" style="gap: 8px; cursor: pointer; flex-wrap: nowrap; align-items: flex-start"><input type="checkbox" v-model="form.allow_half">
           <span>Можно готовить половиной <span class="muted">— в покупки пойдёт половина закладки, если на план её хватает</span></span></label>
+        <h3>Для автоплана</h3>
+        <div class="row small" style="gap: 14px">
+          <label class="row" style="gap: 6px; cursor: pointer"><input type="checkbox" v-model="form.in_rotation"> Предлагать в плане</label>
+          <label class="row" style="gap: 6px; cursor: pointer"><input type="checkbox" v-model="form.is_freezable"> ❄️ Можно заморозить</label>
+        </div>
+        <div class="grid-2">
+          <label class="field"><span>Сложность</span>
+            <select v-model="form.effort"><option value="easy">Простое, на каждый день</option><option value="special">✨ Эдакое, по настроению</option></select>
+          </label>
+          <label class="field"><span>Сколько дней можно есть</span><input type="number" min="1" max="14" v-model="form.keeps_days"></label>
+        </div>
+        <div class="field"><span>Когда уместно</span>
+          <div class="row small" style="gap: 12px">
+            <label v-for="m in MEALS" :key="m.key" class="row" style="gap: 6px; cursor: pointer">
+              <input type="checkbox" :value="m.key" v-model="form.meal_types"> {{ m.label }}</label>
+          </div>
+        </div>
+        <div class="tiny muted">Ничего не отмечено — подходит для любого приёма пищи.</div>
         <label class="field"><span>Как готовить</span><textarea v-model="form.instructions"></textarea></label>
       </template>
 

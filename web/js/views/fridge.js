@@ -4,7 +4,7 @@ import { api } from "../api.js";
 import { Modal, Picker, Macros } from "../components.js";
 import { IngredientsEditor, resolveDraftIngredients } from "../product-finder.js";
 import { state, ensureCatalog, recipeById, toast, toastError, variantIndex } from "../store.js";
-import { fmt, fmtDateTime, fmtQty, grams, gramsToBase, n, today } from "../util.js";
+import { fmt, fmtDateTime, fmtDayMonth, fmtQty, grams, gramsToBase, n, today } from "../util.js";
 import { StockTab } from "./stock.js";
 
 export const CookModal = {
@@ -127,6 +127,12 @@ const PotModal = {
         ingredients: ingredients.value.filter((i) => i.variant_id && n(i.weight_g) > 0).map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })),
       });
     }, "Состав пересчитан");
+    // ❄️ заготовка: заморозить остаток (по умолчанию на 60 дней), поменять срок, достать
+    const keepsUntil = ref(props.pot.keeps_until || "");
+    const freeze = () => run(() => api.post(`/recipes/cooking-logs/${props.pot.id}/freeze`, {}), "Остаток в морозилке");
+    const saveKeeps = () => run(
+      () => api.post(`/recipes/cooking-logs/${props.pot.id}/freeze`, { keeps_until: keepsUntil.value || null }), "Срок заготовки сохранён");
+    const unfreeze = () => run(() => api.post(`/recipes/cooking-logs/${props.pot.id}/unfreeze`), "Достали из морозилки");
     const discard = () => {
       if (!confirm(`Выбросить остаток (${grams(props.pot.current_remaining_weight)})? Блюдо уйдёт в архив, планы по нему снова станут «надо приготовить».`)) return;
       run(() => api.post(`/recipes/cooking-logs/${props.pot.id}/discard`), "Списано в архив");
@@ -142,13 +148,20 @@ const PotModal = {
       () => api.del(`/recipes/cooking-logs/${props.pot.id}`, { remove_from_diary: removeFromDiary }),
       "Удалено из холодильника"
     );
-    return { remaining, ingredients, editIngr, busy, error, confirmDelete, saveRemaining, saveIngredients, discard, askDelete, doDelete, grams, fmtDateTime };
+    return { remaining, ingredients, editIngr, busy, error, confirmDelete, saveRemaining, saveIngredients, discard, askDelete, doDelete, grams, fmtDateTime,
+      keepsUntil, freeze, saveKeeps, unfreeze, fmtDayMonth, today };
   },
   template: `
     <Modal :title="name" wide @close="$emit('close')">
       <div class="row small muted">
         <span>Приготовлено {{ fmtDateTime(pot.cooked_at) }}</span>
         <span>· сырой вес {{ grams(pot.total_raw_weight) }} → готовый {{ grams(pot.total_cooked_weight) }}</span>
+        <span v-if="pot.good_until && !pot.is_frozen" :style="pot.good_until < today() ? 'color: var(--warn)' : ''">· съесть до {{ fmtDayMonth(pot.good_until) }}</span>
+      </div>
+      <div v-if="pot.is_frozen" class="row" style="align-items: flex-end">
+        <label class="field" style="width: 200px"><span>❄️ Заготовка, годна до</span>
+          <input type="date" :min="today()" v-model="keepsUntil"></label>
+        <button :disabled="busy || !keepsUntil || keepsUntil === pot.keeps_until" @click="saveKeeps">Сохранить срок</button>
       </div>
       <div class="small"><span class="muted">На 100 г: </span>
         <Macros :m="{ calories: pot.calories_per_100g, proteins: pot.proteins_per_100g, fats: pot.fats_per_100g, carbs: pot.carbs_per_100g }" :digits="1" /></div>
@@ -190,7 +203,9 @@ const PotModal = {
       <template #foot>
         <button class="danger" :disabled="busy" @click="askDelete">Удалить…</button>
         <span class="grow"></span>
-        <button :disabled="busy" @click="discard">🗑 Выбросить остаток</button>
+        <button v-if="!pot.is_frozen" :disabled="busy" @click="freeze">❄️ Заморозить остаток</button>
+        <button v-else :disabled="busy" @click="unfreeze">Достать из морозилки</button>
+                <button :disabled="busy" @click="discard">🗑 Выбросить остаток</button>
       </template>
     </Modal>`,
 };
@@ -226,7 +241,12 @@ export const FridgeView = {
     const loadCosts = () => api.get("/finance/pot-costs").then((r) => { potCosts.value = Object.fromEntries(r.map((c) => [c.pot_id, c])); }).catch(() => {});
     onMounted(loadCosts);
     function onSaved() { cooking.value = false; opened.value = null; stockKey.value++; load(); loadCosts(); }
-    return { tab, pots, archive, cooking, opened, potName, bar, onSaved, stockKey, potCosts, grams, fmt, fmtDateTime };
+    // обычные кастрюли и заготовки в морозилке — отдельными блоками
+    const groups = computed(() => [
+      { key: "fridge", title: "", list: pots.value.filter((p) => !p.is_frozen) },
+      { key: "freezer", title: "❄️ Морозилка — заготовки", list: pots.value.filter((p) => p.is_frozen) },
+    ].filter((g) => g.list.length));
+    return { tab, pots, groups, archive, cooking, opened, potName, bar, onSaved, stockKey, potCosts, grams, fmt, fmtDateTime, fmtDayMonth, today };
   },
   template: `
     <div>
@@ -244,8 +264,10 @@ export const FridgeView = {
 
       <template v-if="tab === 'active'">
         <div v-if="!pots.length" class="card empty">Холодильник пуст. Приготовьте блюдо — и планы по нему автоматически перейдут в «есть в холодильнике».</div>
-        <div v-else class="card flush">
-          <div v-for="p in pots" :key="p.id" class="list-item clickable" @click="opened = p">
+        <template v-else><template v-for="g in groups" :key="g.key">
+        <h3 v-if="g.title" style="margin-top: 14px">{{ g.title }}</h3>
+        <div class="card flush">
+          <div v-for="p in g.list" :key="p.id" class="list-item clickable" @click="opened = p">
             <div class="grow stack tight">
               <div class="row between">
                 <b>{{ potName(p) }}</b>
@@ -256,13 +278,14 @@ export const FridgeView = {
                 <b :style="{ left: bar(p).plannedLeft + '%', width: bar(p).planned + '%' }"></b>
               </div>
               <div class="row between small muted">
-                <span>{{ fmtDateTime(p.cooked_at) }} · {{ fmt(p.calories_per_100g) }} ккал/100 г<template v-if="potCosts[p.id]?.cost"> · {{ fmt(potCosts[p.id].cost) }} ₽{{ potCosts[p.id].complete ? '' : '+' }}</template></span>
+                <span>{{ fmtDateTime(p.cooked_at) }}<template v-if="p.good_until"> · <span :style="p.good_until < today() ? 'color: var(--warn)' : ''">{{ p.is_frozen ? 'годно' : 'съесть' }} до {{ fmtDayMonth(p.good_until) }}</span></template> · {{ fmt(p.calories_per_100g) }} ккал/100 г<template v-if="potCosts[p.id]?.cost"> · {{ fmt(potCosts[p.id].cost) }} ₽{{ potCosts[p.id].complete ? '' : '+' }}</template></span>
                 <span v-if="bar(p).free >= 0">Свободно {{ grams(bar(p).free) }} · в планах {{ grams(p.planned_g) }}</span>
                 <span v-else style="color: var(--warn)">В планах на {{ grams(-bar(p).free) }} больше, чем осталось</span>
               </div>
             </div>
           </div>
         </div>
+        </template></template>
       </template>
 
       <StockTab v-else-if="tab === 'stock'" :key="stockKey" />

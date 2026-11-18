@@ -178,6 +178,9 @@ class PlanService:
             state=state,
             cooking_log_id=item.cooking_log_id,
             portions=portions,
+            origin=item.origin or "manual",
+            pinned=bool(item.pinned),
+            auto_reason=item.auto_reason,
             total_weight_g=sum((_d(p.weight_g) for p in item.portions), ZERO),
             remaining_weight_g=remaining_weight(item),
         )
@@ -238,7 +241,15 @@ class PlanService:
         await self._plan.flush()
         return await self.response(item.id)
 
+    @staticmethod
+    def _touch(item: MealItem) -> None:
+        """Ручная правка предложенного автопланом блюда делает его обычным (manual)."""
+        if item.origin == "auto":
+            item.origin = "manual"
+            item.auto_reason = None
+
     async def move(self, item: MealItem, data: MealItemMove) -> MealItemResponse:
+        self._touch(item)
         if data.date_day is not None:
             item.date_day = data.date_day
         if data.meal_type is not None:
@@ -255,6 +266,7 @@ class PlanService:
         await self._plan.flush()
 
     async def add_portion(self, item: MealItem, data: PortionIn) -> MealItemResponse:
+        self._touch(item)
         await self._validate_members(item.household_id, [data])
         if data.member_id is not None and any(p.member_id == data.member_id for p in item.portions):
             raise ValidationError("У этого члена семьи уже есть порция в блюде")
@@ -268,6 +280,8 @@ class PlanService:
     ) -> MealItemResponse:
         """Новый вес порции. У съеденного из кастрюли — пересписание остатка
         (ошибка, если еды не хватает, а не молчаливое обнуление)."""
+        if not portion.is_eaten:
+            self._touch(item)   # правка плана, а не факта «съел»
         if portion.is_eaten and portion.eaten_from_pot_id:
             pot = await self._cooking_logs.get(portion.eaten_from_pot_id)
             if pot is not None:
@@ -288,6 +302,7 @@ class PlanService:
 
     async def delete_portion(self, item: MealItem, portion: MealPortion) -> MealItemResponse | None:
         """Убрать порцию; последняя порция — блюдо удаляется целиком (вернётся None)."""
+        self._touch(item)
         if len(item.portions) == 1:
             await self.delete_item(item)
             return None

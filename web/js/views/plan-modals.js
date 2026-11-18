@@ -147,7 +147,20 @@ export const AddItemModal = {
       guestWeight.value = Math.round(saved?.guestWeight || fallback);
       return saved;
     }
-    watch(recipeId, (id) => { if (id) applyDefaults(portionMemoryKey("r", id), portionHint.value || 250); });
+    // нет «как в прошлый раз» на этом устройстве — типичные порции с сервера (по съеденному
+    // за 90 дней, иначе по другим членам семьи или по цели ккал на приём пищи)
+    async function typicalDefaults(id) {
+      try {
+        const t = await api.get("/plan/typical-portions", { meal_type: meal.value, recipe_id: id });
+        if (recipeId.value !== id) return;
+        const by = Object.fromEntries(t.map((x) => [x.member_id, n(x.weight_g)]));
+        for (const r of rows.value) if (by[r.member_id] != null) r.weight = by[r.member_id];
+      } catch { /* подсказка необязательна */ }
+    }
+    watch(recipeId, (id) => {
+      if (!id) return;
+      if (!applyDefaults(portionMemoryKey("r", id), portionHint.value || 250)) typicalDefaults(id);
+    });
     // готовый продукт: если есть упаковка — по умолчанию «по упаковке» (или как в прошлый раз)
     function productDefaults(memoryKey) {
       const saved = memoryKey ? applyDefaults(memoryKey, 100) : applyDefaults("ft.none", 100);
@@ -377,6 +390,7 @@ export const ItemModal = {
         <span class="muted small">{{ MEAL_LABEL[it.meal_type] }} · {{ fmtWeekday(it.date_day) }} {{ fmtDayMonth(it.date_day) }}</span>
         <span class="muted small" v-if="it.fridge_pot_id">· в кастрюле {{ grams(it.fridge_available_g) }}</span>
       </div>
+      <div v-if="it.origin === 'auto'" class="tiny muted">✨ Предложено автопланом<template v-if="it.auto_reason">: {{ it.auto_reason }}</template>. Поправите порции или перенесёте — станет обычным блюдом.</div>
 
       <div class="card flush table-wrap">
         <table class="tbl">

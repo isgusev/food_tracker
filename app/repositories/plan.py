@@ -97,6 +97,26 @@ class PlanRepository(BaseRepository[MealItem]):
         stmt = stmt.order_by(MealItem.date_day, MEAL_SORT, MealItem.id)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
+    async def eaten_weights(
+        self, household_id: int, since, *, recipe_id: int | None = None, variant_id: int | None = None
+    ) -> list[tuple[int, Decimal]]:
+        """Съеденные порции членов семьи (без гостей) по рецепту или продукту с даты since (UTC)."""
+        stmt = (
+            select(MealPortion.member_id, MealPortion.weight_g)
+            .join(MealItem, MealPortion.meal_item_id == MealItem.id)
+            .where(
+                MealItem.household_id == household_id,
+                MealPortion.is_eaten.is_(True),
+                MealPortion.member_id.isnot(None),
+                MealPortion.eaten_at >= since,
+            )
+        )
+        if recipe_id is not None:
+            stmt = stmt.where(MealItem.recipe_id == recipe_id)
+        else:
+            stmt = stmt.where(MealItem.variant_id == variant_id)
+        return [(m, Decimal(str(w))) for m, w in (await self._session.execute(stmt)).all()]
+
     async def reserved_by_pot(self, household_id: int) -> dict[int, Decimal]:
         """Резерв по кастрюлям: Σ несъеденных порций привязанных блюд (один запрос)."""
         stmt = (

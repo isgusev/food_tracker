@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -115,6 +115,9 @@ def _grams_by_variant(lines) -> dict[int, Decimal]:
     return out
 
 
+# Заготовка в морозилке по умолчанию годна столько дней (docs/AUTOPLAN.md, 3.2)
+FREEZER_DAYS = 60
+
 class RecipeService:
     def __init__(
         self,
@@ -170,6 +173,11 @@ class RecipeService:
             created_by_user=data.created_by_user,
             default_servings=data.default_servings,
             allow_half=data.allow_half,
+            in_rotation=data.in_rotation,
+            effort=data.effort,
+            meal_types=data.meal_types,
+            keeps_days=data.keeps_days,
+            is_freezable=data.is_freezable,
             total_raw_weight=quantize(total_raw),
             estimated_cooked_weight=data.estimated_cooked_weight,
             calories_per_100g=quantize(per_100.calories),
@@ -227,6 +235,12 @@ class RecipeService:
             recipe.default_servings = fields["default_servings"]
         if fields.get("allow_half") is not None:
             recipe.allow_half = fields["allow_half"]
+        # поля автоплана; meal_types: null — «любые приёмы пищи»
+        for key in ("in_rotation", "effort", "keeps_days", "is_freezable"):
+            if fields.get(key) is not None:
+                setattr(recipe, key, fields[key])
+        if "meal_types" in fields:
+            recipe.meal_types = data.meal_types
 
         new_weight = fields.get("estimated_cooked_weight", recipe.estimated_cooked_weight)
         if "ingredients" in fields:
@@ -450,6 +464,28 @@ class RecipeService:
         elif pot.is_finished:
             events.append("блюдо доедено")
         return events
+
+    async def freeze_pot(self, pot: RecipeCookingLog, keeps_until: date | None, today: date) -> RecipeCookingLog:
+        """«❄️ Заморозить остаток»: кастрюля становится заготовкой в морозилке (по умолчанию +60 дней).
+        Резерв, «съел» и остаток работают как у обычной кастрюли."""
+        if pot.is_finished or pot.is_discarded:
+            raise ValidationError("Кастрюля уже закончилась — замораживать нечего")
+        if keeps_until is not None and keeps_until < today:
+            raise ValidationError("Срок заготовки не может быть в прошлом")
+        pot.is_frozen = True
+        pot.keeps_until = keeps_until or today + timedelta(days=FREEZER_DAYS)
+        await self._cooking_logs.flush()
+        return await self.get_owned_pot(pot.id, pot.household_id)
+
+    async def unfreeze_pot(self, pot: RecipeCookingLog, today: date) -> RecipeCookingLog:
+        """Достали из морозилки: снова обычная кастрюля, есть — как свежую (Recipe.keeps_days)."""
+        if not pot.is_frozen:
+            raise ValidationError("Это не заготовка из морозилки")
+        days = pot.recipe.keeps_days if pot.recipe is not None else 2
+        pot.is_frozen = False
+        pot.keeps_until = today + timedelta(days=days - 1)
+        await self._cooking_logs.flush()
+        return await self.get_owned_pot(pot.id, pot.household_id)
 
     async def mark_pot_discarded(self, pot: RecipeCookingLog) -> RecipeCookingLog:
         """Пометить кастрюлю удалённой: остаток выбрасывается, запись уходит в архив.

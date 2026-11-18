@@ -10,6 +10,7 @@ from app.core import clock
 from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
+    FreezeIn,
     PotArchiveItem,
     PotUsageResponse,
     RecipeCategoryCreate,
@@ -190,3 +191,17 @@ async def replace_cooking_log_ingredients(
     """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
     pot = await service.get_owned_pot(log_id, me.household_id)
     return await service.replace_pot_ingredients(pot, payload)
+
+
+@router.post("/cooking-logs/{log_id}/freeze", response_model=RecipeCookingLogResponse)
+async def freeze_cooking_log(log_id: int, payload: FreezeIn, service: RecipeServiceDep, me: CurrentMemberDep):
+    """«❄️ Заморозить остаток» — кастрюля становится заготовкой (срок по умолчанию +60 дней)."""
+    pot = await service.get_owned_pot(log_id, me.household_id)
+    return await service.freeze_pot(pot, payload.keeps_until, clock.today())
+
+
+@router.post("/cooking-logs/{log_id}/unfreeze", response_model=RecipeCookingLogResponse)
+async def unfreeze_cooking_log(log_id: int, service: RecipeServiceDep, me: CurrentMemberDep):
+    """Достали заготовку из морозилки — снова обычная кастрюля."""
+    pot = await service.get_owned_pot(log_id, me.household_id)
+    return await service.unfreeze_pot(pot, clock.today())

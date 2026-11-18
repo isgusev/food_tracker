@@ -2,13 +2,40 @@
 from __future__ import annotations
 
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.domain import MEAL_ORDER, MEAL_TYPES
 from app.schemas.common import ORMModel
+
+
+def _check_meal_types(v):
+    """Приёмы пищи для автоплана: без дублей, в порядке дня; пустой список — как «любые» (None)."""
+    if v is None:
+        return None
+    bad = [m for m in v if m not in MEAL_TYPES]
+    if bad:
+        raise ValueError(f"meal_types: допустимы {list(MEAL_ORDER)}")
+    out = [m for m in MEAL_ORDER if m in v]
+    return out or None
+
+
+class RecipePlanning(BaseModel):
+    """Поля рецепта для автоплана (docs/AUTOPLAN.md, 3.1)."""
+
+    in_rotation: bool = True
+    effort: Literal["easy", "special"] = "easy"
+    meal_types: Optional[list[str]] = None
+    keeps_days: int = Field(default=2, ge=1, le=14)
+    is_freezable: bool = False
+
+    @field_validator("meal_types")
+    @classmethod
+    def _meals(cls, v):
+        return _check_meal_types(v)
 
 
 class RecipeCategoryCreate(BaseModel):
@@ -43,7 +70,7 @@ class RecipeTemplateIngredientResponse(ORMModel):
     exact: bool = False
 
 
-class RecipeCreate(BaseModel):
+class RecipeCreate(RecipePlanning):
     name: str = Field(min_length=1, max_length=255)
     recipe_category_id: int
     cooking_time_minutes: Optional[int] = Field(default=None, ge=0)
@@ -72,8 +99,18 @@ class RecipeUpdate(BaseModel):
     instructions: Optional[str] = None
     default_servings: Optional[int] = Field(default=None, ge=1, le=100)
     allow_half: Optional[bool] = None
+    in_rotation: Optional[bool] = None
+    effort: Optional[Literal["easy", "special"]] = None
+    meal_types: Optional[list[str]] = None   # null — любые приёмы пищи
+    keeps_days: Optional[int] = Field(default=None, ge=1, le=14)
+    is_freezable: Optional[bool] = None
     estimated_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999.9"))
     ingredients: Optional[list[IngredientLine]] = Field(default=None, min_length=1)
+
+    @field_validator("meal_types")
+    @classmethod
+    def _meals(cls, v):
+        return _check_meal_types(v)
 
     @field_validator("name")
     @classmethod
@@ -102,6 +139,11 @@ class RecipeResponse(ORMModel):
     created_by_user: str
     default_servings: int
     allow_half: bool = False
+    in_rotation: bool = True
+    effort: str = "easy"
+    meal_types: Optional[list[str]] = None
+    keeps_days: int = 2
+    is_freezable: bool = False
     total_raw_weight: Decimal
     estimated_cooked_weight: Decimal
     calories_per_100g: Decimal
@@ -133,6 +175,9 @@ class RecipeCookingLogResponse(ORMModel):
     current_remaining_weight: Decimal
     is_finished: bool
     is_discarded: bool = False  # True — кастрюля помечена удалённой (архив)
+    is_frozen: bool = False      # заготовка в морозилке
+    keeps_until: Optional[date] = None  # срок заготовки (задан явно)
+    good_until: Optional[date] = None   # до какого дня есть: keeps_until или готовка + Recipe.keeps_days
     calories_per_100g: Decimal
     proteins_per_100g: Decimal
     fats_per_100g: Decimal
@@ -172,3 +217,9 @@ class PotUsageResponse(BaseModel):
 
     past_dates: list[str] = []           # учтено в прошедших днях → удаление запрещено
     current_future_dates: list[str] = []  # текущий/будущие дни → спрашиваем пользователя
+
+
+class FreezeIn(BaseModel):
+    """«❄️ Заморозить остаток»: кастрюля становится заготовкой (срок по умолчанию +60 дней)."""
+
+    keeps_until: Optional[date] = None
