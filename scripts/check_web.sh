@@ -50,3 +50,7 @@ print("checked components: " + seen.size + ", template errors: " + bad);
 if (bad) throw new Error("web check failed");
 EOF
 "$JSC" -m "$TMP/check.mjs"
+# офлайн: каждый модуль web/js должен быть в списке SHELL service worker'а
+MISSING=$(cd "$ROOT/web" && find js -name '*.js' | sort | while read -r f; do grep -q "\"$f\"" sw.js || echo "$f"; done)
+if [ -n "$MISSING" ]; then echo "нет в SHELL web/sw.js (поднимите и CACHE):"; echo "$MISSING"; exit 1; fi
+echo "sw.js SHELL: все модули на месте"
