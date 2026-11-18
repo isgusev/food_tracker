@@ -18,7 +18,8 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.domain import _ceil, dec, grams_to_base, pick_packages, quantize
 from app.models.product import Product
 from app.models.stock import ShoppingLine, ShoppingList
-from app.repositories.plan import PlanRepository, remaining_weight
+from app.repositories.plan import PlanRepository
+from app.services.pots import remaining_weight
 from app.repositories.recipe import RecipeRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
 from app.services.naming import brand_of

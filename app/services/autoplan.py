@@ -18,7 +18,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 
 from app.core import clock
@@ -27,11 +27,13 @@ from app.models.household import HouseholdMember
 from app.models.plan import MealItem, MealPortion
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
-from app.repositories.plan import PlanRepository, fits
+from app.repositories.plan import PlanRepository
+from app.services.pots import fit_weights
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.recipe import Recipe
 from app.repositories.household import HouseholdRepository
 from app.repositories.stock import StockRepository
+from app.services.finance import FinanceService
 from app.services.household import planner_out
 from app.services.naming import display_name
 from app.repositories.product import VariantRepository
@@ -250,8 +252,7 @@ class AutoplanService:
     def __init__(
         self, plan: PlanRepository, cooking_logs: CookingLogRepository, members: MemberRepository,
         recipes: RecipeRepository, variants: VariantRepository,
-        households: HouseholdRepository | None = None, stock: StockRepository | None = None,
-        finance=None,
+        households: HouseholdRepository, stock: StockRepository, finance: FinanceService,
     ) -> None:
         self._plan = plan
         self._pots = cooking_logs
@@ -301,9 +302,9 @@ class AutoplanService:
         self, household_id: int, user_id: int, first: date, end: date,
         meal_types: list[str] | None, dry_run: bool, today: date,
     ) -> _Ctx:
-        settings = planner_out(await self._households.planner(household_id)) if self._households else None
+        settings = planner_out(await self._households.planner(household_id))
         wanted_set = set(meal_types or MEAL_ORDER)
-        if settings and settings.meal_types and meal_types is None:
+        if settings.meal_types and meal_types is None:
             wanted_set &= set(settings.meal_types)
         recipes = await self._recipes.list_full(household_id=household_id, limit=2000)
         keys = {r.id: _keys(r) for r in recipes}
@@ -312,34 +313,30 @@ class AutoplanService:
             if d < first:
                 last[rid] = max(d, last.get(rid, d))
         expiring: dict[str, tuple[date, str]] = {}
-        if self._stock is not None:
-            horizon = end + timedelta(days=EXPIRY_DAYS)
-            for lot in await self._stock.open_lots(household_id):
-                if lot.expires_on is None or not (today <= lot.expires_on <= horizon):
-                    continue
-                k = lot.product.item_key
-                if k not in expiring or lot.expires_on < expiring[k][0]:
-                    expiring[k] = (lot.expires_on, lot.product.name)
-        cost: dict[int, Decimal] = {}
-        tight = False
-        if self._finance is not None:
-            cost = {c.recipe_id: c.per_portion for c in await self._finance.recipe_costs(household_id)
-                    if c.per_portion is not None}
-            tight = await self._budget_tight(household_id, today)
+        horizon = end + timedelta(days=EXPIRY_DAYS)
+        for lot in await self._stock.open_lots(household_id):
+            if lot.expires_on is None or not (today <= lot.expires_on <= horizon):
+                continue
+            k = lot.product.item_key
+            if k not in expiring or lot.expires_on < expiring[k][0]:
+                expiring[k] = (lot.expires_on, lot.product.name)
+        cost = {c.recipe_id: c.per_portion for c in await self._finance.recipe_costs(household_id)
+                if c.per_portion is not None}
+        tight = await self._budget_tight(household_id, today)
         members = await self._members.active_in(household_id)
         shares = [float(m.target_proteins) * 4 / float(m.target_calories)
                   for m in members if m.target_proteins and m.target_calories]
         scoring = Scoring(
             keys=keys, last_cooked=last, expiring=expiring, cost=cost, budget_tight=tight,
             protein_target=sum(shares) / len(shares) if shares else 0.15,
-            special_days=set(settings.special_days) if settings else set(),
+            special_days=set(settings.special_days),
         )
         return _Ctx(
             household_id=household_id, user_id=user_id, first=first, end=end,
             wanted=[m for m in MEAL_ORDER if m in wanted_set],
-            no_cook=set(settings.no_cook_days) if settings else set(),
+            no_cook=set(settings.no_cook_days),
             special_days=scoring.special_days,
-            max_special=settings.max_special_per_week if settings else 1,
+            max_special=settings.max_special_per_week,
             tolerance=await self._plan.tolerance(household_id),
             rotation=[r for r in recipes if r.in_rotation],
             scoring=scoring, board=_Board(), dry_run=dry_run,
@@ -347,8 +344,8 @@ class AutoplanService:
 
     async def _budget_tight(self, household_id: int, today: date) -> bool:
         """Бюджет месяца тратится быстрее, чем идёт месяц (траты / бюджет > прошедшая доля месяца)."""
-        household = await self._households.get(household_id) if self._households else None
-        if household is None or not household.monthly_budget or self._stock is None:
+        household = await self._households.get(household_id)
+        if household is None or not household.monthly_budget:
             return False
         month_start = today.replace(day=1)
         spent = await self._stock.spent_between(household_id, month_start, today)
@@ -467,15 +464,11 @@ class AutoplanService:
             for meal in meals:
                 if (day, meal) in ctx.board.cells:
                     continue
-                weights = await self._typical(ctx, recipe, meal, per100)
-                need = sum(weights.values(), ZERO)
-                if not weights or not fits(need, free, ctx.tolerance):
+                # чуть меньше нужного — порции пропорционально (допуск семьи), совсем не хватает — стоп
+                weights = fit_weights(await self._typical(ctx, recipe, meal, per100), free, ctx.tolerance)
+                if weights is None:
                     return out          # дальше в этой кастрюле не хватит
-                if need > free:          # чуть меньше нужного — порции пропорционально (допуск)
-                    k = free / need
-                    weights = {mid: (w * k).to_integral_value(rounding=ROUND_FLOOR) for mid, w in weights.items()}
-                    need = sum(weights.values(), ZERO)
-                free -= need
+                free -= sum(weights.values(), ZERO)
                 ctx.board.put(day, meal, recipe, count_special=False)
                 out.append(await self._add_item(
                     ctx, day, meal, recipe, weights, reason, "freezer" if pot.is_frozen else "fridge", pot.id))
@@ -548,10 +541,8 @@ class AutoplanService:
         w0 = _monday(ctx.first) - timedelta(weeks=REGULAR_WEEKS)
         history = await self._plan.list_in_range(ctx.household_id, w0, ctx.first - timedelta(days=1))
         with_recipe = {(i.date_day, i.meal_type) for i in history if i.recipe_id is not None}
-        never = set()
-        if self._stock is not None:
-            never = {k for k, st in (await self._stock.settings_map(ctx.household_id)).items()
-                     if st.regular == "never"}
+        never = {k for k, st in (await self._stock.settings_map(ctx.household_id)).items()
+                 if st.regular == "never"}
         active = {m.id for m in await self._members.active_in(ctx.household_id)}
         groups: dict[tuple[int, str, str], dict] = {}
         for it in history:

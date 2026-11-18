@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 from datetime import date
-from decimal import ROUND_FLOOR, Decimal
+from decimal import Decimal
 
 from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
@@ -21,32 +21,6 @@ MEAL_SORT = case(
     value=MealItem.meal_type,
     else_=len(MEAL_ORDER),
 )
-
-
-def remaining_weight(item: MealItem) -> Decimal:
-    """Сколько ещё не съедено по блюду (резерв кастрюли / объём покупки)."""
-    return sum(
-        (Decimal(str(p.weight_g)) for p in item.portions if not p.is_eaten), Decimal("0")
-    )
-
-
-def fits(planned: Decimal, available: Decimal, tolerance: Decimal) -> bool:
-    """Хватает ли: есть не меньше плана за вычетом допуска (доля 0…1)."""
-    return planned * (1 - tolerance) <= available
-
-
-def scale_portions(items: list[MealItem], available: Decimal) -> None:
-    """Несъеденные порции блюд — пропорционально под то, что есть в кастрюле.
-
-    Доли членов семьи сохраняются; округляем вниз до грамма, чтобы сумма
-    не превысила остаток. Съеденное не трогаем."""
-    portions = [p for i in items for p in i.portions if not p.is_eaten]
-    total = sum((Decimal(str(p.weight_g)) for p in portions), ZERO)
-    if total <= 0 or total <= available:
-        return
-    k = max(ZERO, available) / total
-    for p in portions:
-        p.weight_g = (Decimal(str(p.weight_g)) * k).to_integral_value(rounding=ROUND_FLOOR)
 
 
 class PlanRepository(BaseRepository[MealItem]):
@@ -153,23 +127,8 @@ class PlanRepository(BaseRepository[MealItem]):
         rows = (await self._session.execute(stmt)).all()
         return {int(pot): Decimal(str(total or 0)) for pot, total in rows if pot}
 
-    async def attach_to_new_pot(
-        self,
-        household_id: int,
-        recipe_id: int,
-        pot_id: int,
-        from_date: date,
-        capacity_g: Decimal,
-        tolerance: Decimal = ZERO,
-    ) -> int:
-        """Свежая кастрюля: привязываем блюда по рецепту с сегодняшнего дня, пока влезают.
-
-        Прошлые неотмеченные планы кастрюлю не «съедают»; на первом
-        не поместившемся блюде останавливаемся — более поздние остаются
-        «надо приготовить» и попадают в покупки. «Влезает» — с допуском семьи:
-        вышло меньше плана не больше чем на tolerance (доля) — блюда привязываются,
-        а их несъеденные порции уменьшаются пропорционально выходу.
-        """
+    async def unattached_for_recipe(self, household_id: int, recipe_id: int, from_date: date) -> list[MealItem]:
+        """Блюда рецепта без кастрюли с даты from_date — в порядке дня (для привязки к свежей кастрюле)."""
         stmt = (
             self.full_query()
             .where(
@@ -180,53 +139,16 @@ class PlanRepository(BaseRepository[MealItem]):
             )
             .order_by(MealItem.date_day, MEAL_SORT, MealItem.id)
         )
-        items = list((await self._session.execute(stmt)).unique().scalars().all())
-        reserved = ZERO
-        attached: list[MealItem] = []
-        for item in items:
-            need = remaining_weight(item)
-            if need <= 0:
-                continue  # всё уже съедено
-            if not fits(reserved + need, capacity_g, tolerance):
-                break
-            reserved += need
-            item.cooking_log_id = pot_id
-            attached.append(item)
-        if reserved > capacity_g:
-            scale_portions(attached, capacity_g)
-        await self._session.flush()
-        return len(attached)
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
-    async def release_overbooked(
-        self, pot_id: int, available_g: Decimal, tolerance: Decimal = ZERO
-    ) -> int:
-        """Кастрюля убыла — с конца отвязываем блюда, которым уже не хватает.
-
-        С допуском (tolerance > 0, события самой кастрюли: готовка, «съел больше»,
-        правка остатка) небольшая нехватка не отвязывает, а пропорционально
-        уменьшает несъеденные порции оставшихся блюд.
-        """
+    async def attached_newest_first(self, pot_id: int) -> list[MealItem]:
+        """Блюда, привязанные к кастрюле, — с самых поздних (их отвязываем первыми)."""
         stmt = (
             self.full_query()
             .where(MealItem.cooking_log_id == pot_id)
             .order_by(MealItem.date_day.desc(), MEAL_SORT.desc(), MealItem.id.desc())
         )
-        items = list((await self._session.execute(stmt)).unique().scalars().all())
-        reserved = sum((remaining_weight(i) for i in items), ZERO)
-        released = 0
-        kept: list[MealItem] = []
-        for item in items:
-            need = remaining_weight(item)
-            if need > 0 and not fits(reserved, available_g, tolerance):
-                reserved -= need
-                item.cooking_log_id = None
-                released += 1
-            else:
-                kept.append(item)
-        if tolerance > 0 and reserved > available_g:
-            scale_portions(kept, available_g)
-        await self._session.flush()
-        return released
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def items_touching_pot(self, pot_id: int) -> list[MealItem]:
         """Блюда, привязанные к кастрюле или с порциями, съеденными из неё."""

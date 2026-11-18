@@ -35,6 +35,7 @@ from app.services.household import HouseholdService
 from app.services.items import ItemService
 from app.services.autoplan import AutoplanService
 from app.services.plan import PlanService
+from app.services.pots import PotService
 from app.services.finance import FinanceService
 from app.services.regular import RegularService
 from app.services.shopping import ShoppingService
@@ -160,6 +161,10 @@ def get_regular_service(session: SessionDep) -> RegularService:
     )
 
 
+def get_pot_service(session: SessionDep) -> PotService:
+    return PotService(plan=PlanRepository(session), cooking_logs=CookingLogRepository(session))
+
+
 def get_recipe_service(session: SessionDep) -> RecipeService:
     return RecipeService(
         recipes=RecipeRepository(session),
@@ -168,6 +173,7 @@ def get_recipe_service(session: SessionDep) -> RecipeService:
         variants=VariantRepository(session),
         plan=PlanRepository(session),
         stock=get_stock_service(session),
+        pots=get_pot_service(session),
     )
 
 
@@ -179,6 +185,7 @@ def get_plan_service(session: SessionDep) -> PlanService:
         variants=VariantRepository(session),
         members=MemberRepository(session),
         stock=get_stock_service(session),
+        pots=get_pot_service(session),
     )
 
 

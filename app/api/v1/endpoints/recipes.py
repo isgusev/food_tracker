@@ -190,7 +190,7 @@ async def replace_cooking_log_ingredients(
 ):
     """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
     pot = await service.get_owned_pot(log_id, me.household_id)
-    return await service.replace_pot_ingredients(pot, payload)
+    return await service.replace_pot_ingredients(pot, payload, clock.today())
 
 
 @router.post("/cooking-logs/{log_id}/freeze", response_model=RecipeCookingLogResponse)
