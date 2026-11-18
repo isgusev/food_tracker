@@ -117,6 +117,16 @@ class PlanRepository(BaseRepository[MealItem]):
             stmt = stmt.where(MealItem.variant_id == variant_id)
         return [(m, Decimal(str(w))) for m, w in (await self._session.execute(stmt)).all()]
 
+    async def last_recipe_dates(self, household_id: int, before: date) -> dict[int, date]:
+        """Последний день, когда рецепт стоял в плане до даты before (для «давно не готовили»)."""
+        stmt = (
+            select(MealItem.recipe_id, func.max(MealItem.date_day))
+            .where(MealItem.household_id == household_id, MealItem.recipe_id.isnot(None),
+                   MealItem.date_day < before)
+            .group_by(MealItem.recipe_id)
+        )
+        return {int(r): d for r, d in (await self._session.execute(stmt)).all() if d is not None}
+
     async def reserved_by_pot(self, household_id: int) -> dict[int, Decimal]:
         """Резерв по кастрюлям: Σ несъеденных порций привязанных блюд (один запрос)."""
         stmt = (

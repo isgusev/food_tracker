@@ -375,10 +375,15 @@ export const ItemModal = {
       return run(() => api.post(`/plan/${it.value.id}/portions`, { member_id, weight_g: n(addWeight.value) }), "Порция добавлена")
         .then(() => { addWho.value = ""; });
     }
+    const acceptIt = () => run(() => api.post(`/plan/${it.value.id}/accept`), "Принято");
+    const pinToggle = () => run(() => api.patch(`/plan/${it.value.id}`, { pinned: !it.value.pinned }), it.value.pinned ? "Откреплено" : "Закреплено");
+    const alternative = () => run(() => api.post(`/plan/${it.value.id}/alternative`), "Другой вариант");
+    const canSwap = computed(() => it.value.kind === "recipe" && !it.value.cooking_log_id && !it.value.portions.some((p) => p.is_eaten));
     const badge = computed(() => itemBadge(it.value));
     const uneaten = computed(() => it.value.portions.filter((p) => !p.is_eaten).length);
     return {
       it, weights, busy, error, moveDate, moveMeal, addWho, addWeight, missing, badge, uneaten, MEALS, MEAL_LABEL,
+      acceptIt, pinToggle, alternative, canSwap,
       changed, eat, uneat, detach, saveWeight, removePortion, eatAll, move, removeItem, addPortion,
       grams, fmt, fmtWeekday, fmtDayMonth, memberById,
     };
@@ -390,7 +395,14 @@ export const ItemModal = {
         <span class="muted small">{{ MEAL_LABEL[it.meal_type] }} · {{ fmtWeekday(it.date_day) }} {{ fmtDayMonth(it.date_day) }}</span>
         <span class="muted small" v-if="it.fridge_pot_id">· в кастрюле {{ grams(it.fridge_available_g) }}</span>
       </div>
-      <div v-if="it.origin === 'auto'" class="tiny muted">✨ Предложено автопланом<template v-if="it.auto_reason">: {{ it.auto_reason }}</template>. Поправите порции или перенесёте — станет обычным блюдом.</div>
+      <div v-if="it.origin === 'auto'" class="draft-bar" style="margin: 0">
+        <span class="draft-swatch" aria-hidden="true"></span>
+        <div class="grow small">Предложено планировщиком<template v-if="it.auto_reason">: <i>{{ it.auto_reason }}</i></template>.
+          <div class="tiny muted">Поправите порции или перенесёте — станет обычным блюдом.</div></div>
+        <button class="sm ghost" :disabled="busy" @click="pinToggle" :title="it.pinned ? 'Открепить' : 'Новый подбор не заменит'">{{ it.pinned ? '📌 Открепить' : '📌 Закрепить' }}</button>
+        <button v-if="canSwap" class="sm ghost" :disabled="busy" @click="alternative">🔄 Другое</button>
+        <button class="sm primary" :disabled="busy" @click="acceptIt">✓ Принять</button>
+      </div>
 
       <div class="card flush table-wrap">
         <table class="tbl">

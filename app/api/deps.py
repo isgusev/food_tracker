@@ -191,6 +191,9 @@ def get_autoplan_service(session: SessionDep) -> AutoplanService:
         members=MemberRepository(session),
         recipes=RecipeRepository(session),
         variants=VariantRepository(session),
+        households=HouseholdRepository(session),
+        stock=StockRepository(session),
+        finance=get_finance_service(session),
     )
 
 

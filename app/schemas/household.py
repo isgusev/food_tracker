@@ -117,3 +117,42 @@ class JoinRequest(BaseModel):
     @classmethod
     def _norm(cls, v: str) -> str:
         return v.strip().upper()
+
+
+def _weekdays(v):
+    if v is None:
+        return v
+    if any(d < 0 or d > 6 for d in v):
+        raise ValueError("Дни недели — от 0 (пн) до 6 (вс)")
+    return sorted(set(v))
+
+
+class PlannerSettingsOut(BaseModel):
+    """Настройки автоплана (docs/AUTOPLAN.md, 3.3)."""
+
+    meal_types: Optional[list[str]] = None      # какие приёмы заполнять; None — все
+    no_cook_days: list[int] = []                # дни недели без готовки (0 = пн)
+    special_days: list[int] = []                # дни для «эдакого»; пусто — любой
+    max_special_per_week: int = 1
+
+
+class PlannerSettingsUpdate(BaseModel):
+    meal_types: Optional[list[str]] = None
+    no_cook_days: Optional[list[int]] = None
+    special_days: Optional[list[int]] = None
+    max_special_per_week: Optional[int] = Field(default=None, ge=0, le=7)
+
+    @field_validator("meal_types")
+    @classmethod
+    def _meals(cls, v):
+        from app.domain import MEAL_ORDER
+        if v is None:
+            return v
+        if not v or any(m not in MEAL_ORDER for m in v):
+            raise ValueError(f"meal_types — непустой список из {list(MEAL_ORDER)}")
+        return [m for m in MEAL_ORDER if m in v]
+
+    @field_validator("no_cook_days", "special_days")
+    @classmethod
+    def _days(cls, v):
+        return _weekdays(v)

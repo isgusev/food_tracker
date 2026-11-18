@@ -50,6 +50,7 @@ class MealItemCreate(BaseModel):
 class MealItemMove(BaseModel):
     date_day: Optional[date_type] = None
     meal_type: Optional[str] = None
+    pinned: Optional[bool] = None     # «📌 закреплено»: перегенерация не трогает (блюдо остаётся auto)
 
     @field_validator("meal_type")
     @classmethod
@@ -158,8 +159,9 @@ class TypicalPortion(BaseModel):
 class AutofillIn(BaseModel):
     start: date_type
     end: date_type
-    meal_types: Optional[list[str]] = None   # какие приёмы заполнять; None — все
+    meal_types: Optional[list[str]] = None   # какие приёмы заполнять; None — из настроек семьи (все)
     dry_run: bool = False
+    cook: bool = True   # false — только остатки и заготовки (без новых готовок)
 
     @field_validator("meal_types")
     @classmethod
@@ -194,9 +196,28 @@ class AutofillSuggestion(BaseModel):
     cooking_log_id: Optional[int] = None
     portions: list[AutofillPortion]
     auto_reason: str
+    # fridge — остаток в холодильнике · freezer — заготовка · cook — приготовить · continue — та же закладка
+    source: str = "fridge"
     item_id: Optional[int] = None   # id созданного блюда (не при dry_run)
 
 
 class AutofillOut(BaseModel):
     items: list[AutofillSuggestion]
+    replaced: int = 0               # сколько прежних предложений убрано (перегенерация)
     dry_run: bool = False
+
+
+class AcceptIn(BaseModel):
+    start: date_type
+    end: date_type
+
+
+    @model_validator(mode="after")
+    def _period(self):
+        if self.end < self.start:
+            raise ValueError("Конец периода раньше начала")
+        return self
+
+
+class AcceptOut(BaseModel):
+    accepted: int

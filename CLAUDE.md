@@ -84,9 +84,17 @@
   `recipe` — она в `CookingLogRepository.full_query`). Типичные порции — `GET /plan/typical-portions` (медиана съеденного
   за 90 дн. → по другим членам семьи × цель ккал → стандартная порция рецепта (выход / порций, если порций > 1) ×
   цель / 2000 → доля цели ккал на приём); форма «Добавить в план» берёт их, если на устройстве нет «как в прошлый раз».
-  `POST /plan/autofill {start, end, meal_types?, dry_run?}` — только ПУСТЫЕ ячейки, из остатков холодильника (пока
-  свежие) и заготовок, которым ≤ 14 дн.; блюдо не дважды за день; последняя порция — с допуском семьи. Веб: «🧊 Доесть
-  из холодильника» в плане, пунктир у auto-блюд, «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
+  `POST /plan/autofill {start, end, meal_types?, dry_run?, cook?}` (этап 2) — только ПУСТЫЕ ячейки: остатки холодильника
+  (пока свежие), заготовки (≤ 14 дн. — в любой день, иначе в дни «без готовки»), затем готовки по оценке (`Scoring` в
+  `autoplan.py`: давно не готовили / срок продуктов ≤ 3 дн. / общие товары / белок / цена при тугом бюджете / штраф
+  повтора); закладка — тот же приём следующих дней (`keeps_days`, выход), причина «та же закладка от …». Перегенерация
+  заменяет auto без 📌, без кастрюли и съеденного (`replaced`). `POST /plan/{id}/alternative` (🔄, следующий по оценке
+  по кругу), `POST /plan/{id}/accept`, `POST /plan/accept {start,end}`, `PATCH /plan/{id} {pinned}` (📌 не делает manual).
+  Настройки — `PlannerSettings` (`planner_settings`, миграция 0023), `GET/PATCH /household/planner`: `meal_types`,
+  `no_cook_days`, `special_days` (0 = пн), `max_special_per_week`. Веб: «✨ Предложить неделю» и ✨ у дня, панель
+  черновика («Принять всё»/«Убрать»), действия ✓ 📌 🔄 ✕ у предложения; предложения — «карандашом» (`.entry.auto`),
+  принятое — с полосой состояния (`.st-to_cook`/`.st-in_fridge`/`.st-product`); «Семья → Планировщик»
+  (`PlannerSettingsCard` в `views/misc.js`); «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
 - **Товар** (`Item`, ключ строкой `items.key`) — базовое наименование без бренда («Кефир 3,2%»); у продукта
   `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
   единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
@@ -131,8 +139,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 119 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0022)
+.venv/bin/python -m pytest -q              # 125 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0023)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -179,6 +187,9 @@
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — через `day()` в `tests/test_api.py` (он берёт `clock.today()`): с 00:00 до 03:00 МСК
   серверное UTC-«сегодня» — вчера, на CI машина в UTC. Проверка: `TZ=UTC .venv/bin/python -m pytest -q`.
+- Шаблоны Vue без браузера: `jsc -m` (JavaScriptCore, `/System/Library/Frameworks/JavaScriptCore.framework/Versions/
+  Current/Helpers/jsc`) умеет ES-модули — можно импортировать `web/js/views/*.js` и прогнать `compile()` из
+  `vue.esm-browser.prod.js` по `template` компонентов (нужен шим `document.createElement` с `innerHTML`/`children[0].getAttribute`).
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)
   требуют подтверждения Ивана.
 

@@ -20,6 +20,8 @@ async def set_kcal(client, h, member_id, kcal):
 
 
 async def autofill(client, h, start, end, **kw):
+    """Этап 1 — только приготовленное (cook=false); генерацию готовок проверяют тесты этапа 2."""
+    kw.setdefault("cook", False)
     r = await client.post("/api/v1/plan/autofill", json={"start": start, "end": end, **kw}, headers=h)
     assert r.status_code == 200, r.text
     return r.json()["items"]

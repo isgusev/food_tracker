@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.models.household import Household, HouseholdMember
+from app.models.household import Household, HouseholdMember, PlannerSettings
 from app.models.plan import MealItem
 from app.models.recipe import Recipe, RecipeCookingLog
 from app.repositories.base import BaseRepository
@@ -37,9 +37,21 @@ class HouseholdRepository(BaseRepository[Household]):
             )
 
 
+    async def planner(self, household_id: int) -> PlannerSettings | None:
+        return await self._session.get(PlannerSettings, household_id)
+
+    async def planner_or_create(self, household_id: int) -> PlannerSettings:
+        s = await self.planner(household_id)
+        if s is None:
+            s = PlannerSettings(household_id=household_id, max_special_per_week=1)
+            self._session.add(s)
+            await self._session.flush()
+        return s
+
     async def delete_by_id(self, household_id: int) -> None:
         """Удаление SQL-ом: ORM-удаление обнулило бы household_id у уже
         перенесённых членов семьи из загруженной коллекции members."""
+        await self._session.execute(delete(PlannerSettings).where(PlannerSettings.household_id == household_id))
         await self._session.execute(delete(Household).where(Household.id == household_id))
 
 

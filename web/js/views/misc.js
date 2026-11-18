@@ -2,7 +2,7 @@
 import { ref, reactive, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
 import { state, loadHousehold, loadRecipes, toast } from "../store.js";
-import { fmt, local, n } from "../util.js";
+import { MEALS, fmt, local, n } from "../util.js";
 
 export const LoginView = {
   emits: ["done"],
@@ -181,8 +181,67 @@ const MemberCard = {
     </div>`,
 };
 
+
+// «Семья → Планировщик»: настройки автоплана (docs/AUTOPLAN.md, 3.3)
+const PlannerSettingsCard = {
+  setup() {
+    const days = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+    const meals = MEALS;
+    const s = reactive({ meal_types: null, no_cook_days: [], special_days: [], max_special_per_week: 1 });
+    const saved = ref("");
+    const busy = ref(false);
+    const snapshot = () => JSON.stringify(s);
+    onMounted(async () => {
+      try { Object.assign(s, await api.get("/household/planner")); saved.value = snapshot(); } catch (e) { toast(e.message, "error"); }
+    });
+    const mealOn = (k) => !s.meal_types || s.meal_types.includes(k);
+    function toggleMeal(k) {
+      const cur = s.meal_types || meals.map((m) => m.key);
+      const next = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+      if (!next.length) return;   // хотя бы один приём
+      s.meal_types = next.length === meals.length ? null : meals.map((m) => m.key).filter((x) => next.includes(x));
+    }
+    function toggleDay(list, i) {
+      s[list] = s[list].includes(i) ? s[list].filter((x) => x !== i) : [...s[list], i].sort();
+    }
+    async function save() {
+      busy.value = true;
+      try { Object.assign(s, await api.patch("/household/planner", { ...s })); saved.value = snapshot(); toast("Настройки планировщика сохранены"); }
+      catch (e) { toast(e.message, "error"); } finally { busy.value = false; }
+    }
+    const dirty = computed(() => saved.value && saved.value !== snapshot());
+    return { s, days, meals, mealOn, toggleMeal, toggleDay, save, busy, dirty };
+  },
+  template: `
+    <div class="card stack">
+      <h3>Планировщик</h3>
+      <div class="tiny muted">Для кнопки «✨ Предложить» в плане: что заполнять и когда не готовить.</div>
+      <div class="stack tight">
+        <span class="small">Какие приёмы пищи заполнять</span>
+        <div class="row tight">
+          <button v-for="m in meals" :key="m.key" class="sm chip" :class="{ on: mealOn(m.key) }" :aria-pressed="mealOn(m.key)" @click="toggleMeal(m.key)">{{ m.label }}</button>
+        </div>
+      </div>
+      <div class="stack tight">
+        <span class="small">Дни без готовки <span class="muted">— только остатки и заготовки из морозилки</span></span>
+        <div class="row tight">
+          <button v-for="(d, i) in days" :key="i" class="sm chip" :class="{ on: s.no_cook_days.includes(i) }" :aria-pressed="s.no_cook_days.includes(i)" @click="toggleDay('no_cook_days', i)">{{ d }}</button>
+        </div>
+      </div>
+      <div class="stack tight">
+        <span class="small">Дни для особых блюд <span class="muted">— не выбраны: в любой день</span></span>
+        <div class="row tight">
+          <button v-for="(d, i) in days" :key="i" class="sm chip" :class="{ on: s.special_days.includes(i) }" :aria-pressed="s.special_days.includes(i)" @click="toggleDay('special_days', i)">{{ d }}</button>
+        </div>
+      </div>
+      <label class="row small">Особых блюд в неделю, не больше
+        <input type="number" min="0" max="7" v-model.number="s.max_special_per_week" style="width: 70px"></label>
+      <div class="row"><button class="sm primary" :disabled="busy || !dirty" @click="save">Сохранить</button></div>
+    </div>`,
+};
+
 export const FamilyView = {
-  components: { MemberCard },
+  components: { MemberCard, PlannerSettingsCard },
   emits: ["logout"],
   setup() {
     const hhName = ref(state.household?.name || "");
@@ -293,6 +352,8 @@ export const FamilyView = {
           недобора в эти проценты (400 г при пачке 360 г — одна пачка). 0 — строго по плану.
         </div>
       </div>
+
+      <PlannerSettingsCard />
 
       <h2>Кто ест</h2>
       <MemberCard v-for="m in state.household.members" :key="m.id" :member="m" />
