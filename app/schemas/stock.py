@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,10 @@ class Inventory(BaseModel):
 class ItemFlags(BaseModel):
     is_staple: Optional[bool] = None
     is_low: Optional[bool] = None
+    # «Обычно берём»: auto — по статистике, always — всегда предлагать, never — не предлагать
+    regular: Optional[Literal["auto", "always", "never"]] = None
+    regular_qty: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("99999"))   # своё кол-во в неделю; 0 — сбросить
+    is_snack: Optional[bool] = None
 
 
 class LotResponse(BaseModel):
@@ -64,6 +68,9 @@ class StockItem(BaseModel):
     is_staple: bool
     is_low: bool
     needs_check: bool
+    regular: str = "auto"
+    regular_qty: Optional[Decimal] = None
+    is_snack: bool = False
     lots: list[LotResponse]
 
 
@@ -205,3 +212,32 @@ class MarkParsed(BaseModel):
     product_id: Optional[int] = None         # товар справочника с этим штрихкодом
     product_name: Optional[str] = None
     already_registered: bool = False         # эта пачка уже в запасах
+
+
+class RegularItem(BaseModel):
+    """«Обычно берём»: товар, который покупают почти каждую неделю (docs/AUTOPLAN.md, 5)."""
+
+    item_key: str
+    product_id: int                 # обычный бренд (последняя покупка)
+    name: str
+    unit: str
+    weekly: Decimal                 # сколько в неделю (медиана или своё)
+    to_buy: Decimal                 # на период минус запасы и то, что уже в списке
+    package_amount: Optional[Decimal] = None
+    package_count: Optional[int] = None
+    weeks_bought: int               # из скольких последних недель покупали
+    weeks: int = 8
+    always: bool = False            # «всегда предлагать»
+    is_snack: bool = False
+    est_price: Optional[Decimal] = None
+
+
+class SnackQuota(BaseModel):
+    spent: Decimal = Decimal("0")   # потрачено на снеки за неделю (с понедельника)
+    quota: Optional[Decimal] = None # квота ₽/неделю; None — не задана
+    hidden: int = 0                 # снеков не предложено: квота кончилась
+
+
+class RegularOut(BaseModel):
+    items: list[RegularItem]
+    snacks: SnackQuota

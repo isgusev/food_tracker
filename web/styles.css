@@ -440,3 +440,18 @@ table.tbl { width: 100%; border-collapse: collapse; }
 /* Переключатели-«фишки» (настройки планировщика) */
 button.chip { border-radius: 99px; }
 button.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* «Обычно берём» в покупках — предложение «карандашом», как черновик плана */
+.regular {
+  margin-bottom: 14px; padding: 8px 12px 10px; border: 1px dashed var(--graphite); border-radius: var(--radius);
+  background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--graphite-soft) 6px 7px), var(--surface);
+}
+.regular-head { display: flex; align-items: center; gap: 8px; }
+.regular-toggle { padding: 4px 6px; gap: 8px; }
+.draft-swatch.sm { width: 18px; height: 18px; border-radius: 5px; }
+.regular-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px; }
+.regular-row + .regular-row { border-top: 1px solid var(--border); }
+.regular .reason { font-style: italic; color: var(--graphite); }
+.quota { display: flex; flex-direction: column; gap: 4px; padding: 6px 2px 8px; }
+.quota .meter > i { background: var(--graphite); }
+.quota.over .meter > i { background: var(--danger); }

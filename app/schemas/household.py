@@ -134,6 +134,8 @@ class PlannerSettingsOut(BaseModel):
     no_cook_days: list[int] = []                # дни недели без готовки (0 = пн)
     special_days: list[int] = []                # дни для «эдакого»; пусто — любой
     max_special_per_week: int = 1
+    snack_categories: list[int] = []            # категории продуктов «снеки и сладкое»
+    snack_quota: Optional[Decimal] = None       # квота на снеки, ₽ в неделю; None — без квоты
 
 
 class PlannerSettingsUpdate(BaseModel):
@@ -141,6 +143,8 @@ class PlannerSettingsUpdate(BaseModel):
     no_cook_days: Optional[list[int]] = None
     special_days: Optional[list[int]] = None
     max_special_per_week: Optional[int] = Field(default=None, ge=0, le=7)
+    snack_categories: Optional[list[int]] = None
+    snack_quota: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("9999999"))   # 0 или null — без квоты
 
     @field_validator("meal_types")
     @classmethod

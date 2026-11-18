@@ -187,7 +187,10 @@ const PlannerSettingsCard = {
   setup() {
     const days = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
     const meals = MEALS;
-    const s = reactive({ meal_types: null, no_cook_days: [], special_days: [], max_special_per_week: 1 });
+    const s = reactive({ meal_types: null, no_cook_days: [], special_days: [], max_special_per_week: 1, snack_categories: [], snack_quota: null });
+    const cats = ref([]);
+    onMounted(() => api.get("/products/categories").then((r) => { cats.value = r; }).catch(() => {}));
+    const toggleCat = (id) => { s.snack_categories = s.snack_categories.includes(id) ? s.snack_categories.filter((x) => x !== id) : [...s.snack_categories, id]; };
     const saved = ref("");
     const busy = ref(false);
     const snapshot = () => JSON.stringify(s);
@@ -206,11 +209,12 @@ const PlannerSettingsCard = {
     }
     async function save() {
       busy.value = true;
-      try { Object.assign(s, await api.patch("/household/planner", { ...s })); saved.value = snapshot(); toast("Настройки планировщика сохранены"); }
+      const body = { ...s, snack_quota: s.snack_quota === "" || s.snack_quota == null ? null : Number(s.snack_quota) };
+      try { Object.assign(s, await api.patch("/household/planner", body)); saved.value = snapshot(); toast("Настройки планировщика сохранены"); }
       catch (e) { toast(e.message, "error"); } finally { busy.value = false; }
     }
     const dirty = computed(() => saved.value && saved.value !== snapshot());
-    return { s, days, meals, mealOn, toggleMeal, toggleDay, save, busy, dirty };
+    return { s, days, meals, mealOn, toggleMeal, toggleDay, save, busy, dirty, cats, toggleCat };
   },
   template: `
     <div class="card stack">
@@ -236,6 +240,15 @@ const PlannerSettingsCard = {
       </div>
       <label class="row small">Особых блюд в неделю, не больше
         <input type="number" min="0" max="7" v-model.number="s.max_special_per_week" style="width: 70px"></label>
+      <div class="stack tight">
+        <span class="small">Снеки и сладкое <span class="muted">— категории продуктов; в «Покупках» и «Деньгах» видно, сколько ушло</span></span>
+        <div class="row tight" v-if="cats.length">
+          <button v-for="c in cats" :key="c.id" class="sm chip" :class="{ on: s.snack_categories.includes(c.id) }" :aria-pressed="s.snack_categories.includes(c.id)" @click="toggleCat(c.id)">{{ c.name }}</button>
+        </div>
+        <label class="row small">Квота в неделю
+          <input type="number" min="0" step="50" v-model="s.snack_quota" style="width: 100px" placeholder="без квоты"> ₽</label>
+        <span class="tiny muted">Сверх квоты снеки не попадают в «Обычно берём». Отдельный товар можно отметить снеком в его карточке в запасах.</span>
+      </div>
       <div class="row"><button class="sm primary" :disabled="busy || !dirty" @click="save">Сохранить</button></div>
     </div>`,
 };

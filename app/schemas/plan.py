@@ -192,11 +192,13 @@ class AutofillSuggestion(BaseModel):
     date_day: date_type
     meal_type: str
     recipe_id: Optional[int] = None
+    variant_id: Optional[int] = None    # регулярный готовый продукт (этап 3)
     name: str
     cooking_log_id: Optional[int] = None
     portions: list[AutofillPortion]
     auto_reason: str
-    # fridge — остаток в холодильнике · freezer — заготовка · cook — приготовить · continue — та же закладка
+    # fridge — остаток в холодильнике · freezer — заготовка · cook — приготовить · continue — та же закладка ·
+    # regular — обычный готовый продукт в пустой ячейке · side — он же к предложенному блюду
     source: str = "fridge"
     item_id: Optional[int] = None   # id созданного блюда (не при dry_run)
 

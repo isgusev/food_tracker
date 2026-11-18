@@ -274,7 +274,14 @@ class FinanceService:
             monthly_budget=household.monthly_budget,
             planned_to_buy=money(planned),
             planned_unknown=unknown,
+            snack_spent=money(await self._stock.snack_spent(household_id, start, end)),
+            snack_quota=await self._snack_quota(household_id),
         )
+
+    async def _snack_quota(self, household_id: int) -> Decimal | None:
+        from app.models.household import PlannerSettings
+        s = await self._s.get(PlannerSettings, household_id)
+        return s.snack_quota if s is not None else None
 
     async def set_budget(self, household_id: int, value: Decimal | None) -> None:
         household = await self._s.get(Household, household_id)

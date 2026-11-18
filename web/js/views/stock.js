@@ -153,7 +153,13 @@ const ItemModal = {
     }
     // ближайший срок — сверху: так же холодильник и списывает
     const lotsByExpiry = computed(() => [...it.value.lots].sort((x, y) => (x.expires_on || "9999").localeCompare(y.expires_on || "9999") || x.id - y.id));
-    return { it, actual, woQty, woNote, history, busy, inventory, writeOff, flags, splitting, onSplit, lotsByExpiry, todayIso: today(), fmt, fmtQty, fmtDayMonth, fmtDateTime, REASON, UNIT_LABEL, n };
+    const regQty = ref(props.item.regular_qty == null ? "" : n(props.item.regular_qty));
+    const REGULAR = [
+      { key: "auto", label: "Как обычно", msg: "Решает статистика покупок" },
+      { key: "always", label: "Всегда предлагать", msg: "Будем предлагать каждую неделю" },
+      { key: "never", label: "Не предлагать", msg: "Больше не предлагаем" },
+    ];
+    return { regQty, REGULAR, it, actual, woQty, woNote, history, busy, inventory, writeOff, flags, splitting, onSplit, lotsByExpiry, todayIso: today(), fmt, fmtQty, fmtDayMonth, fmtDateTime, REASON, UNIT_LABEL, n };
   },
   template: `
     <Modal :title="it.name" wide @close="$emit('close')">
@@ -194,6 +200,23 @@ const ItemModal = {
         <button class="sm" :disabled="busy" @click="flags({ is_staple: !it.is_staple }, it.is_staple ? 'Снова учитываем остаток' : 'Теперь базовый')">{{ it.is_staple ? 'Учитывать остаток' : 'Сделать базовым' }}</button>
         <button v-if="it.is_staple" class="sm" :disabled="busy" @click="flags({ is_low: !it.is_low }, it.is_low ? 'Отметка снята' : 'Добавится в покупки')">{{ it.is_low ? 'Хватает' : 'Заканчивается' }}</button>
         <span class="tiny muted">Базовые (соль, масло, специи) не считаются по граммам — в покупки попадают по отметке «заканчивается».</span>
+      </div>
+
+      <div class="card stack" v-if="!it.is_staple">
+        <h3>Обычно берём</h3>
+        <div class="row tight">
+          <button v-for="o in REGULAR" :key="o.key" class="sm chip" :class="{ on: it.regular === o.key }" :aria-pressed="it.regular === o.key"
+                  :disabled="busy" @click="flags({ regular: o.key }, o.msg)">{{ o.label }}</button>
+        </div>
+        <div class="row">
+          <span class="small">В неделю</span>
+          <input type="number" min="0" step="any" v-model="regQty" style="width: 100px" :placeholder="'как обычно'">
+          <span class="muted small">{{ UNIT_LABEL[it.unit] }}</span>
+          <button class="sm" :disabled="busy || n(regQty) === n(it.regular_qty)" @click="flags({ regular_qty: regQty === '' ? null : n(regQty) }, 'Количество сохранено')">Сохранить</button>
+        </div>
+        <label class="row small"><input type="checkbox" :checked="it.is_snack" :disabled="busy"
+               @change="flags({ is_snack: $event.target.checked }, $event.target.checked ? 'Считаем в квоту снеков' : 'Не снек')"> Снек или сладкое — считать в квоту</label>
+        <span class="tiny muted">«Как обычно» — по покупкам: брали в 4 из 8 последних недель — предложим в «Покупках». Пусто в «В неделю» — медиана покупок.</span>
       </div>
 
       <SplitLotModal v-if="splitting" :lot="splitting" :unit="it.unit" @close="splitting = null" @saved="onSplit" />

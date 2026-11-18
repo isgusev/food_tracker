@@ -13,6 +13,7 @@ from app.schemas.stock import (
     LineCheck,
     LineUpdate,
     ListGenerate,
+    RegularOut,
     ShoppingListOut,
     ShoppingPreview,
 )
@@ -30,6 +31,18 @@ async def preview(
     """Что купить на период: потребность плана минус свободные запасы (без сохранения)."""
     items = await service.to_buy(me.household_id, start_date, end_date, clock.today())
     return ShoppingPreview(start_date=start_date, end_date=end_date, items=items)
+
+
+@router.get("/shopping-list/regular", response_model=RegularOut)
+async def regular(
+    service: StockServiceDep,
+    me: CurrentMemberDep,
+    start_date: dt.date = Query(),
+    end_date: dt.date = Query(),
+):
+    """«Обычно берём»: товары, купленные в ≥ 4 из 8 последних недель (или «всегда»), минус запасы и то,
+    что уже в списке; снеки — в пределах квоты недели. Только предложение — добавляют строкой списка."""
+    return await service.regular(me.household_id, start_date, end_date, clock.today())
 
 
 @router.get("/shopping-lists/active", response_model=ShoppingListOut | None)

@@ -49,6 +49,12 @@ class HouseholdProduct(Base):
     is_low = Column(Boolean, default=False, nullable=False)
     # Списание не нашло остатка — учёт, похоже, разошёлся с реальностью
     needs_check = Column(Boolean, default=False, nullable=False)
+    # «Обычно берём» (docs/AUTOPLAN.md, 3.6): auto — по статистике покупок, always — всегда предлагать,
+    # never — не предлагать (и не ставить в план); regular_qty — своё количество в неделю
+    regular = Column(String(8), default="auto", nullable=False, server_default="auto")
+    regular_qty = Column(Numeric(9, 1), nullable=True)
+    # Снек/сладкое — в квоту, даже если категория продукта не отмечена у семьи
+    is_snack = Column(Boolean, default=False, nullable=False, server_default="false")
 
 
 class StockLot(Base):
