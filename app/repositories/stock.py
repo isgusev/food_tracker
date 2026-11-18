@@ -123,6 +123,37 @@ class StockRepository(BaseRepository[StockLot]):
             out[pid] = out.get(pid, Decimal("0")) + Decimal(str(remaining))
         return out
 
+    async def priced_lots(self, household_id: int) -> list[StockLot]:
+        """Партии с ценой — свежие первыми (последняя цена товара)."""
+        stmt = (
+            select(StockLot)
+            .where(StockLot.household_id == household_id, StockLot.price.isnot(None))
+            .options(joinedload(StockLot.product))
+            .order_by(StockLot.purchased_on.desc(), StockLot.id.desc())
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def cook_movements(self, pot_ids: list[int]) -> list[StockMovement]:
+        """Списания на готовку кастрюль — с партиями (для стоимости кастрюли)."""
+        if not pot_ids:
+            return []
+        stmt = (
+            select(StockMovement)
+            .where(StockMovement.pot_id.in_(pot_ids), StockMovement.reason == "cook")
+            .options(joinedload(StockMovement.lot))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def outgoing_between(self, household_id: int, t0, t1) -> list[StockMovement]:
+        """Расход (delta < 0) за полуинтервал UTC [t0, t1) — с партией и продуктом."""
+        stmt = (
+            select(StockMovement)
+            .where(StockMovement.household_id == household_id, StockMovement.created_at >= t0,
+                   StockMovement.created_at < t1, StockMovement.delta < 0)
+            .options(joinedload(StockMovement.lot).joinedload(StockLot.product))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
     async def purchases_between(self, household_id: int, start: date, end: date) -> list[StockLot]:
         """Покупки (партии purchase/manual, в т. ч. из чеков) за дни start…end — с продуктом и категорией."""
         stmt = (
@@ -132,11 +163,6 @@ class StockRepository(BaseRepository[StockLot]):
             .order_by(StockLot.purchased_on, StockLot.id)
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
-
-    async def planner(self, household_id: int):
-        """Настройки планировщика семьи (снеки и квота) — None, если не заданы."""
-        from app.models.household import PlannerSettings
-        return await self._session.get(PlannerSettings, household_id)
 
     async def spent_between(self, household_id: int, start: date, end: date) -> Decimal:
         """Сколько потрачено на покупки (партии с ценой) за дни start…end."""

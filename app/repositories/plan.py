@@ -127,6 +127,17 @@ class PlanRepository(BaseRepository[MealItem]):
         )
         return {int(r): d for r, d in (await self._session.execute(stmt)).all() if d is not None}
 
+    async def eaten_from_pots(self, pot_ids: list[int]) -> dict[int, Decimal]:
+        """Сколько съедено из каждой кастрюли (Σ съеденных порций) — одним запросом."""
+        if not pot_ids:
+            return {}
+        stmt = (
+            select(MealPortion.eaten_from_pot_id, func.sum(MealPortion.weight_g))
+            .where(MealPortion.eaten_from_pot_id.in_(pot_ids), MealPortion.is_eaten.is_(True))
+            .group_by(MealPortion.eaten_from_pot_id)
+        )
+        return {int(p): Decimal(str(t or 0)) for p, t in (await self._session.execute(stmt)).all()}
+
     async def reserved_by_pot(self, household_id: int) -> dict[int, Decimal]:
         """Резерв по кастрюлям: Σ несъеденных порций привязанных блюд (один запрос)."""
         stmt = (

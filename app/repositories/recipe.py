@@ -50,6 +50,13 @@ class RecipeRepository(BaseRepository[Recipe]):
             stmt = stmt.where(Recipe.household_id == household_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
+    async def get_many_full(self, ids: set[int]) -> dict[int, Recipe]:
+        """Несколько рецептов с составом одним запросом."""
+        if not ids:
+            return {}
+        stmt = self.full_query().where(Recipe.id.in_(ids))
+        return {r.id: r for r in (await self._session.execute(stmt)).unique().scalars().all()}
+
     async def list_full(
         self, household_id: int | None = None, limit: int = 100, offset: int = 0
     ) -> list[Recipe]:
@@ -127,6 +134,21 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             .order_by(RecipeCookingLog.cooked_at, RecipeCookingLog.id)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+    async def of_household(self, household_id: int) -> list[RecipeCookingLog]:
+        """Все кастрюли семьи (и закончившиеся) — без связей."""
+        stmt = select(RecipeCookingLog).where(RecipeCookingLog.household_id == household_id)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def discarded_between(self, household_id: int, t0, t1) -> list[RecipeCookingLog]:
+        """Выброшенные кастрюли, приготовленные в полуинтервале UTC [t0, t1) — с рецептом."""
+        stmt = (
+            select(RecipeCookingLog)
+            .where(RecipeCookingLog.household_id == household_id, RecipeCookingLog.is_discarded.is_(True),
+                   RecipeCookingLog.cooked_at >= t0, RecipeCookingLog.cooked_at < t1)
+            .options(joinedload(RecipeCookingLog.recipe))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def last_cooked(self, household_id: int) -> dict:
         """Последняя готовка каждого рецепта семьи — местный день."""

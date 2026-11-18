@@ -36,6 +36,8 @@ from app.services.items import ItemService
 from app.services.autoplan import AutoplanService
 from app.services.plan import PlanService
 from app.services.finance import FinanceService
+from app.services.regular import RegularService
+from app.services.shopping import ShoppingService
 from app.services.stock import StockService
 from app.services.product import ProductService
 from app.services.receipt import ReceiptService
@@ -138,11 +140,23 @@ def get_product_service(session: SessionDep) -> ProductService:
 
 
 def get_stock_service(session: SessionDep) -> StockService:
-    return StockService(
+    return StockService(stock=StockRepository(session))
+
+
+def get_shopping_service(session: SessionDep) -> ShoppingService:
+    return ShoppingService(
         stock=StockRepository(session),
         lists=ShoppingListRepository(session),
         plan=PlanRepository(session),
         recipes=RecipeRepository(session),
+        stock_service=get_stock_service(session),
+    )
+
+
+def get_regular_service(session: SessionDep) -> RegularService:
+    return RegularService(
+        stock=StockRepository(session), lists=ShoppingListRepository(session),
+        households=HouseholdRepository(session), shopping=get_shopping_service(session),
     )
 
 
@@ -172,10 +186,13 @@ ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
 def get_finance_service(session: SessionDep) -> FinanceService:
     return FinanceService(
-        session=session,
         stock_repo=StockRepository(session),
+        cooking_logs=CookingLogRepository(session),
+        plan=PlanRepository(session),
+        households=HouseholdRepository(session),
         recipes=RecipeRepository(session),
-        stock=get_stock_service(session),
+        shopping=get_shopping_service(session),
+        regular=get_regular_service(session),
     )
 
 
@@ -198,6 +215,8 @@ def get_autoplan_service(session: SessionDep) -> AutoplanService:
 AutoplanServiceDep = Annotated[AutoplanService, Depends(get_autoplan_service)]
 FinanceServiceDep = Annotated[FinanceService, Depends(get_finance_service)]
 StockServiceDep = Annotated[StockService, Depends(get_stock_service)]
+ShoppingServiceDep = Annotated[ShoppingService, Depends(get_shopping_service)]
+RegularServiceDep = Annotated[RegularService, Depends(get_regular_service)]
 
 
 def get_receipt_service(session: SessionDep) -> ReceiptService:
@@ -207,6 +226,7 @@ def get_receipt_service(session: SessionDep) -> ReceiptService:
         lists=ShoppingListRepository(session),
         stock_repo=StockRepository(session),
         stock=get_stock_service(session),
+        shopping=get_shopping_service(session),
     )
 
 
