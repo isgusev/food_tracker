@@ -4,11 +4,8 @@ from __future__ import annotations
 
 
 import pytest
+from tests.helpers import day, me_id, plan, product, recipe, register_and_login, set_kcal, suggest
 
-from tests.test_api import day, register_and_login
-from tests.test_autoplan import set_kcal
-from tests.test_autoplan2 import product, recipe, suggest
-from tests.test_plan import me_id, plan
 
 pytestmark = pytest.mark.anyio
 

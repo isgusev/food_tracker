@@ -9,43 +9,20 @@ import pytest
 
 from app.core import clock
 from app.services.autoplan import Scoring, _Board
-from tests.test_api import build_recipe_stack, day, register_and_login
-from tests.test_autoplan import set_kcal
-from tests.test_plan import get_item, me_id, plan
+from tests.helpers import (
+    build_recipe_stack,
+    day,
+    get_item,
+    me_id,
+    plan,
+    product,
+    recipe,
+    register_and_login,
+    set_kcal,
+    suggest,
+)
 
 pytestmark = pytest.mark.anyio
-
-
-async def product(client, h, name, kcal=40, p=1.0, f=0.5, c=8.0, cat="Овощи") -> tuple[int, int]:
-    """(product_id, variant_id)."""
-    cats = (await client.get("/api/v1/products/categories", headers=h)).json()
-    cat_id = next((x["id"] for x in cats if x["name"] == cat), None)
-    if cat_id is None:
-        cat_id = (await client.post("/api/v1/products/categories", json={"name": cat}, headers=h)).json()["id"]
-    r = await client.post("/api/v1/products/", headers=h, json={
-        "name": name, "category_id": cat_id, "brand_name": "Без бренда",
-        "base_variant": {"manufacturer_name": "Без бренда", "calories": kcal, "proteins": p, "fats": f, "carbs": c}})
-    assert r.status_code == 201, r.text
-    return r.json()["id"], r.json()["manufacturers"][0]["variants"][0]["id"]
-
-
-async def recipe(client, h, name, vid, *, cooked=2000, servings=4, **fields) -> int:
-    cats = (await client.get("/api/v1/recipes/categories", headers=h)).json()
-    cat_id = cats[0]["id"]
-    r = await client.post("/api/v1/recipes/", headers=h, json={
-        "name": name, "recipe_category_id": cat_id, "estimated_cooked_weight": cooked,
-        "default_servings": servings, "ingredients": [{"variant_id": vid, "weight_g": cooked}]})
-    assert r.status_code == 201, r.text
-    rid = r.json()["id"]
-    if fields:
-        assert (await client.patch(f"/api/v1/recipes/{rid}", json=fields, headers=h)).status_code == 200
-    return rid
-
-
-async def suggest(client, h, start, end, **kw) -> dict:
-    r = await client.post("/api/v1/plan/autofill", json={"start": start, "end": end, **kw}, headers=h)
-    assert r.status_code == 200, r.text
-    return r.json()
 
 
 async def items_in(client, h, start, end) -> list[dict]:

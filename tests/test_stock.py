@@ -3,30 +3,27 @@ from __future__ import annotations
 
 
 import pytest
+from tests.helpers import (
+    add_lot,
+    build_recipe_stack,
+    cook,
+    create_ready_product,
+    day,
+    me_id,
+    plan,
+    product_of_variant,
+    register_and_login,
+    TODAY,
+)
 
-from tests.test_api import TODAY, build_recipe_stack, cook, create_ready_product, day, register_and_login
-from tests.test_plan import me_id, plan
 
 pytestmark = pytest.mark.anyio
-
-
-async def product_of_variant(client, h, variant_id) -> dict:
-    for p in (await client.get("/api/v1/products/", params={"limit": 2000}, headers=h)).json():
-        for m in p["manufacturers"]:
-            if any(v["id"] == variant_id for v in m["variants"]):
-                return p
-    raise AssertionError("product not found")
 
 
 async def stock(client, h) -> dict[str, dict]:
     r = await client.get("/api/v1/stock", headers=h)
     assert r.status_code == 200, r.text
     return {i["name"]: i for i in r.json()}
-
-
-async def add_lot(client, h, product_id, qty, **extra):
-    r = await client.post("/api/v1/stock/lots", json={"product_id": product_id, "quantity": qty, **extra}, headers=h)
-    assert r.status_code == 201, r.text
 
 
 async def preview(client, h, start=TODAY, end=None) -> dict[str, dict]:

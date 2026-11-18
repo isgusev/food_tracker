@@ -9,7 +9,7 @@ import pytest
 
 from app.services import barcode as off
 from app.services.nutrition import calc_targets
-from tests.test_api import register_and_login
+from tests.helpers import register_and_login
 
 pytestmark = pytest.mark.anyio
 
