@@ -1,6 +1,7 @@
 // План семьи: добавление блюда с порциями по людям и карточка блюда (кто что съел).
 import { ref, computed, watch } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Modal, Picker, Macros } from "../components.js";
 import { ProductFinder, OffDraftCard, saveDraft, draftError, activeVariantOf } from "../product-finder.js";
 import {
@@ -327,28 +328,15 @@ export const ItemModal = {
     const weights = ref({});
     const resetWeights = () => { weights.value = Object.fromEntries(it.value.portions.map((p) => [p.id, n(p.weight_g)])); };
     resetWeights();
-    const busy = ref(false);
-    const error = ref("");
     const moveDate = ref(it.value.date_day);
     const moveMeal = ref(it.value.meal_type);
     const addWho = ref("");
     const addWeight = ref(n(it.value.portions[0]?.weight_g) || 200);
 
-    async function run(fn, msg) {
-      error.value = "";
-      busy.value = true;
-      try {
-        const res = await fn();
-        if (res) { it.value = res; resetWeights(); }
-        if (msg) toast(msg);
-        emit("changed", res || null);
-        return res;
-      } catch (e) {
-        error.value = e.message;
-      } finally {
-        busy.value = false;
-      }
-    }
+    const { busy, error, run } = useAction({
+      inline: true,
+      done: (res) => { if (res) { it.value = res; resetWeights(); } emit("changed", res || null); },
+    });
     const changed = (p) => n(weights.value[p.id]) !== n(p.weight_g);
     const eat = (p) => run(() => api.post(`/plan/portions/${p.id}/eat`, { weight_g: n(weights.value[p.id]) }), `${p.member_name || "Гость"}: съедено`);
     const uneat = (p) => run(() => api.post(`/plan/portions/${p.id}/uneat`), "Отметка снята");

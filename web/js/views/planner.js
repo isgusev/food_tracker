@@ -1,6 +1,7 @@
 // План семьи на неделю и детальный день (личные КБЖУ выбранного члена семьи).
 import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Macros, MacroMeters, Modal } from "../components.js";
 import {
   state, ensureCatalog, toast, toastError, activeMembers, members, viewMember, setViewMember,
@@ -170,9 +171,7 @@ export const PlannerView = {
 
     const drafts = computed(() => items.value.filter((it) => it.origin === "auto"));
     const loose = computed(() => drafts.value.filter((it) => !it.pinned && !it.cooking_log_id && !it.portions.some((p) => p.is_eaten)));
-    async function act(fn, msg) {
-      try { await fn(); if (msg) toast(msg); await load(); } catch (e) { toastError(e); }
-    }
+    const { run: act } = useAction({ done: () => load() });
     const acceptAll = () => act(() => api.post("/plan/accept", { start: weekStart.value, end: weekEnd.value }), "Предложения приняты — теперь это обычный план");
     async function clearDrafts() {
       if (!confirm(`Убрать предложения без 📌 (${loose.value.length})?`)) return;

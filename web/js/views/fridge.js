@@ -1,6 +1,7 @@
 // Холодильник: приготовленные блюда (кастрюли), их остатки, резерв под планы и архив.
 import { ref, computed, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Modal, Picker, Macros } from "../components.js";
 import { IngredientsEditor, resolveDraftIngredients } from "../product-finder.js";
 import { state, ensureCatalog, recipeById, toast, toastError, variantIndex } from "../store.js";
@@ -103,16 +104,9 @@ const PotModal = {
     const remaining = ref(n(props.pot.current_remaining_weight));
     const ingredients = ref(props.pot.actual_ingredients.map((i) => ({ variant_id: i.variant_id, weight_g: n(i.weight_g) })));
     const editIngr = ref(false);
-    const busy = ref(false);
-    const error = ref("");
     const confirmDelete = ref(null);
 
-    async function run(fn, msg) {
-      error.value = ""; busy.value = true;
-      try { await fn(); if (msg) toast(msg); emit("saved"); }
-      catch (e) { error.value = e.message; }
-      finally { busy.value = false; }
-    }
+    const { busy, error, run } = useAction({ inline: true, done: () => emit("saved") });
     const saveRemaining = () => run(
       () => api.patch(`/recipes/cooking-logs/${props.pot.id}`, { current_remaining_weight: n(remaining.value) }),
       n(remaining.value) < n(props.pot.planned_g)

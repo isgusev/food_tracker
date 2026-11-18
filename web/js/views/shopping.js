@@ -2,6 +2,7 @@
 // «куплено» сразу кладёт товар в запасы; второй телефон видит отметки.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Modal } from "../components.js";
 import { ReceiptModal } from "../receipts.js";
 import { ProductFinder, OffDraftCard, saveDraft, draftError } from "../product-finder.js";
@@ -301,9 +302,7 @@ export const ShoppingView = {
     const bought = computed(() => (lst.value?.lines || []).filter((l) => l.is_checked));
     const spent = computed(() => bought.value.reduce((s, l) => s + n(l.price), 0));
 
-    async function act(fn) {
-      try { lst.value = await fn(); } catch (e) { toastError(e); }
-    }
+    const { run: act } = useAction({ done: (res) => { lst.value = res; } });
 
     // Офлайн-очередь отметок: в магазине без сети отметка ставится сразу,
     // а на сервер уходит, когда связь вернётся

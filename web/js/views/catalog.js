@@ -1,6 +1,7 @@
 // Справочник продуктов: КБЖУ с версиями по производителям.
 import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Modal, Macros, BarcodeScanner, KbjuInputs } from "../components.js";
 import { state, ensureCatalog, loadProducts, categoryName, variantIndex, toast, toastError } from "../store.js";
 import { fmt, fuzzyScore, local, matches, n, packagesLabel } from "../util.js";
@@ -56,8 +57,6 @@ const ProductModal = {
   emits: ["close", "saved"],
   setup(props, { emit }) {
     const adding = ref(null); // { manufacturer_name, kbju }
-    const busy = ref(false);
-    const error = ref("");
     const p = computed(() => state.products.find((x) => x.id === props.product.id) || props.product);
     function startAdd(m) {
       const active = m?.variants.find((v) => v.is_active) || {};
@@ -67,11 +66,10 @@ const ProductModal = {
         kbju: { calories: n(active.calories), proteins: n(active.proteins), fats: n(active.fats), carbs: n(active.carbs) },
       };
     }
-    async function run(fn, msg) {
-      error.value = ""; busy.value = true;
-      try { await fn(); await loadProducts(); toast(msg); adding.value = null; }
-      catch (e) { error.value = e.message; } finally { busy.value = false; }
-    }
+    const { busy, error, run } = useAction({
+      inline: true,
+      done: async () => { await loadProducts(); adding.value = null; },
+    });
     const saveVariant = () => run(() => api.post(`/products/${p.value.id}/variants`, {
       manufacturer_name: adding.value.manufacturer_name.trim() || null,
       calories: n(adding.value.kbju.calories), proteins: n(adding.value.kbju.proteins),

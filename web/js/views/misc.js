@@ -1,6 +1,7 @@
 // Вход/регистрация и страница «Семья» (члены семьи, цели КБЖУ, приглашение, тема).
 import { ref, reactive, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { state, loadHousehold, loadRecipes, toast } from "../store.js";
 import { MEALS, fmt, local, n } from "../util.js";
 
@@ -260,7 +261,6 @@ export const FamilyView = {
     const hhName = ref(state.household?.name || "");
     const newMember = reactive({ name: "", calories: "" });
     const joinCode = ref("");
-    const busy = ref(false);
     const theme = ref(local.get("ft.theme", "auto"));
     watch(() => state.household?.name, (v) => { hhName.value = v || ""; });
     // Допуск кастрюли и упаковок, %
@@ -288,12 +288,7 @@ export const FamilyView = {
       try { await navigator.clipboard.writeText(inviteLink(inv.code)); toast("Ссылка скопирована"); } catch { toast(inv.code); }
     }
 
-    async function run(fn, msg) {
-      busy.value = true;
-      try { state.household = await fn(); if (msg) toast(msg); }
-      catch (e) { toast(e.message, "error"); }
-      finally { busy.value = false; }
-    }
+    const { busy, run } = useAction({ done: (res) => { state.household = res; } });
     const rename = () => run(() => api.patch("/household", { name: hhName.value }), "Название сохранено");
     const saveTolerance = () => run(
       () => api.patch("/household", { portion_tolerance: Math.round(Number(tolerance.value) || 0) }), "Допуск сохранён");

@@ -1,6 +1,7 @@
 // Холодильник → Продукты: запасы семьи по товарам (все бренды вместе).
 import { ref, computed, watch, onMounted } from "../../vendor/vue.esm-browser.prod.js";
 import { api } from "../api.js";
+import { useAction } from "../use-action.js";
 import { Modal, Picker, BarcodeScanner } from "../components.js";
 import { state, ensureCatalog, toast, toastError } from "../store.js";
 import { fmt, fmtDateTime, fmtDayMonth, fmtQty, matches, n, today, UNIT_LABEL } from "../util.js";
@@ -128,21 +129,17 @@ const ItemModal = {
     const woQty = ref("");
     const woNote = ref("");
     const history = ref([]);
-    const busy = ref(false);
     const splitting = ref(null);   // партия, которую раскладываем по пачкам
     onMounted(async () => {
       try { history.value = await api.get(`/stock/items/${it.value.product_id}/history`); } catch { /* необязательно */ }
     });
-    async function run(fn, msg) {
-      busy.value = true;
-      try {
-        const list = await fn();
-        toast(msg);
+    const { busy, run } = useAction({
+      done: async (list) => {
         emit("saved", list);
         it.value = list.find((x) => x.item_key === it.value.item_key) || { ...it.value, remaining: 0, lots: [] };
         history.value = await api.get(`/stock/items/${it.value.product_id}/history`);
-      } catch (e) { toastError(e); } finally { busy.value = false; }
-    }
+      },
+    });
     const inventory = () => run(() => api.post(`/stock/items/${it.value.product_id}/inventory`, { quantity: n(actual.value) }), "Остаток уточнён");
     const writeOff = () => n(woQty.value) > 0 && run(() => api.post(`/stock/items/${it.value.product_id}/write-off`, { quantity: n(woQty.value), note: woNote.value || null }), "Списано");
     const flags = (body, msg) => run(() => api.patch(`/stock/items/${it.value.product_id}`, body), msg);
