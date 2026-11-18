@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -61,6 +61,10 @@ class HouseholdMember(Base):
     weight_kg = Column(Numeric(4, 1), nullable=True)
     activity = Column(Numeric(3, 2), nullable=True)        # КФА: 1.4 / 1.6 / 1.9 / 2.2
     goal = Column(String(8), nullable=True)                # "maintain" | "lose" | "gain"
+    __table_args__ = (
+        CheckConstraint("sex IN ('m', 'f')", name="sex"),
+        CheckConstraint("goal IN ('maintain', 'lose', 'gain')", name="goal"),
+    )
 
     created_at = Column(DateTime, server_default=func.now())
 

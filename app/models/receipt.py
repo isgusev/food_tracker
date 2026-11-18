@@ -7,6 +7,7 @@ from __future__ import annotations
 
 
 from sqlalchemy import (
+    CheckConstraint,
     JSON,
     Column,
     DateTime,
@@ -50,6 +51,7 @@ class Receipt(Base):
     # Один и тот же чек семья заносит один раз (повторный скан — тот же чек)
     __table_args__ = (
         UniqueConstraint("household_id", "qr_raw", name="uq_receipts_household_qr"),
+        CheckConstraint("status IN ('pending', 'done', 'error', 'applied')", name="status"),
     )
 
 

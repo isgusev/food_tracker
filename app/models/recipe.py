@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     Boolean,
     Column,
     Date,
@@ -40,8 +41,8 @@ class Recipe(Base):
     household_id = Column(
         Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id = Column(   # автор; удалили пользователя — рецепты и кастрюли семьи остаются
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     recipe_category_id = Column(
         Integer, ForeignKey("recipe_categories.id", ondelete="RESTRICT"), nullable=False
@@ -56,6 +57,7 @@ class Recipe(Base):
     # --- Автоплан (docs/AUTOPLAN.md, 3.1) ---
     in_rotation = Column(Boolean, default=True, nullable=False, server_default="true")  # предлагать в автоплане
     effort = Column(String(10), default="easy", nullable=False, server_default="easy")  # easy | special
+    __table_args__ = (CheckConstraint("effort IN ('easy', 'special')", name="effort"),)
     meal_types = Column(JSON, nullable=True)  # уместные приёмы пищи; NULL — любые
     keeps_days = Column(Integer, default=2, nullable=False, server_default="2")  # сколько дней есть одну закладку
     is_freezable = Column(Boolean, default=False, nullable=False, server_default="false")
@@ -84,10 +86,10 @@ class RecipeTemplateIngredient(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     recipe_id = Column(
-        Integer, ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("recipes.id", ondelete="CASCADE"), nullable=False, index=True
     )
     variant_id = Column(
-        Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False
+        Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     weight_g = Column(Numeric(7, 1), nullable=False)
     # «Именно этот вариант»: в покупки — этот продукт с брендом, а не любой того же товара
@@ -104,14 +106,14 @@ class RecipeCookingLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     recipe_id = Column(
-        Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True
+        Integer, ForeignKey("recipes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     # Холодильник общий для семьи; user_id — кто готовил
     household_id = Column(
         Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id = Column(   # автор; удалили пользователя — рецепты и кастрюли семьи остаются
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     cooked_at = Column(DateTime, server_default=func.now())
 
@@ -157,7 +159,7 @@ class RecipeActualIngredient(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     cooking_log_id = Column(
-        Integer, ForeignKey("recipe_cooking_logs.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("recipe_cooking_logs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     variant_id = Column(
         Integer, ForeignKey("product_variants.id", ondelete="RESTRICT"), nullable=False

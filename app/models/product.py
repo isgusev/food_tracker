@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -98,6 +99,7 @@ class Product(Base):
 
     __table_args__ = (
         UniqueConstraint("brand_id", "search_name", name="_product_brand_search_uc"),
+        CheckConstraint("base_unit IN ('g', 'ml', 'pcs')", name="base_unit"),
     )
 
 

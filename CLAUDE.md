@@ -160,7 +160,7 @@
 
 ```bash
 .venv/bin/python -m pytest -q              # 130 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0024)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0025)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
@@ -213,6 +213,11 @@
 - «Вступить в семью» (`HouseholdRepository.move_all_data`) удаляет старую семью, и всё, что не перенесено, пропадает
   каскадом. Новая таблица с `household_id` — добавить её в перенос (и решить конфликты уникальности) + тест
   `test_join_keeps_stock_shopping_and_settings`.
+- Ограничения в моделях: `CheckConstraint(..., name="col")` — только суффикс, `naming_convention` (`app/db/base.py`)
+  сам делает `ck_<таблица>_<col>`; в миграции полное имя — через `op.f("ck_...")`, иначе получится
+  `ck_t_ck_t_col`. Новые CHECK на существующие таблицы — `ADD CONSTRAINT … NOT VALID` (миграция 0025): старые строки
+  на стенде не перепроверяются и не ломают деплой. Новое значение строкового поля (источник партии, причина
+  движения, статус) — добавить и в CHECK модели, и миграцией.
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)
   требуют подтверждения Ивана.
 
