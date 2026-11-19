@@ -6,6 +6,8 @@ export const router = createRouter({
   routes: [
     { path: "/", redirect: "/today" },
     { path: "/today", component: () => import("./views/TodayView.vue"), meta: { title: "Сегодня" } },
+    { path: "/plan", component: () => import("./views/plan/PlanView.vue"), meta: { title: "План" } },
+    { path: "/day/:date(\\d{4}-\\d{2}-\\d{2})", component: () => import("./views/plan/DayView.vue"), props: true, meta: { title: "День" } },
     { path: "/login", component: () => import("./views/LoginView.vue"), meta: { public: true } },
     { path: "/:rest(.*)*", redirect: "/today" },
   ],

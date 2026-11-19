@@ -55,3 +55,23 @@ export function logout(): void {
 
 export const activeMembers = computed<Member[]>(() => (session.household?.members ?? []).filter((m) => m.is_active));
 export const viewMember = computed<Member | null>(() => activeMembers.value.find((m) => m.id === session.viewMemberId) ?? null);
+
+// ---- Личные цели КБЖУ (хранятся у члена семьи на сервере)
+export type Macros4 = { calories: number; proteins: number; fats: number; carbs: number };
+const DEFAULT_TARGETS: Macros4 = { calories: 2000, proteins: 100, fats: 70, carbs: 230 };
+/** Цели; незаданные — null. */
+export function targetsOf(m: Member | null | undefined): Record<keyof Macros4, number | null> {
+  const t = (m?.targets ?? {}) as Record<string, unknown>;
+  const out = {} as Record<keyof Macros4, number | null>;
+  for (const k of Object.keys(DEFAULT_TARGETS) as (keyof Macros4)[]) out[k] = t[k] != null ? Number(t[k]) : null;
+  return out;
+}
+/** Для полосок: незаданные цели — ориентир 2000 / 100 / 70 / 230. */
+export function targetsForMeters(m: Member | null | undefined): Macros4 {
+  const t = targetsOf(m);
+  return { calories: t.calories ?? DEFAULT_TARGETS.calories, proteins: t.proteins ?? DEFAULT_TARGETS.proteins,
+    fats: t.fats ?? DEFAULT_TARGETS.fats, carbs: t.carbs ?? DEFAULT_TARGETS.carbs };
+}
+export const hasTargets = (m: Member | null | undefined) => Object.values(targetsOf(m)).some((v) => v != null);
+export const memberById = computed<Record<number, Member>>(() =>
+  Object.fromEntries((session.household?.members ?? []).map((m) => [m.id, m])));
