@@ -2,7 +2,7 @@
 import { computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { authRedirect } from "./router";
-import { auth } from "./api/client";
+import { auth, network } from "./api/client";
 import NavIcon from "./components/NavIcon.vue";
 import { MORE } from "./nav";
 import { loadSession, session } from "./session";
@@ -43,7 +43,10 @@ onMounted(async () => {
         <a v-else :href="n.to" class="nav-link" :class="n.place"><NavIcon :name="n.icon" />{{ n.label }}</a>
       </template>
     </nav>
-    <main class="main"><RouterView /></main>
+    <main class="main">
+      <p v-if="!network.online" class="offline" role="status">Нет связи с сервером — показаны сохранённые данные. Отметки «куплено» отправятся, когда связь вернётся; остальные изменения — только с сетью.</p>
+      <RouterView />
+    </main>
   </div>
   <div class="toasts" aria-live="polite">
     <div v-for="t in session.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
@@ -52,6 +55,7 @@ onMounted(async () => {
 
 <style scoped>
 .boot { padding: 40px var(--gutter); }
+.offline { margin: 0 0 14px; padding: 10px 14px; border-radius: var(--r-in); background: var(--beak-soft); font-size: 14px; }
 .shell { min-height: 100vh; display: grid; grid-template-columns: 1fr; }
 .main { padding: 20px var(--gutter) calc(96px + env(safe-area-inset-bottom)); min-width: 0; }
 .rail {

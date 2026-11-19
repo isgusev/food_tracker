@@ -10,7 +10,7 @@ import ExtraModal from "../../components/shopping/ExtraModal.vue";
 import PackageModal from "../../components/shopping/PackageModal.vue";
 import RegularBlock from "../../components/shopping/RegularBlock.vue";
 import { toast, toastError } from "../../session";
-import { flushQueue, lineQty, pkgText, queue, toggleLine, type Line, type ShopList } from "../../shopping";
+import { flushQueue, lineQty, pkgText, queue, toggleLine, withQueue, type Line, type ShopList } from "../../shopping";
 import { addDays, dayMonth, dayMonthShort, fmt, fmtQty, num, startOfWeek, today } from "../../util";
 
 // чек — отдельным куском: сканер и разбор нужны раз в поход в магазин
@@ -44,7 +44,7 @@ const estimate = (l: Line) => {
 async function refresh(silent = true) {
   await flushQueue();
   try {
-    lst.value = await ok(api.GET("/api/v1/shopping-lists/active"));
+    lst.value = withQueue(await ok(api.GET("/api/v1/shopping-lists/active")));
     if (lst.value && !qStart) { start.value = lst.value.start_date; end.value = lst.value.end_date; }
   } catch (e) { if (!silent) toastError(e); }
   loaded.value = true;
@@ -76,7 +76,7 @@ onMounted(async () => {
   // пришли из плана с периодом — сразу формируем за него
   if (qStart && (!lst.value || lst.value.start_date !== start.value || lst.value.end_date !== end.value)) await generate();
   if (!lst.value) periodOpen.value = true;
-  timer = setInterval(() => { if (!document.hidden && !modalOpen()) refresh(); }, POLL_MS);
+  timer = setInterval(() => { if (!document.hidden && !modalOpen() && navigator.onLine) refresh(); }, POLL_MS);
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("online", onOnline);
 });

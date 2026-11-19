@@ -35,3 +35,9 @@ app.config.errorHandler = (err) => {
   console.error(err);
 };
 app.use(router).mount("#app");
+
+// Офлайн и установка на телефон: service worker собирается только в продакшен-сборке (vite.config.ts);
+// без https (кроме localhost) браузер его не регистрирует — тогда просто без офлайна.
+if (import.meta.env.PROD && "serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch(() => { /* без офлайна */ });
+}

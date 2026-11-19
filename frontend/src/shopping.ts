@@ -43,6 +43,13 @@ export async function toggleLine(l: Line, kind: Queued["kind"]): Promise<ShopLis
   }
 }
 
+/** Наложить неотправленные отметки на список: без сети он приходит из сохранённой копии (до отметок). */
+export function withQueue(l: ShopList | null): ShopList | null {
+  if (!l || !queue.items.length) return l;
+  const kind = new Map(queue.items.map((q) => [q.id, q.kind]));
+  return { ...l, lines: l.lines.map((x) => (kind.has(x.id) ? { ...x, is_checked: kind.get(x.id) === "check" } : x)) };
+}
+
 /** Отправить накопленное; не сетевые ошибки (строку удалили, уже отмечено) молча выбрасываются. */
 export async function flushQueue(): Promise<void> {
   if (!queue.items.length) return;

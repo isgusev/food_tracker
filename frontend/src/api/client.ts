@@ -1,6 +1,7 @@
 // Типизированный клиент API: пути и тела — из OpenAPI (src/api/schema.d.ts, `npm run api`).
 // JWT — в localStorage под тем же ключом, что у старого интерфейса (/app/): вход общий.
 import createClient, { type Middleware } from "openapi-fetch";
+import { reactive } from "vue";
 import type { components, paths } from "./schema";
 
 export type Schemas = components["schemas"];
@@ -44,12 +45,21 @@ export function errorText(body: unknown, status: number): string {
   return detail ? String(detail) : `HTTP ${status}`;
 }
 
+/** Есть ли связь с сервером. Ответ из сохранённой копии service worker помечает X-Offline-Copy (см. frontend/sw.js);
+ *  сетевой сбой — тоже «нет». Любой живой ответ возвращает «да». */
+export const network = reactive({ online: true });
+if (typeof window !== "undefined") {
+  window.addEventListener("offline", () => { network.online = false; });
+  window.addEventListener("online", () => { network.online = true; });   // уточнит первый же запрос
+}
+
 const authMiddleware: Middleware = {
   onRequest({ request }) {
     if (token) request.headers.set("Authorization", `Bearer ${token}`);
     return request;
   },
   onResponse({ response }) {
+    network.online = response.headers.get("X-Offline-Copy") !== "1";
     if (response.status === 401) { auth.clear(); onUnauthorized(); }
     return response;
   },
@@ -62,7 +72,7 @@ api.use(authMiddleware);
 /** Данные ответа или ApiError — чтобы в компонентах писать `const x = await ok(api.GET(...))`. */
 export async function ok<T>(p: Promise<{ data?: T; error?: unknown; response: Response }>): Promise<T> {
   let res;
-  try { res = await p; } catch { throw new ApiError(0, "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз"); }
+  try { res = await p; } catch { network.online = false; throw new ApiError(0, "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз"); }
   if (res.error !== undefined || !res.response.ok) throw new ApiError(res.response.status, errorText(res.error, res.response.status));
   return res.data as T;
 }
