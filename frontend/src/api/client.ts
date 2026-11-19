@@ -55,7 +55,8 @@ const authMiddleware: Middleware = {
   },
 };
 
-export const api = createClient<paths>({ baseUrl: "" });
+// fetch берём в момент запроса (а не при создании клиента) — так его можно подменить в проверках «нет сети»
+export const api = createClient<paths>({ baseUrl: "", fetch: (req) => globalThis.fetch(req) });
 api.use(authMiddleware);
 
 /** Данные ответа или ApiError — чтобы в компонентах писать `const x = await ok(api.GET(...))`. */

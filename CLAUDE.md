@@ -18,7 +18,8 @@
   `frontend/dist`; в Docker — стадия `web-next` на `node:22-slim`). Клиент API — `openapi-fetch` с типами из OpenAPI:
   `scripts/export_openapi.py` → `frontend/src/api/openapi.json` → `schema.d.ts` (`npm run api`; CI проверяет, что они
   совпадают с API — **после изменения схем/эндпоинтов выполнить `npm run api` и закоммитить**). `src/api/client.ts`
-  (`api`, `ok()`, токен `ft.token` — общий со старым интерфейсом), `src/session.ts` (пользователь, семья, выбранный
+  (`api`, `ok()` — сеть недоступна → `ApiError` со `status 0`; `fetch` берётся в момент запроса, его можно подменить
+  в проверке; токен `ft.token` — общий со старым интерфейсом), `src/session.ts` (пользователь, семья, выбранный
   член семьи — тот же ключ `ft.viewMember.<id>`), экраны `src/views/*.vue`, компоненты `src/components/*.vue`.
   Визуальная система — `docs/DESIGN.md` («эмалированная посуда»: ободок `--rim`, клюв `--beak` — одно место на экране,
   карандаш для черновиков; Golos Text + Unbounded, свои шрифты). Готово: вход, оболочка, «Сегодня», **План** (неделя
@@ -26,7 +27,10 @@
   `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`), **Холодильник** (`views/fridge/FridgeView.vue`:
   кастрюли, морозилка, архив; `components/fridge/CookModal`, `PotModal`; вкладка «Продукты» — `components/stock/*`:
   `StockTab`, `AddLotModal`, `PacksEditor`, `SplitLotModal`, `StockItemModal`, `QuickInventory`); состав блюда —
-  `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; остальные пункты меню ведут в
+  `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; **Покупки**
+  (`views/shopping/ShoppingView.vue`; `components/shopping/*`: `BoughtModal`, `PackageModal`, `ExtraModal`,
+  `RegularBlock`, `ReceiptModal` — отдельный кусок; `src/shopping.ts` — `pkgText`, `lineQty`, офлайн-очередь
+  `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); остальные пункты меню ведут в
   старый `/app/`. После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
   загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
   Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`

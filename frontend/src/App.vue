@@ -7,11 +7,11 @@ import { loadSession, session } from "./session";
 
 const route = useRoute();
 const router = useRouter();
-// Пока переезжаем: «Сегодня» — новый интерфейс, остальное — старый на /app/ (вход общий)
+// Пока переезжаем: перенесённые экраны — новый интерфейс, остальное — старый на /app/ (вход общий)
 const NAV = [
   { to: "/today", label: "Сегодня", icon: "today", next: true },
   { to: "/plan", label: "План", icon: "plan", next: true },
-  { to: "/app/#/shopping", label: "Покупки", icon: "shop" },
+  { to: "/shopping", label: "Покупки", icon: "shop", next: true },
   { to: "/fridge", label: "Холодильник", icon: "fridge", next: true },
   { to: "/app/#/family", label: "Ещё", icon: "more" },
 ] as const;

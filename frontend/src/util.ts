@@ -47,6 +47,9 @@ export const dayMonthShort = (iso: string) => `${Number(iso.slice(8, 10))} ${MON
 export const weekdayShort = (iso: string) => WD_SHORT[new Date(iso + "T12:00:00").getDay()];
 export const monthOf = (iso: string) => MONTHS[Number(iso.slice(5, 7)) - 1];
 export const dayNum = (iso: string) => Number(iso.slice(8, 10));
+/** «19 нояб., 14:05» — метка времени с сервера. */
+export const dateTime = (s?: string | null) =>
+  s ? new Date(s).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 
 export const num = (v: unknown): number => {
   const x = typeof v === "number" ? v : parseFloat(String(v ?? "0"));
