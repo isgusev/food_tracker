@@ -33,9 +33,10 @@
   `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); **Рецепты** (`views/recipes/RecipesView.vue`,
   `components/recipes/RecipeModal.vue` — просмотр и правка); **Продукты** (`views/catalog/CatalogView.vue`;
   `components/catalog/*`: `ProductModal`, `NewProductModal`, `ItemsPanel` — отдельный кусок, `MoveModal`); **Семья** (`views/family/FamilyView.vue`; `components/family/MemberCard.vue`,
-  `PlannerSettings.vue`); «Ещё» — `views/MoreView.vue`, список разделов — `src/nav.ts`
-  (`MORE`: на телефоне в «Ещё», на компьютере — сразу в левой колонке); остальные пункты меню ведут в
-  старый `/app/`. После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
+  `PlannerSettings.vue`); **Деньги** (`views/money/MoneyView.vue`: `GET /finance/summary` за месяц,
+  `PUT /finance/budget`); «Ещё» — `views/MoreView.vue`, список разделов — `src/nav.ts`
+  (`MORE`: на телефоне в «Ещё», на компьютере — сразу в левой колонке); все пункты меню уже в новом интерфейсе,
+  в старый `/app/` ведёт только регистрация. После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
   загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
   Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`
   (`itemBadge`, `portionOf`, `memberMacros`, `portionMemoryKey` — те же ключи `ft.*`, что у старого), `src/drafts.ts`

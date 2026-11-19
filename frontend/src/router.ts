@@ -11,6 +11,7 @@ export const router = createRouter({
     { path: "/shopping", component: () => import("./views/shopping/ShoppingView.vue"), meta: { title: "Покупки" } },
     { path: "/recipes", component: () => import("./views/recipes/RecipesView.vue"), meta: { title: "Рецепты" } },
     { path: "/catalog", component: () => import("./views/catalog/CatalogView.vue"), meta: { title: "Продукты" } },
+    { path: "/money", component: () => import("./views/money/MoneyView.vue"), meta: { title: "Деньги" } },
     { path: "/family", component: () => import("./views/family/FamilyView.vue"), meta: { title: "Семья" } },
     { path: "/fridge", component: () => import("./views/fridge/FridgeView.vue"), meta: { title: "Холодильник" } },
     { path: "/more", component: () => import("./views/MoreView.vue"), meta: { title: "Ещё" } },
