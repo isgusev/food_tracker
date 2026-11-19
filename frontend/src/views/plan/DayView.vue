@@ -84,7 +84,7 @@ const weekDays = computed(() => range(startOfWeek(props.date), addDays(startOfWe
           <span v-else class="over">Перебор на <b>{{ fmt(-left.calories) }}</b> ккал</span>
           <template v-if="left.proteins > 0">, не хватает <b>{{ fmt(left.proteins) }}</b> г белка</template>.
         </p>
-        <a href="/app/#/family" class="small">Цели членов семьи</a>
+        <RouterLink to="/family" class="small">Цели членов семьи</RouterLink>
       </aside>
     </div>
 
