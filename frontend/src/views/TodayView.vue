@@ -155,7 +155,7 @@ async function cook(r: { id: number; name: string; grams: number }) {
         </div>
         <div v-if="cookTomorrow.length" class="inset block">
           <h3>Завтра</h3>
-          <p class="small">Готовить: {{ cookTomorrow.join(", ") }}. <a href="/app/#/shopping">Проверить покупки</a></p>
+          <p class="small">Готовить: {{ cookTomorrow.join(", ") }}. <RouterLink to="/shopping">Проверить покупки</RouterLink></p>
         </div>
         <div v-if="others.length" class="inset block">
           <h3>Остальные</h3>

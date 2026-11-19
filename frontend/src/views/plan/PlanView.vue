@@ -132,7 +132,7 @@ const stats = computed(() => {
 });
 const shopHref = computed(() => {
   const start = weekStart.value < todayIso && weekEnd.value >= todayIso ? todayIso : weekStart.value;
-  return `/app/#/shopping?start=${start}&end=${weekEnd.value}`;
+  return { path: "/shopping", query: { start, end: weekEnd.value } };
 });
 const isCurrent = computed(() => weekStart.value <= todayIso && weekEnd.value >= todayIso);
 </script>
@@ -157,7 +157,7 @@ const isCurrent = computed(() => weekStart.value <= todayIso && weekEnd.value >=
               @click="suggest(firstOpen, weekEnd, 'fridge', false)">Только остатки</button>
       <button @click="copyPrevWeek">Прошлая неделя</button>
       <button @click="templates = true">Шаблоны</button>
-      <a class="btn" :href="shopHref">Покупки на неделю</a>
+      <RouterLink class="btn" :to="shopHref">Покупки на неделю</RouterLink>
     </div>
 
     <div v-if="drafts.length" class="draft-bar" role="status">
