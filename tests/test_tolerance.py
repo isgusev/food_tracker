@@ -137,3 +137,29 @@ def test_pot_rules_are_pure():
     assert fit_weights({"я": D(300), "ребёнок": D(150)}, D(400), D("0.15")) == {"я": D(266), "ребёнок": D(133)}
     assert fit_weights({"я": D(300), "ребёнок": D(150)}, D(300), D("0.15")) is None   # не влезает и с допуском
     assert fit_weights({}, D(300), D("0.15")) is None
+
+
+async def test_pot_ingredients_with_new_cooked_weight(client):
+    """Поправили состав и выход кастрюли (положили больше): остаток сдвигается на ту же разницу,
+    к кастрюле довязываются блюда плана; выход меньше съеденного — ошибка; меньше — позднее блюдо «надо приготовить»."""
+    from tests.helpers import build_recipe_stack, cook, day, get_item, me_id, plan, register_and_login
+    h = await register_and_login(client, "potw", "potw@test.com")
+    vid, rid = await build_recipe_stack(client, h)
+    me = await me_id(client, h)
+    first = await plan(client, h, date_day=day(0), recipe_id=rid, portions=[{"member_id": me, "weight_g": 300}])
+    second = await plan(client, h, date_day=day(1), recipe_id=rid, portions=[{"member_id": me, "weight_g": 300}])
+    pot = await cook(client, h, rid, vid, 300)                     # влезает только первое
+    assert (await get_item(client, h, second["id"], day(1)))["state"] == "to_cook"
+
+    url = f"/api/v1/recipes/cooking-logs/{pot}/ingredients"
+    r = await client.put(url, json={"ingredients": [{"variant_id": vid, "weight_g": 120}], "total_cooked_weight": 600}, headers=h)
+    assert r.status_code == 200, r.text
+    assert float(r.json()["total_cooked_weight"]) == 600 and float(r.json()["current_remaining_weight"]) == 600
+    assert (await get_item(client, h, second["id"], day(1)))["state"] == "in_fridge"   # довязалось
+
+    await client.post(f"/api/v1/plan/{first['id']}/eat", headers=h)                   # съели 300 — осталось 300
+    r = await client.put(url, json={"ingredients": [{"variant_id": vid, "weight_g": 120}], "total_cooked_weight": 200}, headers=h)
+    assert r.status_code == 400 and "съели" in r.json()["detail"]
+    r = await client.put(url, json={"ingredients": [{"variant_id": vid, "weight_g": 100}], "total_cooked_weight": 450}, headers=h)
+    assert r.status_code == 200 and float(r.json()["current_remaining_weight"]) == 150
+    assert (await get_item(client, h, second["id"], day(1)))["state"] == "to_cook"     # 150 из 300 — не хватает

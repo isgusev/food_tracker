@@ -504,13 +504,23 @@ class RecipeService:
     ) -> RecipeCookingLog:
         """Полная замена фактической закладки кастрюли с пересчётом КБЖУ.
 
-        Остаток в кастрюле остаётся прежним (вес еды мы не меняем), но его
-        пищевая ценность пересчитывается по новому составу.
+        Без total_cooked_weight вес еды прежний — пересчитывается только пищевая ценность.
+        С ним (положили больше/меньше — и вышло больше/меньше) остаток сдвигается на ту же
+        разницу (съеденное не меняется): стало больше — к кастрюле довязываются блюда плана,
+        которым не хватало; меньше — поздним, кому не хватит, «надо приготовить» (с допуском семьи).
         """
+        old_total = Decimal(str(pot.total_cooked_weight))
+        new_total = data.total_cooked_weight if data.total_cooked_weight is not None else old_total
+        eaten = old_total - Decimal(str(pot.current_remaining_weight))
+        if new_total < eaten:
+            raise ValidationError(f"Из кастрюли уже съели {quantize(eaten)} г — готового не может быть меньше")
         # запасы: спишем/вернём только разницу между старым и новым составом
         old_grams = _grams_by_variant(pot.actual_ingredients)
         total_raw, totals = await _sum_ingredients(data.ingredients, self._variants)
-        per_100 = per_100g_from_totals(totals, pot.total_cooked_weight)
+        per_100 = per_100g_from_totals(totals, new_total)
+        if new_total != old_total:
+            pot.total_cooked_weight = new_total
+            set_remaining(pot, new_total - eaten)
 
         pot.total_raw_weight = quantize(total_raw)
         pot.actual_ingredients = [
@@ -528,4 +538,8 @@ class RecipeService:
         await self._stock.adjust_pot(
             full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, today
         )
-        return full
+        if new_total > old_total:
+            await self._pot_svc.attach_more(full, today)
+        elif new_total < old_total:
+            await self._pot_svc.release(full.id, shrink_ok=True)
+        return await self._cooking_logs.get_full(pot.id)

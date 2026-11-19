@@ -849,7 +849,7 @@
     "type": "object"
    },
    "CookingLogUpdateIngredients": {
-    "description": "Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент).",
+    "description": "Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент).\ntotal_cooked_weight — сколько вышло готового, если положили больше/меньше: остаток сдвигается на ту же разницу.",
     "properties": {
      "ingredients": {
       "items": {
@@ -858,6 +858,22 @@
       "minItems": 1,
       "title": "Ingredients",
       "type": "array"
+     },
+     "total_cooked_weight": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0.0,
+        "maximum": 99999.9,
+        "type": "number"
+       },
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Total Cooked Weight"
      }
     },
     "required": [
