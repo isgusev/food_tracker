@@ -30,7 +30,9 @@
   `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; **Покупки**
   (`views/shopping/ShoppingView.vue`; `components/shopping/*`: `BoughtModal`, `PackageModal`, `ExtraModal`,
   `RegularBlock`, `ReceiptModal` — отдельный кусок; `src/shopping.ts` — `pkgText`, `lineQty`, офлайн-очередь
-  `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); остальные пункты меню ведут в
+  `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); **Рецепты** (`views/recipes/RecipesView.vue`,
+  `components/recipes/RecipeModal.vue` — просмотр и правка); «Ещё» — `views/MoreView.vue`, список разделов — `src/nav.ts`
+  (`MORE`: на телефоне в «Ещё», на компьютере — сразу в левой колонке); остальные пункты меню ведут в
   старый `/app/`. После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
   загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
   Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`
