@@ -109,6 +109,10 @@
   (`PlannerSettingsCard` в `views/misc.js`); «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
   Этап 3: шаг 2 генерации — регулярные готовые продукты (`_regulars` в `autoplan.py`: тот же день недели и приём ≥ 4 из
   8 недель; «сам по себе» → пустая ячейка, source `regular`; «к блюду» → к ячейке с авто-блюдом, source `side`).
+  Этап 4 — отзывы: `PlanFeedback` (`plan_feedback`, миграция 0026; `recipe_id` | `item_key`, `meal_type`, `action`
+  accepted/pinned/replaced/removed) пишут `PlanService.accept`/`accept_range`/`move(pinned)`/`delete_item` и
+  `AutoplanService.alternative` — только для `origin = auto`; `feedback_scores` (затухание вдвое за 30 дн., одинаковые
+  за день — один, ±2) → `Scoring.feedback` (`W_FB`), продукт ≤ −1,5 — не ставится; 🔄 пропускает заменённые сегодня.
 - **Обычно берём и снеки** (этап 3, миграция 0024): `HouseholdProduct.regular` (auto/always/never), `regular_qty`,
   `is_snack` — `PATCH /stock/items/{product_id}`; `GET /shopping-list/regular` (`RegularService.regular` в `services/regular.py`: покупки ≥ 4 из
   8 полных недель, медиана в неделю − запасы − список; снеки сверх `PlannerSettings.snack_quota` за неделю скрыты);
@@ -163,8 +167,8 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 130 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0025)
+.venv/bin/python -m pytest -q              # 134 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0026)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)

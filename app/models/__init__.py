@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from app.db.base import Base
 from app.models.household import Household, HouseholdMember, PlannerSettings
-from app.models.plan import MealItem, MealPortion, WeekTemplate
+from app.models.plan import MealItem, MealPortion, PlanFeedback, WeekTemplate
 from app.models.product import (
     Item,
     Brand,
@@ -37,6 +37,7 @@ from app.models.stock import (
 from app.models.user import AuthGroup, RegistrationInvite, User, UserGroup
 
 __all__ = [
+    "PlanFeedback",
     "PlannerSettings",
     "Item",
     "Base",

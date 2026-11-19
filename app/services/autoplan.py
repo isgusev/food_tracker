@@ -57,6 +57,12 @@ W_COST = 0.5      # дороже средней порции — минус, е�
 W_KBJU = 0.3      # закрывает белок по целям едоков
 W_SPECIAL = 0.5   # «эдакое» в отмеченный для него день
 REPEAT_PENALTY = 1.0   # то же блюдо в последние 2 дня
+W_FB = 0.5        # отзывы семьи (этап 4): 📌 и ✓ — плюс, 🔄 и ✕ — минус
+FEEDBACK_WEIGHT = {"pinned": 1.0, "accepted": 0.5, "replaced": -0.7, "removed": -1.0}
+FEEDBACK_HALF_LIFE = 30    # дней: отзыв вдвое слабее через месяц
+FEEDBACK_DAYS = 120        # старше — не учитываем
+FEEDBACK_CAP = 2.0
+PRODUCT_DISLIKED = -1.5    # обычный продукт с такой суммой отзывов и ниже — не ставим (одно «убрать» — ещё нет)
 REST_DAYS = 14
 EXPIRY_DAYS = 3
 CONTINUE_PREFIX = "та же закладка"
@@ -170,6 +176,27 @@ class _Board:
             self.chosen_keys.setdefault(k, {})[recipe.id] = recipe.name
 
 
+def feedback_scores(rows, today: date) -> tuple[dict[int, float], dict[str, float]]:
+    """Сумма отзывов с затуханием (вдвое за FEEDBACK_HALF_LIFE дней), по рецептам и по товарам готовых
+    продуктов, в пределах ±FEEDBACK_CAP. Одинаковые отзывы об одном за день — один (закладка на три дня,
+    «Убрать» всех её дней — не тройной минус)."""
+    seen: set = set()
+    recipes: dict[int, float] = {}
+    items: dict[str, float] = {}
+    for f in rows:
+        target, key = (recipes, f.recipe_id) if f.recipe_id is not None else (items, f.item_key)
+        if key is None or f.action not in FEEDBACK_WEIGHT:
+            continue
+        day = clock.local_date(f.created_at)
+        if (key, f.action, day) in seen:
+            continue
+        seen.add((key, f.action, day))
+        age = max(0, (today - day).days)
+        target[key] = target.get(key, 0.0) + FEEDBACK_WEIGHT[f.action] * 0.5 ** (age / FEEDBACK_HALF_LIFE)
+    clamp = lambda d: {k: max(-FEEDBACK_CAP, min(FEEDBACK_CAP, v)) for k, v in d.items()}
+    return clamp(recipes), clamp(items)
+
+
 @dataclass
 class Scoring:
     """Данные для оценки блюда (4.2): не зависят от БД — тестируются отдельно."""
@@ -181,6 +208,7 @@ class Scoring:
     budget_tight: bool = False
     protein_target: float = 0.15                    # доля ккал из белка в целях едоков
     special_days: set[int] = field(default_factory=set)
+    feedback: dict[int, float] = field(default_factory=dict)   # рецепт → сумма отзывов семьи
 
     def score(self, recipe: Recipe, day: date, board: _Board) -> tuple[float, str]:
         """Оценка и причина выбора: истекающий срок продукта, если он есть, иначе самая весомая
@@ -218,6 +246,9 @@ class Scoring:
             parts.append((W_KBJU * min(share / self.protein_target, 1.0), "белок по целям"))
         if recipe.effort == "special" and day.weekday() in self.special_days:
             parts.append((W_SPECIAL, "день для особого блюда"))
+        fb = self.feedback.get(recipe.id, 0.0)
+        if fb:
+            parts.append((W_FB * fb, "семья часто выбирает" if fb > 0 else ""))
         if any(day - timedelta(days=k) in board.recipe_days.get(recipe.id, ()) for k in (1, 2)):
             parts.append((-REPEAT_PENALTY, ""))
         total = sum(p for p, _ in parts)
@@ -245,6 +276,7 @@ class _Ctx:
     dry_run: bool
     typical: dict[tuple[int, str], dict[int, tuple[Decimal, str]]] = field(default_factory=dict)
     products: set[tuple[date, str, str]] = field(default_factory=set)   # (день, приём, товар) — уже стоит
+    item_feedback: dict[str, float] = field(default_factory=dict)       # товар → сумма отзывов
     regular_cells: set[tuple[date, str]] = field(default_factory=set)   # ячейки, занятые регулярными продуктами
 
 
@@ -323,6 +355,8 @@ class AutoplanService:
         cost = {c.recipe_id: c.per_portion for c in await self._finance.recipe_costs(household_id)
                 if c.per_portion is not None}
         tight = await self._budget_tight(household_id, today)
+        rows = await self._plan.feedback_since(household_id, clock.utc_now() - timedelta(days=FEEDBACK_DAYS))
+        recipe_fb, item_fb = feedback_scores(rows, today)
         members = await self._members.active_in(household_id)
         shares = [float(m.target_proteins) * 4 / float(m.target_calories)
                   for m in members if m.target_proteins and m.target_calories]
@@ -330,6 +364,7 @@ class AutoplanService:
             keys=keys, last_cooked=last, expiring=expiring, cost=cost, budget_tight=tight,
             protein_target=sum(shares) / len(shares) if shares else 0.15,
             special_days=set(settings.special_days),
+            feedback=recipe_fb,
         )
         return _Ctx(
             household_id=household_id, user_id=user_id, first=first, end=end,
@@ -339,7 +374,7 @@ class AutoplanService:
             max_special=settings.max_special_per_week,
             tolerance=await self._plan.tolerance(household_id),
             rotation=[r for r in recipes if r.in_rotation],
-            scoring=scoring, board=_Board(), dry_run=dry_run,
+            scoring=scoring, board=_Board(), dry_run=dry_run, item_feedback=item_fb,
         )
 
     async def _budget_tight(self, household_id: int, today: date) -> bool:
@@ -551,8 +586,9 @@ class AutoplanService:
             if it.origin == "auto" and not any(p.is_eaten for p in it.portions):
                 continue                     # непринятое предложение — не история
             product = it.variant.manufacturer.product if it.variant.manufacturer else None
-            if product is None or product.item_key in never:
-                continue
+            if product is None or product.item_key in never \
+                    or ctx.item_feedback.get(product.item_key, 0.0) <= PRODUCT_DISLIKED:
+                continue                     # «не предлагать» или семья его стабильно убирает
             g = groups.setdefault((it.date_day.weekday(), it.meal_type, product.item_key), {
                 "alone": set(), "side": set(), "n": 0, "who": {}, "variant": it.variant_id, "last": it.date_day,
                 "name": display_name(it.variant, it.variant_id)})
@@ -652,11 +688,20 @@ class AutoplanService:
             if other.recipe is not None:
                 ctx.board.put(other.date_day, other.meal_type, other.recipe, ctx.scoring.keys.get(other.recipe_id))
         cands = self._candidates(ctx, day, meal)
+        # сегодня уже заменили в этом приёме — не возвращаем, пока есть другие варианты
+        t0, _ = clock.utc_bounds(today, today)
+        rejected = {f.recipe_id for f in await self._plan.feedback_since(item.household_id, t0)
+                    if f.action == "replaced" and f.meal_type == meal and f.recipe_id != current}
+        fresh = [c for c in cands if c[1].id not in rejected]
+        if len(fresh) > 1 or (fresh and fresh[0][1].id != current):
+            cands = fresh
         ids = [r.id for _, r, _ in cands]
         if not cands or ids == [current]:
             raise ValidationError("Других подходящих рецептов в ротации нет")
         idx = ids.index(current) if current in ids else -1
         _, recipe, reason = next(c for c in cands[idx + 1:] + cands[:idx + 1] if c[1].id != current)
+        if item.origin == "auto":
+            self._plan.add_feedback(item, "replaced")      # 🔄 — отзыв о прежнем рецепте
         for other in drop:
             await self._plan.delete(other)
         await self._plan.delete(item)

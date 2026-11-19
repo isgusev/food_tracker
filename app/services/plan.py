@@ -240,7 +240,10 @@ class PlanService:
             item.auto_reason = None
 
     async def move(self, item: MealItem, data: MealItemMove) -> MealItemResponse:
-        """Перенос (ручная правка — блюдо становится обычным) и/или 📌 закрепление."""
+        """Перенос (ручная правка — блюдо становится обычным) и/или 📌 закрепление.
+        Закрепили предложение автоплана — отзыв «pinned»."""
+        if data.pinned and not item.pinned and item.origin == "auto":
+            self._plan.add_feedback(item, "pinned")
         if data.date_day is not None or data.meal_type is not None:
             self._touch(item)
         if data.pinned is not None:
@@ -253,21 +256,32 @@ class PlanService:
         return await self.response(item.id)
 
     async def accept(self, item: MealItem) -> MealItemResponse:
-        """«✓ Принять» предложение: блюдо становится обычным (manual)."""
+        """«✓ Принять» предложение: блюдо становится обычным (manual); отзыв «accepted»."""
+        if item.origin == "auto":
+            self._plan.add_feedback(item, "accepted")
         self._touch(item)
         await self._plan.flush()
         return await self.response(item.id)
 
     async def accept_range(self, household_id: int, start: date, end: date) -> int:
-        """«Принять всё» за период: все auto-блюда → manual."""
+        """«Принять всё» за период: все auto-блюда → manual; отзыв «accepted» — по разу на рецепт/товар
+        (та же закладка на три дня — не три плюса)."""
         items = [i for i in await self._plan.list_in_range(household_id, start, end) if i.origin == "auto"]
+        seen: set = set()
         for i in items:
+            key = (i.recipe_id, i.variant_id)
+            if key not in seen:
+                seen.add(key)
+                self._plan.add_feedback(i, "accepted")
             self._touch(i)
         await self._plan.flush()
         return len(items)
 
     async def delete_item(self, item: MealItem) -> None:
-        """Удалить блюдо: съеденное из кастрюли возвращается в неё."""
+        """Удалить блюдо: съеденное из кастрюли возвращается в неё. Убрали несъеденное предложение
+        автоплана — отзыв «removed»."""
+        if item.origin == "auto" and not any(p.is_eaten for p in item.portions):
+            self._plan.add_feedback(item, "removed")
         for p in item.portions:
             await self._return_to_pot(p)
             await self._stock.revert(portion_id=p.id)
