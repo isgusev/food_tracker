@@ -14,7 +14,17 @@
 - Backend: FastAPI + SQLAlchemy 2.0 async + PostgreSQL 16 (asyncpg), Alembic, Pydantic v2, JWT.
   Слои: `app/models` → `app/repositories` (только SQL) → `app/services` (вся логика) →
   `app/api/v1/endpoints` (тонкие роутеры). Доменные ошибки → HTTP в `app/api/error_handlers.py`.
-- Frontend: `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`, Node на машине нет),
+- **Новый frontend (этап 5, переезд):** `frontend/` — Vite 8 + Vue 3 + TypeScript, раздаётся API на `/next/` (собранный
+  `frontend/dist`; в Docker — стадия `web-next` на `node:22-slim`). Клиент API — `openapi-fetch` с типами из OpenAPI:
+  `scripts/export_openapi.py` → `frontend/src/api/openapi.json` → `schema.d.ts` (`npm run api`; CI проверяет, что они
+  совпадают с API — **после изменения схем/эндпоинтов выполнить `npm run api` и закоммитить**). `src/api/client.ts`
+  (`api`, `ok()`, токен `ft.token` — общий со старым интерфейсом), `src/session.ts` (пользователь, семья, выбранный
+  член семьи — тот же ключ `ft.viewMember.<id>`), экраны `src/views/*.vue`, компоненты `src/components/*.vue`.
+  Визуальная система — `docs/DESIGN.md` («эмалированная посуда»: ободок `--rim`, клюв `--beak` — одно место на экране,
+  карандаш для черновиков; Golos Text + Unbounded, свои шрифты). Готово: вход, оболочка, «Сегодня»; остальные пункты
+  меню ведут в старый `/app/`. Чек-лист переноса (все действия и вызовы API старых экранов) — `docs/FRONTEND_AUDIT.md`.
+  Node — через nvm (`~/.nvm/versions/node/v22…`; в Bash: `export PATH=$HOME/.nvm/versions/node/v22.23.5/bin:$PATH`).
+- Frontend (старый, пока основной): `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`),
   раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — один компонент на файл:
   `web/js/views/<экран>/<Компонент>.js`, помощники экрана — `views/<экран>/shared.js`, а `views/<экран>.js` только
   реэкспортирует (импорты снаружи — из него). Общее состояние — `web/js/store.js`; действие с сервером из компонента
@@ -176,6 +186,9 @@
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
 .venv/bin/python -m scripts.invite         # код приглашения в обход UI
 scripts/check_web.sh                       # фронтенд без браузера: модули грузятся, шаблоны компилируются, sw.js полный
+cd frontend && npm ci && npm run dev       # новый интерфейс: http://localhost:5173/next/ (прокси /api → :8000, VITE_API)
+cd frontend && npm run build               # проверка типов (vue-tsc) + сборка в frontend/dist (её раздаёт /next/)
+cd frontend && npm run api                 # OpenAPI → src/api/openapi.json и schema.d.ts (после изменений API)
 ```
 Общие помощники тестов — `tests/helpers.py` (пользователь, `day()`, продукты, рецепты, план, запасы, автоплан);
 тесты импортируют их оттуда, не друг из друга.
