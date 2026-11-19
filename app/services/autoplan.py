@@ -58,11 +58,15 @@ W_KBJU = 0.3      # закрывает белок по целям едоков
 W_SPECIAL = 0.5   # «эдакое» в отмеченный для него день
 REPEAT_PENALTY = 1.0   # то же блюдо в последние 2 дня
 W_FB = 0.5        # отзывы семьи (этап 4): 📌 и ✓ — плюс, 🔄 и ✕ — минус
+W_POP = 0.6       # любимое: в скольких из 8 последних недель блюдо было в плане (ставили сами или ели)
 FEEDBACK_WEIGHT = {"pinned": 1.0, "accepted": 0.5, "replaced": -0.7, "removed": -1.0}
 FEEDBACK_HALF_LIFE = 30    # дней: отзыв вдвое слабее через месяц
 FEEDBACK_DAYS = 120        # старше — не учитываем
 FEEDBACK_CAP = 2.0
-PRODUCT_DISLIKED = -1.5    # обычный продукт с такой суммой отзывов и ниже — не ставим (одно «убрать» — ещё нет)
+PRODUCT_RARER = -1.5       # обычный продукт: два «убрать» — предлагаем реже (через неделю / через день)
+PRODUCT_DISLIKED = -3.0    # и ещё два — не ставим (отзывы затухают, со временем вернётся)
+ITEM_FEEDBACK_CAP = 4.0
+DAILY_MIN_PER_WEEK = 4     # продукт в этом приёме ≥ 4 дней в неделю в среднем — привычка «каждый день»
 REST_DAYS = 14
 EXPIRY_DAYS = 3
 CONTINUE_PREFIX = "та же закладка"
@@ -78,13 +82,27 @@ MEAL_K = {"breakfast": "к завтраку", "lunch": "к обеду", "dinner"
 class _Regular:
     """Регулярный готовый продукт в ячейке (день недели + приём пищи)."""
 
-    weekday: int
+    weekday: int | None                         # None — каждый день (привычка)
     meal: str
     item_key: str
     variant_id: int
     name: str
     side: bool                                  # True — к блюду, False — сам по себе
     weights: dict[int, Decimal]                 # член семьи → обычная порция
+    rare: bool = False                          # семья его убирала — предлагаем реже
+
+    def due(self, day: date) -> bool:
+        """Ставить ли в этот день: свой день недели (или каждый); «реже» — через неделю / через день."""
+        if self.weekday is not None and self.weekday != day.weekday():
+            return False
+        if not self.rare:
+            return True
+        return day.isocalendar()[1] % 2 == 0 if self.weekday is not None else day.toordinal() % 2 == 0
+
+    def reason(self) -> str:
+        meal = MEAL_K[self.meal] if self.side else MEAL_NA[self.meal]
+        when = f" {WEEKDAYS_PL[self.weekday]}" if self.weekday is not None else ""
+        return f"обычно {meal}{when}" + (" (реже: вы его убирали)" if self.rare else "")
 
 
 def _round5(x: Decimal) -> Decimal:
@@ -176,7 +194,7 @@ class _Board:
             self.chosen_keys.setdefault(k, {})[recipe.id] = recipe.name
 
 
-def feedback_scores(rows, today: date) -> tuple[dict[int, float], dict[str, float]]:
+def feedback_scores(rows, today: date, item_cap: float = ITEM_FEEDBACK_CAP) -> tuple[dict[int, float], dict[str, float]]:
     """Сумма отзывов с затуханием (вдвое за FEEDBACK_HALF_LIFE дней), по рецептам и по товарам готовых
     продуктов, в пределах ±FEEDBACK_CAP. Одинаковые отзывы об одном за день — один (закладка на три дня,
     «Убрать» всех её дней — не тройной минус)."""
@@ -193,8 +211,8 @@ def feedback_scores(rows, today: date) -> tuple[dict[int, float], dict[str, floa
         seen.add((key, f.action, day))
         age = max(0, (today - day).days)
         target[key] = target.get(key, 0.0) + FEEDBACK_WEIGHT[f.action] * 0.5 ** (age / FEEDBACK_HALF_LIFE)
-    clamp = lambda d: {k: max(-FEEDBACK_CAP, min(FEEDBACK_CAP, v)) for k, v in d.items()}
-    return clamp(recipes), clamp(items)
+    clamp = lambda d, cap: {k: max(-cap, min(cap, v)) for k, v in d.items()}
+    return clamp(recipes, FEEDBACK_CAP), clamp(items, item_cap)
 
 
 @dataclass
@@ -209,6 +227,7 @@ class Scoring:
     protein_target: float = 0.15                    # доля ккал из белка в целях едоков
     special_days: set[int] = field(default_factory=set)
     feedback: dict[int, float] = field(default_factory=dict)   # рецепт → сумма отзывов семьи
+    popular: dict[int, float] = field(default_factory=dict)    # рецепт → доля недель с ним в плане (0…1)
 
     def score(self, recipe: Recipe, day: date, board: _Board) -> tuple[float, str]:
         """Оценка и причина выбора: истекающий срок продукта, если он есть, иначе самая весомая
@@ -246,6 +265,9 @@ class Scoring:
             parts.append((W_KBJU * min(share / self.protein_target, 1.0), "белок по целям"))
         if recipe.effort == "special" and day.weekday() in self.special_days:
             parts.append((W_SPECIAL, "день для особого блюда"))
+        pop = self.popular.get(recipe.id, 0.0)
+        if pop:
+            parts.append((W_POP * pop, "часто готовите"))
         fb = self.feedback.get(recipe.id, 0.0)
         if fb:
             parts.append((W_FB * fb, "семья часто выбирает" if fb > 0 else ""))
@@ -277,6 +299,7 @@ class _Ctx:
     typical: dict[tuple[int, str], dict[int, tuple[Decimal, str]]] = field(default_factory=dict)
     products: set[tuple[date, str, str]] = field(default_factory=set)   # (день, приём, товар) — уже стоит
     item_feedback: dict[str, float] = field(default_factory=dict)       # товар → сумма отзывов
+    history: list = field(default_factory=list)                          # план 8 недель до периода
     regular_cells: set[tuple[date, str]] = field(default_factory=set)   # ячейки, занятые регулярными продуктами
 
 
@@ -357,6 +380,15 @@ class AutoplanService:
         tight = await self._budget_tight(household_id, today)
         rows = await self._plan.feedback_since(household_id, clock.utc_now() - timedelta(days=FEEDBACK_DAYS))
         recipe_fb, item_fb = feedback_scores(rows, today)
+        # план 8 недель до периода: ручное и съеденное (непринятые предложения — не история)
+        w0 = _monday(first) - timedelta(weeks=REGULAR_WEEKS)
+        history = [i for i in await self._plan.list_in_range(household_id, w0, first - timedelta(days=1))
+                   if i.origin != "auto" or any(p.is_eaten for p in i.portions)]
+        weeks: dict[int, set[int]] = {}
+        for i in history:
+            if i.recipe_id is not None:
+                weeks.setdefault(i.recipe_id, set()).add((i.date_day - w0).days // 7)
+        popular = {rid: len(w) / REGULAR_WEEKS for rid, w in weeks.items()}
         members = await self._members.active_in(household_id)
         shares = [float(m.target_proteins) * 4 / float(m.target_calories)
                   for m in members if m.target_proteins and m.target_calories]
@@ -364,7 +396,7 @@ class AutoplanService:
             keys=keys, last_cooked=last, expiring=expiring, cost=cost, budget_tight=tight,
             protein_target=sum(shares) / len(shares) if shares else 0.15,
             special_days=set(settings.special_days),
-            feedback=recipe_fb,
+            feedback=recipe_fb, popular=popular,
         )
         return _Ctx(
             household_id=household_id, user_id=user_id, first=first, end=end,
@@ -374,7 +406,7 @@ class AutoplanService:
             max_special=settings.max_special_per_week,
             tolerance=await self._plan.tolerance(household_id),
             rotation=[r for r in recipes if r.in_rotation],
-            scoring=scoring, board=_Board(), dry_run=dry_run, item_feedback=item_fb,
+            scoring=scoring, board=_Board(), dry_run=dry_run, item_feedback=item_fb, history=history,
         )
 
     async def _budget_tight(self, household_id: int, today: date) -> bool:
@@ -571,45 +603,65 @@ class AutoplanService:
 
     # ------------------------------------------------- регулярные продукты
     async def _regulars(self, ctx: _Ctx) -> list[_Regular]:
-        """Готовые продукты, которые стоят в этой ячейке недели почти всегда: ≥ 4 из 8 последних недель.
-        Считается ручной план и всё, что ели; «никогда» у товара семьи — не предлагаем."""
+        """Обычные готовые продукты по плану 8 недель до периода (ручное и съеденное):
+        - тот же день недели и приём пищи ≥ 4 недель из 8 — в этот день недели;
+        - в этом приёме пищи ≥ 4 дней в неделю в среднем — каждый день (привычка);
+        «сам по себе» (ели без блюда) — в пустую ячейку, «к блюду» — к предложенному блюду.
+        «Никогда» у товара — не предлагаем; отзывы: два «убрать» — реже, ещё два — не ставим."""
         w0 = _monday(ctx.first) - timedelta(weeks=REGULAR_WEEKS)
-        history = await self._plan.list_in_range(ctx.household_id, w0, ctx.first - timedelta(days=1))
-        with_recipe = {(i.date_day, i.meal_type) for i in history if i.recipe_id is not None}
+        # «в неделю» — по реальному сроку истории (семья могла начать вести план недавно), не больше 8 недель
+        start = min((i.date_day for i in ctx.history), default=w0)
+        span_weeks = max(1.0, (ctx.first - max(w0, start)).days / 7)
+        with_recipe = {(i.date_day, i.meal_type) for i in ctx.history if i.recipe_id is not None}
         never = {k for k, st in (await self._stock.settings_map(ctx.household_id)).items()
                  if st.regular == "never"}
         active = {m.id for m in await self._members.active_in(ctx.household_id)}
-        groups: dict[tuple[int, str, str], dict] = {}
-        for it in history:
+
+        def new_group(it):
+            return {"alone": set(), "side": set(), "n": 0, "who": {}, "variant": it.variant_id, "last": it.date_day,
+                    "name": display_name(it.variant, it.variant_id)}
+
+        by_weekday: dict[tuple[int, str, str], dict] = {}
+        by_meal: dict[tuple[str, str], dict] = {}
+        for it in ctx.history:
             if it.variant_id is None or it.variant is None:
                 continue
-            if it.origin == "auto" and not any(p.is_eaten for p in it.portions):
-                continue                     # непринятое предложение — не история
             product = it.variant.manufacturer.product if it.variant.manufacturer else None
             if product is None or product.item_key in never \
                     or ctx.item_feedback.get(product.item_key, 0.0) <= PRODUCT_DISLIKED:
                 continue                     # «не предлагать» или семья его стабильно убирает
-            g = groups.setdefault((it.date_day.weekday(), it.meal_type, product.item_key), {
-                "alone": set(), "side": set(), "n": 0, "who": {}, "variant": it.variant_id, "last": it.date_day,
-                "name": display_name(it.variant, it.variant_id)})
-            week = (it.date_day - w0).days // 7
-            g["side" if (it.date_day, it.meal_type) in with_recipe else "alone"].add(week)
-            g["n"] += 1
-            if it.date_day >= g["last"]:
-                g["variant"], g["last"] = it.variant_id, it.date_day
-                g["name"] = display_name(it.variant, it.variant_id)
-            for p in it.portions:
-                if p.member_id in active:
-                    g["who"].setdefault(p.member_id, []).append(Decimal(str(p.weight_g)))
+            side = (it.date_day, it.meal_type) in with_recipe
+            for g, mark in ((by_weekday.setdefault((it.date_day.weekday(), it.meal_type, product.item_key), new_group(it)),
+                             (it.date_day - w0).days // 7),
+                            (by_meal.setdefault((it.meal_type, product.item_key), new_group(it)), it.date_day)):
+                g["side" if side else "alone"].add(mark)
+                g["n"] += 1
+                if it.date_day >= g["last"]:
+                    g["variant"], g["last"] = it.variant_id, it.date_day
+                    g["name"] = display_name(it.variant, it.variant_id)
+                for p in it.portions:
+                    if p.member_id in active:
+                        g["who"].setdefault(p.member_id, []).append(Decimal(str(p.weight_g)))
+
+        def weights_of(g):
+            return {mid: _round5(Decimal(str(median(ws)))) for mid, ws in g["who"].items()
+                    if len(ws) * 2 >= g["n"]}   # тот, кто ест его хотя бы в половине случаев
+
         out: list[_Regular] = []
-        for (wd, meal, key), g in sorted(groups.items()):
+        daily: set[tuple[str, str]] = set()
+        for (meal, key), g in sorted(by_meal.items()):
             alone, side = len(g["alone"]), len(g["side"])
-            if max(alone, side) < REGULAR_MIN_WEEKS:
+            if (alone + side) / span_weeks >= DAILY_MIN_PER_WEEK and (w := weights_of(g)):
+                daily.add((meal, key))
+                out.append(_Regular(None, meal, key, g["variant"], g["name"], side > alone, w,
+                                    rare=ctx.item_feedback.get(key, 0.0) <= PRODUCT_RARER))
+        for (wd, meal, key), g in sorted(by_weekday.items()):
+            alone, side = len(g["alone"]), len(g["side"])
+            if (meal, key) in daily or max(alone, side) < REGULAR_MIN_WEEKS:
                 continue
-            weights = {mid: _round5(Decimal(str(median(ws)))) for mid, ws in g["who"].items()
-                       if len(ws) * 2 >= g["n"]}   # тот, кто ест его хотя бы в половине случаев
-            if weights:
-                out.append(_Regular(wd, meal, key, g["variant"], g["name"], side > alone, weights))
+            if w := weights_of(g):
+                out.append(_Regular(wd, meal, key, g["variant"], g["name"], side > alone, w,
+                                    rare=ctx.item_feedback.get(key, 0.0) <= PRODUCT_RARER))
         return out
 
     async def _add_product(self, ctx: _Ctx, day: date, reg: _Regular, reason: str, source: str) -> AutofillSuggestion:
@@ -631,12 +683,12 @@ class AutoplanService:
         )
 
     async def _fill_regular(self, ctx: _Ctx, regs: list[_Regular]) -> list[AutofillSuggestion]:
-        """Шаг 2: продукт «сам по себе» — в пустую ячейку своего дня недели."""
+        """Шаг 2: продукт «сам по себе» — в пустую ячейку своего дня недели (или каждого дня)."""
         out = []
         day = ctx.first
         while day <= ctx.end:
             for reg in regs:
-                if reg.side or reg.weekday != day.weekday() or reg.meal not in ctx.wanted:
+                if reg.side or not reg.due(day) or reg.meal not in ctx.wanted:
                     continue
                 if (day, reg.meal) in ctx.board.cells and (day, reg.meal) not in ctx.regular_cells:
                     continue                 # занято блюдом или ручным планом
@@ -644,8 +696,7 @@ class AutoplanService:
                     continue
                 ctx.board.cells.add((day, reg.meal))
                 ctx.regular_cells.add((day, reg.meal))
-                out.append(await self._add_product(
-                    ctx, day, reg, f"обычно {MEAL_NA[reg.meal]} {WEEKDAYS_PL[reg.weekday]}", "regular"))
+                out.append(await self._add_product(ctx, day, reg, reg.reason(), "regular"))
             day += timedelta(days=1)
         return out
 
@@ -656,12 +707,11 @@ class AutoplanService:
                        key=lambda c: (c[0], MEAL_ORDER.index(c[1])))
         for day, meal in cells:
             for reg in regs:
-                if not reg.side or reg.weekday != day.weekday() or reg.meal != meal:
+                if not reg.side or not reg.due(day) or reg.meal != meal:
                     continue
                 if (day, meal, reg.item_key) in ctx.products:
                     continue
-                out.append(await self._add_product(
-                    ctx, day, reg, f"обычно {MEAL_K[meal]} {WEEKDAYS_PL[reg.weekday]}", "side"))
+                out.append(await self._add_product(ctx, day, reg, reg.reason(), "side"))
         return out
 
     # ------------------------------------------------------- другой вариант

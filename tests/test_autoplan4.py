@@ -92,3 +92,59 @@ async def test_deleting_manual_dish_is_not_feedback(client):
     assert (await client.delete(f"/api/v1/plan/{manual['id']}", headers=h2)).status_code == 204
     got = (await suggest(client, h2, day(0), day(0)))["items"]
     assert [i["recipe_id"] for i in got] == [chicken2]
+
+
+async def test_favorite_recipe_comes_back_sooner(client):
+    """Любимое: блюдо, которое семья часто ставит сама, обгоняет новое, как только прошло несколько дней."""
+    h = await register_and_login(client, "fav1", "fav1@test.com")
+    me = await me_id(client, h)
+    await set_kcal(client, h, me, 2000)
+    _, porridge = await build_recipe_stack(client, h)
+    await client.patch(f"/api/v1/recipes/{porridge}", json={"in_rotation": False}, headers=h)
+    _, v1 = await product(client, h, "Кабачок", kcal=40, p=1)
+    _, v2 = await product(client, h, "Тыква", kcal=40, p=1)
+    new = await recipe(client, h, "Рагу из кабачков", v1, meal_types=["dinner"], keeps_days=1)
+    fav = await recipe(client, h, "Рагу из тыквы", v2, meal_types=["dinner"], keeps_days=1)
+    await client.patch("/api/v1/household/planner", headers=h, json={"meal_types": ["dinner"]})
+    for w in range(1, 7):                                  # 6 недель из 8 — сами ставили на ужин
+        await plan(client, h, date_day=day(-7 * w), recipe_id=fav, portions=[{"member_id": me, "weight_g": 300}])
+    # неделю назад было — ещё рано (новое блюдо впереди); через 3 дня — любимое обгоняет
+    assert [i["recipe_id"] for i in (await suggest(client, h, day(0), day(0), dry_run=True))["items"]] == [new]
+    assert [i["recipe_id"] for i in (await suggest(client, h, day(3), day(3), dry_run=True))["items"]] == [fav]
+
+
+async def test_daily_habit_and_two_steps_of_dislike(client, session_factory):
+    """Йогурт на перекус почти каждый день — предлагается каждый день; два «убрать» в разные дни —
+    через день; ещё два — не предлагается."""
+    from app.models.plan import PlanFeedback
+
+    h = await register_and_login(client, "fav2", "fav2@test.com")
+    me = await me_id(client, h)
+    await set_kcal(client, h, me, 2000)
+    _, porridge = await build_recipe_stack(client, h)
+    await client.patch(f"/api/v1/recipes/{porridge}", json={"in_rotation": False}, headers=h)
+    yog_pid, yogurt = await product(client, h, "Йогурт", kcal=70, p=5, cat="Молочное")
+    for d in range(1, 15):                                 # две недели — каждый день
+        await plan(client, h, date_day=day(-d), meal="snack", variant_id=yogurt, portions=[{"member_id": me, "weight_g": 150}])
+    await client.patch("/api/v1/household/planner", headers=h, json={"meal_types": ["snack"]})
+    got = (await suggest(client, h, day(0), day(5), dry_run=True))["items"]
+    assert [i["date_day"] for i in got] == [day(k) for k in range(6)]
+    assert got[0]["auto_reason"] == "обычно на перекус"
+
+    from app.models.product import Product
+    async with session_factory() as s:
+        item_key = (await s.get(Product, yog_pid)).item_key
+    hid = (await client.get("/api/v1/household", headers=h)).json()["id"]
+
+    async def removed(*days_ago):
+        async with session_factory() as s:
+            for d in days_ago:
+                s.add(PlanFeedback(household_id=hid, item_key=item_key, meal_type="snack", action="removed",
+                                   created_at=dt.datetime.combine(clock.today() - dt.timedelta(days=d), dt.time(9))))
+            await s.commit()
+
+    await removed(2, 1)                                    # два «убрать» в разные дни — реже, через день
+    got = (await suggest(client, h, day(0), day(5), dry_run=True))["items"]
+    assert len(got) == 3 and all("реже" in i["auto_reason"] for i in got)
+    await removed(4, 3)                                    # и ещё два — больше не ставим
+    assert (await suggest(client, h, day(0), day(5), dry_run=True))["items"] == []
