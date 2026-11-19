@@ -199,14 +199,13 @@ export const PlannerView = {
               <span class="day-num num">{{ dayNum(d) }}</span>
               <span class="day-word"><b>{{ fmtWeekday(d) }}</b><span>{{ d === today ? 'сегодня' : fmtMonth(d) }}</span></span>
             </a>
-            <span class="day-kcal num" :title="me ? 'КБЖУ: ' + me.name : ''">{{ fmt(dayInfo[d].all.calories) }}<small> ккал</small></span>
             <button v-if="d >= today" class="day-suggest" :disabled="!!suggesting" @click="suggestDay(d)"
                     :aria-label="'Предложить на ' + fmtDayMonth(d)" title="Предложить на этот день">{{ suggesting === d ? '…' : '✨' }}</button>
           </header>
           <div class="day-meter">
             <div class="meter k"><i :class="{ over: dayInfo[d].all.calories > targets.calories * 1.1 }" :style="{ width: dayInfo[d].pct + '%' }"></i></div>
-            <div class="tiny muted num">
-              Б {{ fmt(dayInfo[d].all.proteins) }} · Ж {{ fmt(dayInfo[d].all.fats) }} · У {{ fmt(dayInfo[d].all.carbs) }}
+            <div class="tiny muted num" :title="me ? 'КБЖУ: ' + me.name : ''">
+              <b class="day-kcal">{{ fmt(dayInfo[d].all.calories) }}</b> ккал · Б {{ fmt(dayInfo[d].all.proteins) }} · Ж {{ fmt(dayInfo[d].all.fats) }} · У {{ fmt(dayInfo[d].all.carbs) }}
               <span v-if="dayInfo[d].eaten.calories"> · съедено {{ fmt(dayInfo[d].eaten.calories) }}</span>
             </div>
           </div>

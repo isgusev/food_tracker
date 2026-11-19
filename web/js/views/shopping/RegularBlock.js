@@ -27,7 +27,10 @@ export const RegularBlock = {
     const qty = (r) => (r.package_amount && r.package_count ? n(r.package_amount) * r.package_count : n(r.to_buy));
     async function add(r) {
       busy.value = true;
-      try { emit("changed", await api.post(`/shopping-lists/${props.list.id}/lines`, { product_id: r.product_id, quantity: qty(r) })); }
+      try {
+        emit("changed", await api.post(`/shopping-lists/${props.list.id}/lines`, { product_id: r.product_id, quantity: qty(r) }));
+        toast(`«${r.name}» — в списке`);
+      }
       catch (e) { toastError(e); } finally { busy.value = false; }
     }
     async function addAll() {
