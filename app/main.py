@@ -19,6 +19,8 @@ from app.services.receipt_poller import run_poller
 
 # Веб-интерфейс (Vue 3 без сборки) раздаётся этим же процессом: один origin — без CORS
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+# Новый интерфейс (Vite + TS, frontend/, этап 5) — собранный, на /next/, пока переезжаем
+NEXT_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
 class WebFiles(StaticFiles):
@@ -90,6 +92,8 @@ def create_app() -> FastAPI:
 
     if WEB_DIR.is_dir():
         app.mount("/app", WebFiles(directory=WEB_DIR, html=True), name="web")
+    if NEXT_DIR.is_dir():
+        app.mount("/next", WebFiles(directory=NEXT_DIR, html=True), name="next")
 
     return app
 

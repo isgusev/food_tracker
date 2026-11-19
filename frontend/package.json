@@ -1,0 +1,26 @@
+{
+  "name": "eligusi-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "api": "cd .. && .venv/bin/python -m scripts.export_openapi && cd frontend && openapi-typescript src/api/openapi.json -o src/api/schema.d.ts --default-non-nullable false"
+  },
+  "dependencies": {
+    "@fontsource-variable/golos-text": "5.3.0",
+    "@fontsource-variable/unbounded": "5.3.0",
+    "openapi-fetch": "0.17.0",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.10",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vue-tsc": "3.3.14"
+  }
+}

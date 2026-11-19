@@ -1,0 +1,18 @@
+import { createRouter, createWebHashHistory } from "vue-router";
+import { session } from "./session";
+
+export const router = createRouter({
+  history: createWebHashHistory(),
+  routes: [
+    { path: "/", redirect: "/today" },
+    { path: "/today", component: () => import("./views/TodayView.vue"), meta: { title: "Сегодня" } },
+    { path: "/login", component: () => import("./views/LoginView.vue"), meta: { public: true } },
+    { path: "/:rest(.*)*", redirect: "/today" },
+  ],
+});
+
+router.beforeEach((to) => {
+  if (session.ready && !session.user && !to.meta.public) return "/login";
+  if (session.user && to.path === "/login") return "/today";
+  return true;
+});

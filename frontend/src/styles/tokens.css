@@ -1,0 +1,41 @@
+/* Визуальная система «эмалированная посуда» — docs/DESIGN.md */
+:root {
+  --tile: #eaf0ec;
+  --enamel: #fdfefd;
+  --enamel-2: #f2f6f3;
+  --rim: #1f5c44;
+  --rim-soft: #dcebe3;
+  --ink: #14201a;
+  --muted: #5c6b63;
+  --beak: #e8832e;
+  --beak-soft: #fbe7d4;
+  --cook: #c98a2b;
+  --sky: #2f6fae;
+  --graphite: #6f747c;
+  --graphite-soft: rgba(111, 116, 124, 0.08);
+  --tomato: #c8432f;
+  --line: #d3ded7;
+  --on-fill: #ffffff;
+
+  --font-ui: "Golos Text Variable", "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Unbounded Variable", "Unbounded", var(--font-ui);
+  --r-pot: 20px;
+  --r-in: 12px;
+  --gutter: 16px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tile: #0e1512; --enamel: #17201b; --enamel-2: #1e2924; --rim: #5fb98e; --rim-soft: #1f3a2e;
+    --ink: #e7efea; --muted: #93a49b; --beak: #f29a4e; --beak-soft: #3a2a1b; --cook: #e0a84a; --sky: #79aee6;
+    --graphite: #a2a8b0; --graphite-soft: rgba(162, 168, 176, 0.08); --tomato: #ee6e59; --line: #2a3830;
+    --on-fill: #0e1512; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --tile: #0e1512; --enamel: #17201b; --enamel-2: #1e2924; --rim: #5fb98e; --rim-soft: #1f3a2e;
+  --ink: #e7efea; --muted: #93a49b; --beak: #f29a4e; --beak-soft: #3a2a1b; --cook: #e0a84a; --sky: #79aee6;
+  --graphite: #a2a8b0; --graphite-soft: rgba(162, 168, 176, 0.08); --tomato: #ee6e59; --line: #2a3830;
+  --on-fill: #0e1512; color-scheme: dark;
+}
