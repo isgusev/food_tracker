@@ -1,6 +1,6 @@
 // Общее состояние нового интерфейса: кто вошёл, семья, чьи КБЖУ показываем, тосты.
 import { computed, reactive } from "vue";
-import { api, auth, ok, type Schemas } from "./api/client";
+import { ApiError, api, auth, ok, type Schemas } from "./api/client";
 
 type Household = Schemas["HouseholdResponse"];
 type Member = Schemas["MemberResponse"];
@@ -34,8 +34,9 @@ export async function loadSession(): Promise<void> {
     try { saved = JSON.parse(localStorage.getItem(memberKey()) || "null"); } catch { /* нет хранилища */ }
     const ids = activeMembers.value.map((m) => m.id);
     session.viewMemberId = saved != null && ids.includes(saved) ? saved : session.household.me_member_id;
-  } catch {
-    auth.clear();
+  } catch (e) {
+    // нет сети и нет сохранённой копии — вход не сбрасываем, откроется с сетью
+    if (!(e instanceof ApiError && e.status === 0)) auth.clear();
     session.user = null;
   } finally {
     session.ready = true;
@@ -49,6 +50,8 @@ export function setViewMember(id: number): void {
 
 export function logout(): void {
   auth.clear();
+  // сохранённые для офлайна ответы API — данные этой семьи; следующему на устройстве они ни к чему
+  if ("caches" in window) caches.delete("ft-next-api").catch(() => { /* нет кэша */ });
   session.user = null;
   session.household = null;
 }

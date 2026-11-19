@@ -40,6 +40,12 @@
   правило «куда увести по состоянию входа» — `authRedirect` в `router.ts` (и в `beforeEach`, и в `App` после
   `loadSession()` + `router.isReady()`). После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
   загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
+  **Офлайн (PWA):** `frontend/sw.js` — исходник service worker; плагин `serviceWorker()` в `vite.config.ts` подставляет
+  `PRECACHE` (файлы сборки) и `VERSION` → `dist/sw.js` (регистрируется в `main.ts` только в продакшен-сборке). Сборка
+  — из кэша, страница и чтение API (`API_PREFIXES`) — «сначала сеть», копия помечается `X-Offline-Copy` → `network.online`
+  в `api/client.ts` → плашка в `App.vue`. Новый раздел API, нужный без сети, — добавить в `API_PREFIXES`. Манифест и
+  иконки — `frontend/public/`. Встроенный браузер Claude service worker не регистрирует — офлайн проверять в headless
+  Chrome (`--remote-debugging-port`, скрипт через CDP), выключая временный сервер.
   Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`
   (`itemBadge`, `portionOf`, `memberMacros`, `portionMemoryKey` — те же ключи `ft.*`, что у старого), `src/drafts.ts`
   (черновик продукта, `saveDraft`), `components/ModalSheet.vue` (окно; на телефоне — лист снизу), `ItemPicker.vue`,
