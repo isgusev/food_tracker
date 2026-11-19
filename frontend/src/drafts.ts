@@ -1,7 +1,7 @@
 // Черновик продукта: найденный в Open Food Facts или введённый вручную. Пользователь проверяет цифры
 // с упаковки, и продукт сохраняется в справочник (saveDraft).
 import { api, ok, type Schemas } from "./api/client";
-import { catalog, loadProducts } from "./catalog";
+import { catalog, loadProducts, variantIndex } from "./catalog";
 import { local, num } from "./util";
 
 export const CODE_RE = /^\d{8,14}$/;
@@ -91,4 +91,37 @@ export function activeVariantOf(product: { id: number; manufacturers?: Schemas["
     if (v) return v.id;
   }
   return null;
+}
+
+/** Строка состава (рецепт, готовка, кастрюля): выбранная версия КБЖУ или черновик нового продукта. */
+export interface IngredientRow {
+  variant_id: number | null;
+  weight_g: number | string;
+  draft?: Draft | null;
+  exact?: boolean;
+  /** стабильный ключ строки в редакторе — чтобы поле веса не теряло фокус */
+  _k?: number;
+}
+
+/** Перед отправкой состава: у выбранного должны быть КБЖУ; черновики (Open Food Facts / вручную) — в справочник,
+ *  строкам — их variant_id. Ошибка — с названием ингредиента. Мутирует строки. */
+export async function resolveDraftIngredients(rows: IngredientRow[]): Promise<IngredientRow[]> {
+  for (const r of rows) {
+    const v = r.variant_id ? variantIndex.value[r.variant_id] : undefined;
+    if (v?.kbjuMissing) throw new Error(`Ингредиент «${v.name}»: у продукта нет КБЖУ — откройте его («Изменить») и внесите цифры`);
+  }
+  for (const r of rows) {
+    if (!r.draft || r.variant_id) continue;
+    const err = draftError(r.draft);
+    if (err) throw new Error(`Ингредиент «${r.draft.name || "без названия"}»: ${err}`);
+  }
+  for (const r of rows) {
+    if (!r.draft || r.variant_id) continue;
+    const product = await saveDraft(r.draft);
+    const id = activeVariantOf(product, r.draft.manufacturer || r.draft.brand);
+    if (!id) throw new Error(`У продукта «${product.name}» нет активной версии КБЖУ`);
+    r.variant_id = id;
+    r.draft = null;
+  }
+  return rows;
 }

@@ -12,7 +12,7 @@ const NAV = [
   { to: "/today", label: "Сегодня", icon: "today", next: true },
   { to: "/plan", label: "План", icon: "plan", next: true },
   { to: "/app/#/shopping", label: "Покупки", icon: "shop" },
-  { to: "/app/#/fridge", label: "Холодильник", icon: "fridge" },
+  { to: "/fridge", label: "Холодильник", icon: "fridge", next: true },
   { to: "/app/#/family", label: "Ещё", icon: "more" },
 ] as const;
 

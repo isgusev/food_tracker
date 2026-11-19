@@ -117,9 +117,11 @@ class RecipeUpdate(BaseModel):
 
 
 class CookingLogUpdateIngredients(BaseModel):
-    """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
+    """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент).
+    total_cooked_weight — сколько вышло готового, если положили больше/меньше: остаток сдвигается на ту же разницу."""
 
     ingredients: list[IngredientLine] = Field(min_length=1)
+    total_cooked_weight: Optional[Decimal] = Field(default=None, gt=0, le=Decimal("99999.9"))
 
 
 class RecipeResponse(ORMModel):

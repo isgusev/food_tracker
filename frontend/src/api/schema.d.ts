@@ -2017,10 +2017,13 @@ export interface components {
         /**
          * CookingLogUpdateIngredients
          * @description Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент).
+         *     total_cooked_weight — сколько вышло готового, если положили больше/меньше: остаток сдвигается на ту же разницу.
          */
         CookingLogUpdateIngredients: {
             /** Ingredients */
             ingredients: components["schemas"]["IngredientLine"][];
+            /** Total Cooked Weight */
+            total_cooked_weight?: number | string | null;
         };
         /**
          * EatOptionalWeight

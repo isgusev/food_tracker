@@ -82,7 +82,16 @@ class PotService:
         Прошлые неотмеченные планы кастрюлю не «съедают»; на первом не поместившемся блюде
         останавливаемся — более поздние остаются «надо приготовить» и попадают в покупки.
         «Влезает» — с допуском семьи; тогда несъеденные порции уменьшаются пропорционально выходу."""
-        capacity = dec(pot.total_cooked_weight)
+        return await self._attach(pot, from_date, dec(pot.total_cooked_weight))
+
+    async def attach_more(self, pot: RecipeCookingLog, from_date: date) -> int:
+        """Кастрюля стала больше (поправили выход): довязываем блюда рецепта в то, что свободно сверх резерва."""
+        reserved = (await self._plan.reserved_by_pot(pot.household_id)).get(pot.id, ZERO)
+        return await self._attach(pot, from_date, dec(pot.current_remaining_weight) - reserved)
+
+    async def _attach(self, pot: RecipeCookingLog, from_date: date, capacity: Decimal) -> int:
+        if capacity <= 0 or pot.recipe_id is None:
+            return 0
         tolerance = await self._plan.tolerance(pot.household_id)
         reserved = ZERO
         attached: list[MealItem] = []

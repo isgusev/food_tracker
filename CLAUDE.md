@@ -23,7 +23,12 @@
   Визуальная система — `docs/DESIGN.md` («эмалированная посуда»: ободок `--rim`, клюв `--beak` — одно место на экране,
   карандаш для черновиков; Golos Text + Unbounded, свои шрифты). Готово: вход, оболочка, «Сегодня», **План** (неделя
   `views/plan/PlanView.vue`, день `DayView.vue`, окна `components/plan/*`: `AddItemModal`, `PlanItemModal`,
-  `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`); остальные пункты меню ведут в старый `/app/`.
+  `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`), **Холодильник** (`views/fridge/FridgeView.vue`:
+  кастрюли, морозилка, архив; `components/fridge/CookModal`, `PotModal`; вкладка «Продукты» — `components/stock/*`:
+  `StockTab`, `AddLotModal`, `PacksEditor`, `SplitLotModal`, `StockItemModal`, `QuickInventory`); состав блюда —
+  `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; остальные пункты меню ведут в
+  старый `/app/`. После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
+  загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
   Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`
   (`itemBadge`, `portionOf`, `memberMacros`, `portionMemoryKey` — те же ключи `ft.*`, что у старого), `src/drafts.ts`
   (черновик продукта, `saveDraft`), `components/ModalSheet.vue` (окно; на телефоне — лист снизу), `ItemPicker.vue`,
@@ -97,7 +102,8 @@
   **Допуск** `Household.portion_tolerance` (%, по умолчанию 15, 0…30, `PATCH /household`, «Семья → Допуск по весу»):
   вышло/осталось меньше плана в пределах допуска — блюда остаются привязанными, а их несъеденные порции
   уменьшаются пропорционально (`scale_portions`, вниз до грамма). Только события кастрюли: готовка
-  (`PotService.attach_new`), правка остатка, «съели» (`PotService.release(shrink_ok=True)`); правки порций в плане —
+  (`PotService.attach_new`), правка остатка и выхода (`PUT …/ingredients {total_cooked_weight}` — остаток сдвигается на
+  разницу, больше — `attach_more`, меньше — `release`), «съели» (`PotService.release(shrink_ok=True)`); правки порций в плане —
   без допуска (заданный вес не урезается). Долю отдаёт `BaseRepository.tolerance(household_id)`.
   **Все правила кастрюли — в `app/services/pots.py`** (рефакторинг Р3): чистые `remaining_weight`, `fits`, `shrink`,
   `fit_weights`, `scale_portions`, `set_remaining` (остаток + «пуста») и `PotService` (привязка/освобождение блюд);
@@ -184,7 +190,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 136 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 137 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0026)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
