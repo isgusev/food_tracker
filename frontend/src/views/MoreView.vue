@@ -9,10 +9,7 @@ import { session } from "../session";
   <div class="more">
     <h1 class="display">Ещё</h1>
     <nav class="list" aria-label="Другие разделы">
-      <template v-for="m in MORE" :key="m.to">
-        <RouterLink v-if="'next' in m" :to="m.to" class="item"><NavIcon :name="m.icon" /><span class="grow">{{ m.label }}</span><span class="muted">›</span></RouterLink>
-        <a v-else :href="m.to" class="item"><NavIcon :name="m.icon" /><span class="grow">{{ m.label }}</span><span class="tiny muted">старый вид ›</span></a>
-      </template>
+      <RouterLink v-for="m in MORE" :key="m.to" :to="m.to" class="item"><NavIcon :name="m.icon" /><span class="grow">{{ m.label }}</span><span class="muted">›</span></RouterLink>
     </nav>
     <p class="small muted">{{ session.user?.username }}<template v-if="session.household"> · {{ session.household.name }}</template></p>
   </div>
