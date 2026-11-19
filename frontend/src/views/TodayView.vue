@@ -166,7 +166,7 @@ async function cook(r: { id: number; name: string; grams: number }) {
         </div>
         <p v-if="drafts" class="small muted">
           {{ drafts }} {{ plural(drafts, "предложение", "предложения", "предложений") }} автоплана на сегодня — «Принять» или поправьте в
-          <a href="/app/#/plan">плане</a>.
+          <RouterLink to="/plan">плане</RouterLink>.
         </p>
       </section>
     </template>

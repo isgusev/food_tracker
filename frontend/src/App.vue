@@ -10,7 +10,7 @@ const router = useRouter();
 // Пока переезжаем: «Сегодня» — новый интерфейс, остальное — старый на /app/ (вход общий)
 const NAV = [
   { to: "/today", label: "Сегодня", icon: "today", next: true },
-  { to: "/app/#/plan", label: "План", icon: "plan" },
+  { to: "/plan", label: "План", icon: "plan", next: true },
   { to: "/app/#/shopping", label: "Покупки", icon: "shop" },
   { to: "/app/#/fridge", label: "Холодильник", icon: "fridge" },
   { to: "/app/#/family", label: "Ещё", icon: "more" },
