@@ -1,5 +1,5 @@
-import { createRouter, createWebHashHistory } from "vue-router";
-import { session } from "./session";
+import { createRouter, createWebHashHistory, type RouteLocationNormalized } from "vue-router";
+import { session, toast } from "./session";
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -16,12 +16,19 @@ export const router = createRouter({
     { path: "/fridge", component: () => import("./views/fridge/FridgeView.vue"), meta: { title: "Холодильник" } },
     { path: "/more", component: () => import("./views/MoreView.vue"), meta: { title: "Ещё" } },
     { path: "/login", component: () => import("./views/LoginView.vue"), meta: { public: true } },
+    { path: "/register", component: () => import("./views/LoginView.vue"), meta: { public: true } },
     { path: "/:rest(.*)*", redirect: "/today" },
   ],
 });
 
-router.beforeEach((to) => {
+/** Куда увести с этой страницы по состоянию входа (null — остаться). Зовётся и после загрузки сессии в App. */
+export function authRedirect(to: RouteLocationNormalized): string | null {
   if (session.ready && !session.user && !to.meta.public) return "/login";
-  if (session.user && to.path === "/login") return "/today";
-  return true;
-});
+  if (session.user && (to.path === "/login" || to.path === "/register")) {
+    // ссылку-приглашение открыли, уже войдя: она для нового пользователя — не «страница не найдена», а пояснение
+    if (to.query.code) toast("Вы уже вошли. Приглашение — для нового пользователя: откройте ссылку на его устройстве или выйдите.", "info", 7000);
+    return "/today";
+  }
+  return null;
+}
+router.beforeEach((to) => authRedirect(to) ?? true);

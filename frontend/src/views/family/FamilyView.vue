@@ -42,12 +42,12 @@ function newCode() {
   run(() => ok(api.POST("/api/v1/household/invite-code")), "Новый код готов");
 }
 
-// ---- приглашения в приложение (регистрация — пока в старом интерфейсе)
+// ---- приглашения в приложение (ссылка ведёт на регистрацию в этом же интерфейсе)
 const invites = ref<Schemas["InviteResponse"][]>([]);
 const intoFamily = ref(true);
 const loadInvites = () => ok(api.GET("/api/v1/household/registration-invites")).then((r) => { invites.value = r; }).catch(() => {});
 onMounted(loadInvites);
-const inviteLink = (code: string) => `${location.origin}/app/#/register?code=${code}`;
+const inviteLink = (code: string) => `${location.origin}${import.meta.env.BASE_URL}#/register?code=${code}`;
 async function createInvite() {
   try {
     const inv = await ok(api.POST("/api/v1/household/registration-invites", { body: { into_household: intoFamily.value } }));

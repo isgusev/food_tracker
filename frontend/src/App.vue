@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { authRedirect } from "./router";
 import { auth } from "./api/client";
 import NavIcon from "./components/NavIcon.vue";
 import { MORE } from "./nav";
@@ -25,8 +26,9 @@ const inMore = computed(() => MORE.some((m) => route.path.startsWith(m.to)));
 
 auth.onUnauthorized(() => router.replace("/login"));
 onMounted(async () => {
-  await loadSession();
-  if (!session.user && !route.meta.public) router.replace("/login");
+  await Promise.all([loadSession(), router.isReady()]);
+  const to = authRedirect(route);     // первый переход был до загрузки сессии — проверяем ещё раз
+  if (to) router.replace(to);
 });
 </script>
 
