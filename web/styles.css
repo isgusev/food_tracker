@@ -357,8 +357,9 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .day-word { display: flex; flex-direction: column; line-height: 1.15; font-size: 13px; }
 .day-word b { font-weight: 650; }
 .day-word span { color: var(--muted); font-size: 12px; }
-.day-kcal { font-size: 13px; font-weight: 600; white-space: nowrap; }
-.day-kcal small { font-weight: 400; color: var(--muted); font-size: 11px; }
+/* калории — в строке под полоской: в узких колонках недели шапка дня не вмещает их рядом с датой */
+.day-kcal { color: var(--text); font-weight: 600; }
+.day-word { min-width: 0; }
 .day-suggest { border: 1px dashed var(--graphite); background: transparent; padding: 3px 6px; border-radius: 8px; font-size: 13px; }
 .day-suggest:hover:not(:disabled) { background: var(--graphite-soft); }
 .day-meter { padding: 4px 12px 8px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
