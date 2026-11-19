@@ -9,7 +9,7 @@ from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.domain import MEAL_ORDER
-from app.models.plan import MealItem, MealPortion, WeekTemplate
+from app.models.plan import MealItem, MealPortion, PlanFeedback, WeekTemplate
 from app.models.product import Product, ProductManufacturer, ProductVariant
 from app.repositories.base import BaseRepository
 
@@ -90,6 +90,19 @@ class PlanRepository(BaseRepository[MealItem]):
         else:
             stmt = stmt.where(MealItem.variant_id == variant_id)
         return [(m, Decimal(str(w))) for m, w in (await self._session.execute(stmt)).all()]
+
+    def add_feedback(self, item: MealItem, action: str) -> None:
+        """Отзыв о предложении автоплана: по рецепту или по товару готового продукта."""
+        product = item.variant.manufacturer.product if item.variant is not None and item.variant.manufacturer else None
+        self._session.add(PlanFeedback(
+            household_id=item.household_id, recipe_id=item.recipe_id,
+            item_key=product.item_key if product is not None and item.recipe_id is None else None,
+            meal_type=item.meal_type, action=action,
+        ))
+
+    async def feedback_since(self, household_id: int, since) -> list[PlanFeedback]:
+        stmt = select(PlanFeedback).where(PlanFeedback.household_id == household_id, PlanFeedback.created_at >= since)
+        return list((await self._session.execute(stmt)).scalars().all())
 
     async def last_recipe_dates(self, household_id: int, before: date) -> dict[int, date]:
         """Последний день, когда рецепт стоял в плане до даты before (для «давно не готовили»)."""

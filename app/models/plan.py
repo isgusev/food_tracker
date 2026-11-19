@@ -121,3 +121,28 @@ class WeekTemplate(Base):
     # [{"weekday": 0..6, "meal_type", "recipe_id"|"variant_id", "portions": [{"member_id", "weight_g"}]}]
     items = Column(JSON, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class PlanFeedback(Base):
+    """Отзыв о предложении автоплана (docs/AUTOPLAN.md, 3.4): что семья сделала с предложенным блюдом.
+
+    accepted — ✓ принято, pinned — 📌 закреплено, replaced — 🔄 заменено, removed — ✕ убрано.
+    По рецепту (recipe_id) или по товару готового продукта (item_key). Учитывается в оценке блюд
+    с затуханием (app/services/autoplan.py, feedback_scores)."""
+
+    __tablename__ = "plan_feedback"
+
+    id = Column(Integer, primary_key=True)
+    household_id = Column(
+        Integer, ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    recipe_id = Column(Integer, ForeignKey("recipes.id", ondelete="CASCADE"), nullable=True, index=True)
+    item_key = Column(String(255), nullable=True)
+    meal_type = Column(String(20), nullable=True)
+    action = Column(String(10), nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_plan_feedback_household_created", "household_id", "created_at"),
+        CheckConstraint("action IN ('accepted', 'pinned', 'replaced', 'removed')", name="action"),
+    )

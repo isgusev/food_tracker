@@ -6,7 +6,7 @@ from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from app.models.household import Household, HouseholdMember, PlannerSettings
-from app.models.plan import MealItem, WeekTemplate
+from app.models.plan import MealItem, PlanFeedback, WeekTemplate
 from app.models.receipt import Receipt, ReceiptAlias
 from app.models.recipe import Recipe, RecipeCookingLog
 from app.models.stock import HouseholdProduct, ShoppingList, StockLot, StockMark, StockMovement
@@ -32,7 +32,7 @@ class HouseholdRepository(BaseRepository[Household]):
 
     async def move_all_data(self, from_id: int, to_id: int) -> None:
         """Переносит ВСЁ семьи from_id в семью to_id: рецепты, кастрюли, план, членов семьи, запасы
-        (партии, движения, пачки), списки покупок, настройки товаров, шаблоны недель, чеки и их
+        (партии, движения, пачки), списки покупок, настройки товаров, шаблоны недель, отзывы автоплана, чеки и их
         выученные сопоставления, приглашения. Старая семья потом удаляется — и всё, что осталось
         за ней, каскадом пропадает, поэтому список здесь должен быть полным.
 
@@ -72,7 +72,7 @@ class HouseholdRepository(BaseRepository[Household]):
             )
         await self._session.execute(delete(PlannerSettings).where(PlannerSettings.household_id == from_id))
         for model in (
-            Recipe, RecipeCookingLog, MealItem, WeekTemplate, HouseholdMember,
+            Recipe, RecipeCookingLog, MealItem, WeekTemplate, PlanFeedback, HouseholdMember,
             StockLot, StockMovement, StockMark, ShoppingList, HouseholdProduct,
             Receipt, ReceiptAlias, RegistrationInvite,
         ):
