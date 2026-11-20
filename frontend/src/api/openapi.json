@@ -1143,6 +1143,221 @@
     "title": "HouseholdUpdate",
     "type": "object"
    },
+   "ImportCandidate": {
+    "properties": {
+     "brand": {
+      "default": "",
+      "title": "Brand",
+      "type": "string"
+     },
+     "calories": {
+      "title": "Calories",
+      "type": "string"
+     },
+     "kbju_missing": {
+      "default": false,
+      "title": "Kbju Missing",
+      "type": "boolean"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "product_id": {
+      "title": "Product Id",
+      "type": "integer"
+     },
+     "score": {
+      "default": 1.0,
+      "title": "Score",
+      "type": "number"
+     },
+     "variant_id": {
+      "title": "Variant Id",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "variant_id",
+     "product_id",
+     "name",
+     "calories"
+    ],
+    "title": "ImportCandidate",
+    "type": "object"
+   },
+   "ImportIngredient": {
+    "description": "Ингредиент файла (одинаковые «продукт + бренд» во всех рецептах — один).\n\nstatus: matched — нашёлся по названию; fuzzy — похожий, подставлен, но проверьте; ambiguous — несколько\nпохожих, выберите; missing — не нашёлся, выберите или пропустите; chosen — выбран вручную; skipped — пропущен.",
+    "properties": {
+     "brand": {
+      "default": "",
+      "title": "Brand",
+      "type": "string"
+     },
+     "candidates": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/ImportCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+     },
+     "key": {
+      "title": "Key",
+      "type": "string"
+     },
+     "pick": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ImportCandidate"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "product": {
+      "title": "Product",
+      "type": "string"
+     },
+     "recipes": {
+      "default": [],
+      "items": {
+       "type": "integer"
+      },
+      "title": "Recipes",
+      "type": "array"
+     },
+     "status": {
+      "enum": [
+       "matched",
+       "fuzzy",
+       "ambiguous",
+       "missing",
+       "chosen",
+       "skipped"
+      ],
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "key",
+     "product",
+     "status"
+    ],
+    "title": "ImportIngredient",
+    "type": "object"
+   },
+   "ImportRecipeResult": {
+    "description": "status до записи: create / update / exists (уже есть — пропустим) / waiting (ждёт выбора продуктов или КБЖУ) /\nerror; после записи: created / updated / skipped / waiting / error.",
+    "properties": {
+     "calories_per_100g": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Calories Per 100G"
+     },
+     "category": {
+      "default": "",
+      "title": "Category",
+      "type": "string"
+     },
+     "cooked_weight": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cooked Weight"
+     },
+     "errors": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+     },
+     "ingredients": {
+      "default": 0,
+      "title": "Ingredients",
+      "type": "integer"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "new_category": {
+      "default": false,
+      "title": "New Category",
+      "type": "boolean"
+     },
+     "number": {
+      "title": "Number",
+      "type": "integer"
+     },
+     "recipe_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recipe Id"
+     },
+     "servings": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Servings"
+     },
+     "status": {
+      "enum": [
+       "create",
+       "update",
+       "exists",
+       "waiting",
+       "error",
+       "created",
+       "updated",
+       "skipped"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "warnings": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+     }
+    },
+    "required": [
+     "number",
+     "name",
+     "status"
+    ],
+    "title": "ImportRecipeResult",
+    "type": "object"
+   },
    "IngredientLine": {
     "description": "Строка ингредиентов (общая для шаблона и фактической закладки).",
     "properties": {
@@ -4210,6 +4425,89 @@
      "ingredients"
     ],
     "title": "RecipeCreate",
+    "type": "object"
+   },
+   "RecipeImportIn": {
+    "description": "Файл целиком текстом. dry_run — только отчёт, без записи.\n\nchoices — выбор для ингредиентов (ключ из отчёта → variant_id; null — пропустить ингредиент);\nupdate — номера рецептов (с 1), которые уже есть в семье и которые надо обновить (остальные такие пропускаются).",
+    "properties": {
+     "choices": {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "default": {},
+      "title": "Choices",
+      "type": "object"
+     },
+     "content": {
+      "maxLength": 1000000,
+      "minLength": 1,
+      "title": "Content",
+      "type": "string"
+     },
+     "dry_run": {
+      "default": true,
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "update": {
+      "default": [],
+      "items": {
+       "type": "integer"
+      },
+      "title": "Update",
+      "type": "array"
+     }
+    },
+    "required": [
+     "content"
+    ],
+    "title": "RecipeImportIn",
+    "type": "object"
+   },
+   "RecipeImportReport": {
+    "properties": {
+     "created": {
+      "default": 0,
+      "title": "Created",
+      "type": "integer"
+     },
+     "dry_run": {
+      "title": "Dry Run",
+      "type": "boolean"
+     },
+     "ingredients": {
+      "items": {
+       "$ref": "#/components/schemas/ImportIngredient"
+      },
+      "title": "Ingredients",
+      "type": "array"
+     },
+     "recipes": {
+      "items": {
+       "$ref": "#/components/schemas/ImportRecipeResult"
+      },
+      "title": "Recipes",
+      "type": "array"
+     },
+     "updated": {
+      "default": 0,
+      "title": "Updated",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "dry_run",
+     "recipes",
+     "ingredients"
+    ],
+    "title": "RecipeImportReport",
     "type": "object"
    },
    "RecipeResponse": {
@@ -9622,6 +9920,53 @@
      }
     ],
     "summary": "Get Cooking Log Usage",
+    "tags": [
+     "Рецепты и Сложные Блюда"
+    ]
+   }
+  },
+  "/api/v1/recipes/import": {
+   "post": {
+    "description": "Импорт рецептов из YAML (docs/RECIPE_IMPORT.md). dry_run=true — только отчёт: что создастся/обновится,\nкакие ингредиенты не сопоставились. Затем тот же файл с choices (ключ ингредиента → variant_id, null —\nпропустить) и update (номера рецептов, которые уже есть и их надо обновить) и dry_run=false.\nОшибки — по каждому рецепту отдельно, остальные импортируются.",
+    "operationId": "import_recipes_api_v1_recipes_import_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RecipeImportIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RecipeImportReport"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Import Recipes",
     "tags": [
      "Рецепты и Сложные Блюда"
     ]

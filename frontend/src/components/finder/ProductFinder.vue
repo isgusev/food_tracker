@@ -10,7 +10,8 @@ import { bjuLine, fmt, fmtQty, fuzzyScore, num } from "../../util";
 import BarcodeScanner from "./BarcodeScanner.vue";
 import KbjuInputs from "./KbjuInputs.vue";
 
-const props = defineProps<{ modelValue: number | null; draft: Draft | null; autofocus?: boolean; kbjuPrompt?: boolean }>();
+// initialQuery — сразу показать результаты по этому тексту (импорт рецептов: название из файла)
+const props = defineProps<{ modelValue: number | null; draft: Draft | null; autofocus?: boolean; kbjuPrompt?: boolean; initialQuery?: string }>();
 const emit = defineEmits<{ "update:modelValue": [id: number | null]; "update:draft": [d: Draft | null] }>();
 
 type Product = Schemas["ProductResponse"];
@@ -26,7 +27,7 @@ const offKcal = (s: Macro) => (s.calories != null ? `${fmt(s.calories)} ккал
 const bjuOf = (m: Macro) => (m.calories == null && !hasBju(m) ? "" : bjuLine(m));
 
 // ---- состояние поиска
-const query = ref("");
+const query = ref(props.initialQuery ?? "");
 const input = ref<HTMLInputElement | null>(null);
 const root = ref<HTMLElement | null>(null);
 const listOpen = ref(true);
@@ -163,7 +164,11 @@ function enterManually() {
 function clear() { query.value = ""; nextTick(() => input.value?.focus()); }
 function change() { emit("update:modelValue", null); emit("update:draft", null); nextTick(() => input.value?.focus()); }
 function onEnter() { if (!isCode.value && query.value.trim().length >= 2) search(query.value); }
-onMounted(() => { if (props.autofocus && !chosen.value) nextTick(() => input.value?.focus()); });
+onMounted(() => {
+  if (props.autofocus && !chosen.value) nextTick(() => input.value?.focus());
+  // начальный текст, а в справочнике ничего — сразу ищем в Open Food Facts
+  if (props.initialQuery && !chosen.value && !localRows.value.length) search(props.initialQuery);
+});
 </script>
 
 <template>

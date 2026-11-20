@@ -43,6 +43,7 @@ from app.services.stock import StockService
 from app.services.product import ProductService
 from app.services.receipt import ReceiptService
 from app.services.recipe import RecipeService
+from app.services.recipe_import import RecipeImportService
 
 
 
@@ -189,8 +190,18 @@ def get_plan_service(session: SessionDep) -> PlanService:
     )
 
 
+def get_recipe_import_service(session: SessionDep) -> RecipeImportService:
+    return RecipeImportService(
+        recipes_svc=get_recipe_service(session),
+        recipes=RecipeRepository(session),
+        categories=RecipeCategoryRepository(session),
+        products=ProductRepository(session),
+    )
+
+
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
+RecipeImportServiceDep = Annotated[RecipeImportService, Depends(get_recipe_import_service)]
 def get_finance_service(session: SessionDep) -> FinanceService:
     return FinanceService(
         stock_repo=StockRepository(session),
