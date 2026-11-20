@@ -234,7 +234,7 @@ cd frontend && npm run api                 # OpenAPI → src/api/openapi.json и
 - `develop` → тестовый стенд Amvera (`food-tracker-test`), автодеплой на push.
 - `main` → боевой стенд (`food-tracker`), деплой после успешного CI. В `main` — только
   после проверки на тесте (PR `develop` → `main`) или по явной просьбе Ивана.
-- Работа — в feature-ветках от `develop`. CI: `.github/workflows/ci.yml` (pytest + цикл миграций).
+- Работа — коммитами прямо в `develop` (без feature-веток и слияний; так просил Иван 20.11). CI: `.github/workflows/ci.yml` (pytest + цикл миграций).
 - Хостинг: `Dockerfile`, `amvera.yml` (порт 8000), `scripts/start.sh` (wait_db → alembic →
   uvicorn), инструкция `docs/DEPLOY_AMVERA.md`. Push в GitHub работает (токен в связке ключей).
 
