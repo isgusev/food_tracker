@@ -9,6 +9,8 @@ pydantic-settings==2.10.1
 # база часовых поясов для zoneinfo (в slim-образе её может не быть)
 tzdata==2025.2
 email-validator==2.2.0
+# импорт рецептов из YAML (docs/RECIPE_IMPORT.md)
+PyYAML==6.0.*
 
 # --- БД: PostgreSQL + SQLAlchemy 2.0 (async) + миграции ---
 sqlalchemy[asyncio]==2.0.*

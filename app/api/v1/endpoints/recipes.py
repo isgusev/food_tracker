@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentMemberDep, CurrentUserDep, RecipeServiceDep
+from app.api.deps import CurrentMemberDep, CurrentUserDep, RecipeImportServiceDep, RecipeServiceDep
 from app.core import clock
 from app.schemas.recipe import (
     CookingLogUpdate,
@@ -21,6 +21,7 @@ from app.schemas.recipe import (
     RecipeResponse,
     RecipeUpdate,
 )
+from app.schemas.recipe_import import RecipeImportIn, RecipeImportReport
 
 router = APIRouter(prefix="/recipes", tags=["Рецепты и Сложные Блюда"])
 
@@ -40,6 +41,17 @@ async def create_recipe_template(
     recipe_in: RecipeCreate, service: RecipeServiceDep, me: CurrentMemberDep, current_user: CurrentUserDep
 ):
     return await service.create_recipe(me.household_id, current_user.id, recipe_in)
+
+
+@router.post("/import", response_model=RecipeImportReport)
+async def import_recipes(
+    data: RecipeImportIn, service: RecipeImportServiceDep, me: CurrentMemberDep, current_user: CurrentUserDep
+):
+    """Импорт рецептов из YAML (docs/RECIPE_IMPORT.md). dry_run=true — только отчёт: что создастся/обновится,
+    какие ингредиенты не сопоставились. Затем тот же файл с choices (ключ ингредиента → variant_id, null —
+    пропустить) и update (номера рецептов, которые уже есть и их надо обновить) и dry_run=false.
+    Ошибки — по каждому рецепту отдельно, остальные импортируются."""
+    return await service.run(me.household_id, current_user.id, data)
 
 
 @router.get("/cooking-logs", response_model=list[RecipeCookingLogResponse])

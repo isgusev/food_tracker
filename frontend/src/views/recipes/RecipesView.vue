@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import { api, ok, type Schemas } from "../../api/client";
 import { catalog, ensureCatalog, recipeCategoryName } from "../../catalog";
 import CookModal from "../../components/fridge/CookModal.vue";
+import ImportModal from "../../components/recipes/ImportModal.vue";
 import RecipeModal from "../../components/recipes/RecipeModal.vue";
 import { toastError } from "../../session";
 import { fmt, fmtMacro, fuzzyScore, grams, local, matches, num } from "../../util";
@@ -15,6 +16,7 @@ const q = ref("");
 const cat = ref<number>(local.get("ft.recipeCat", 0));
 const opened = ref<Recipe | null>(null);
 const creating = ref(false);
+const importing = ref(false);
 const cookId = ref<number | null>(null);
 const costs = ref<Record<number, Schemas["RecipeCost"]>>({});
 
@@ -43,7 +45,10 @@ const cost = (r: Recipe) => costs.value[r.id];
   <div class="recipes">
     <header class="head">
       <h1 class="display">Рецепты</h1>
-      <button class="fill" @click="creating = true">+ Новый рецепт</button>
+      <div class="hb">
+        <button class="text" @click="importing = true">Импорт</button>
+        <button class="fill" @click="creating = true">+ Новый рецепт</button>
+      </div>
     </header>
 
     <div class="tools">
@@ -58,8 +63,12 @@ const cost = (r: Recipe) => costs.value[r.id];
     </div>
 
     <div v-if="catalog.loaded.recipes && !catalog.recipes.length" class="empty">
-      <p>Рецептов пока нет. Начните с того, что готовите чаще всего, — по ним план посчитает покупки и КБЖУ.</p>
-      <button class="fill" @click="creating = true">+ Новый рецепт</button>
+      <p>Рецептов пока нет. Начните с того, что готовите чаще всего, — по ним план посчитает покупки и КБЖУ.
+        Много рецептов сразу — импортом из файла.</p>
+      <div class="hb">
+        <button class="fill" @click="creating = true">+ Новый рецепт</button>
+        <button @click="importing = true">Импорт из файла</button>
+      </div>
     </div>
     <p v-else-if="catalog.loaded.recipes && !list.length" class="muted">Ничего не нашлось{{ cat ? " в этой категории" : "" }}.</p>
 
@@ -88,6 +97,7 @@ const cost = (r: Recipe) => costs.value[r.id];
     <p v-if="list.length" class="tiny muted">КБЖУ — на 100 г готового блюда. Цена порции — по последним покупкам; «+» — известна не для всех ингредиентов.</p>
 
     <RecipeModal v-if="opened || creating" :recipe="opened" @close="opened = null; creating = false" @saved="onSaved" @cook="onCook" />
+    <ImportModal v-if="importing" @close="importing = false; loadCosts()" />
     <CookModal v-if="cookId" :recipe-id="cookId" @close="cookId = null" @saved="cooked" />
   </div>
 </template>
@@ -96,6 +106,7 @@ const cost = (r: Recipe) => costs.value[r.id];
 .recipes { display: flex; flex-direction: column; gap: 14px; max-width: 1100px; }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 h1 { font-size: 32px; color: var(--rim); }
+.hb { display: flex; gap: 8px; flex-wrap: wrap; }
 p { margin: 0; }
 .tools { display: flex; flex-direction: column; gap: 10px; }
 .search { position: relative; max-width: 420px; }

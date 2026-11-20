@@ -31,7 +31,7 @@
   (`views/shopping/ShoppingView.vue`; `components/shopping/*`: `BoughtModal`, `PackageModal`, `ExtraModal`,
   `RegularBlock`, `ReceiptModal` — отдельный кусок; `src/shopping.ts` — `pkgText`, `lineQty`, офлайн-очередь
   `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); **Рецепты** (`views/recipes/RecipesView.vue`,
-  `components/recipes/RecipeModal.vue` — просмотр и правка); **Продукты** (`views/catalog/CatalogView.vue`;
+  `components/recipes/RecipeModal.vue` — просмотр и правка, `ImportModal.vue` — импорт из YAML); **Продукты** (`views/catalog/CatalogView.vue`;
   `components/catalog/*`: `ProductModal`, `NewProductModal`, `ItemsPanel` — отдельный кусок, `MoveModal`); **Семья** (`views/family/FamilyView.vue`; `components/family/MemberCard.vue`,
   `PlannerSettings.vue`); **Деньги** (`views/money/MoneyView.vue`: `GET /finance/summary` за месяц,
   `PUT /finance/budget`); «Ещё» — `views/MoreView.vue`, список разделов — `src/nav.ts`
@@ -105,6 +105,12 @@
   выборка за местные дни — `clock.utc_bounds(start, end)` (полуинтервал). `date.today()` в коде не использовать.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
+
+- Импорт рецептов из YAML (формат — `docs/RECIPE_IMPORT.md`): `POST /recipes/import {content, dry_run, choices, update}`
+  (`app/services/recipe_import.py`: `parse_recipe`, `match`/`similarity` — сопоставление со справочником, статусы
+  matched/fuzzy/ambiguous/missing/chosen/skipped; запись — через `RecipeService.create_recipe`/`update_recipe`).
+  Продукты молча не создаёт: выбор — `choices` (ключ «продукт|бренд» → variant_id, null — пропустить). Новый интерфейс:
+  «Рецепты → Импорт» — `components/recipes/ImportModal.vue` (`ProductFinder initialQuery` — поиск с текстом из файла).
 
 ## Предметная модель (кратко)
 
@@ -207,7 +213,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 137 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 141 тест, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0026)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/

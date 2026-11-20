@@ -1306,6 +1306,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recipes/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Recipes
+         * @description Импорт рецептов из YAML (docs/RECIPE_IMPORT.md). dry_run=true — только отчёт: что создастся/обновится,
+         *     какие ингредиенты не сопоставились. Затем тот же файл с choices (ключ ингредиента → variant_id, null —
+         *     пропустить) и update (номера рецептов, которые уже есть и их надо обновить) и dry_run=false.
+         *     Ошибки — по каждому рецепту отдельно, остальные импортируются.
+         */
+        post: operations["import_recipes_api_v1_recipes_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recipes/{recipe_id}": {
         parameters: {
             query?: never;
@@ -2117,6 +2140,115 @@ export interface components {
             name?: string | null;
             /** Portion Tolerance */
             portion_tolerance?: number | null;
+        };
+        /** ImportCandidate */
+        ImportCandidate: {
+            /**
+             * Brand
+             * @default
+             */
+            brand?: string;
+            /** Calories */
+            calories: string;
+            /**
+             * Kbju Missing
+             * @default false
+             */
+            kbju_missing?: boolean;
+            /** Name */
+            name: string;
+            /** Product Id */
+            product_id: number;
+            /**
+             * Score
+             * @default 1
+             */
+            score?: number;
+            /** Variant Id */
+            variant_id: number;
+        };
+        /**
+         * ImportIngredient
+         * @description Ингредиент файла (одинаковые «продукт + бренд» во всех рецептах — один).
+         *
+         *     status: matched — нашёлся по названию; fuzzy — похожий, подставлен, но проверьте; ambiguous — несколько
+         *     похожих, выберите; missing — не нашёлся, выберите или пропустите; chosen — выбран вручную; skipped — пропущен.
+         */
+        ImportIngredient: {
+            /**
+             * Brand
+             * @default
+             */
+            brand?: string;
+            /**
+             * Candidates
+             * @default []
+             */
+            candidates?: components["schemas"]["ImportCandidate"][];
+            /** Key */
+            key: string;
+            pick?: components["schemas"]["ImportCandidate"] | null;
+            /** Product */
+            product: string;
+            /**
+             * Recipes
+             * @default []
+             */
+            recipes?: number[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "matched" | "fuzzy" | "ambiguous" | "missing" | "chosen" | "skipped";
+        };
+        /**
+         * ImportRecipeResult
+         * @description status до записи: create / update / exists (уже есть — пропустим) / waiting (ждёт выбора продуктов или КБЖУ) /
+         *     error; после записи: created / updated / skipped / waiting / error.
+         */
+        ImportRecipeResult: {
+            /** Calories Per 100G */
+            calories_per_100g?: string | null;
+            /**
+             * Category
+             * @default
+             */
+            category?: string;
+            /** Cooked Weight */
+            cooked_weight?: string | null;
+            /**
+             * Errors
+             * @default []
+             */
+            errors?: string[];
+            /**
+             * Ingredients
+             * @default 0
+             */
+            ingredients?: number;
+            /** Name */
+            name: string;
+            /**
+             * New Category
+             * @default false
+             */
+            new_category?: boolean;
+            /** Number */
+            number: number;
+            /** Recipe Id */
+            recipe_id?: number | null;
+            /** Servings */
+            servings?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "create" | "update" | "exists" | "waiting" | "error" | "created" | "updated" | "skipped";
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings?: string[];
         };
         /**
          * IngredientLine
@@ -3119,6 +3251,53 @@ export interface components {
             name: string;
             /** Recipe Category Id */
             recipe_category_id: number;
+        };
+        /**
+         * RecipeImportIn
+         * @description Файл целиком текстом. dry_run — только отчёт, без записи.
+         *
+         *     choices — выбор для ингредиентов (ключ из отчёта → variant_id; null — пропустить ингредиент);
+         *     update — номера рецептов (с 1), которые уже есть в семье и которые надо обновить (остальные такие пропускаются).
+         */
+        RecipeImportIn: {
+            /**
+             * Choices
+             * @default {}
+             */
+            choices?: {
+                [key: string]: number | null;
+            };
+            /** Content */
+            content: string;
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run?: boolean;
+            /**
+             * Update
+             * @default []
+             */
+            update?: number[];
+        };
+        /** RecipeImportReport */
+        RecipeImportReport: {
+            /**
+             * Created
+             * @default 0
+             */
+            created?: number;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Ingredients */
+            ingredients: components["schemas"]["ImportIngredient"][];
+            /** Recipes */
+            recipes: components["schemas"]["ImportRecipeResult"][];
+            /**
+             * Updated
+             * @default 0
+             */
+            updated?: number;
         };
         /** RecipeResponse */
         RecipeResponse: {
@@ -6047,6 +6226,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PotUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_recipes_api_v1_recipes_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeImportIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeImportReport"];
                 };
             };
             /** @description Validation Error */

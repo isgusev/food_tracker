@@ -74,6 +74,11 @@ class RecipeRepository(BaseRepository[Recipe]):
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
+    async def names(self, household_id: int) -> list[tuple[int, str]]:
+        """(id, название) всех рецептов семьи — для сравнения названий в Python (кириллица)."""
+        stmt = select(Recipe.id, Recipe.name).where(Recipe.household_id == household_id).order_by(Recipe.id)
+        return [(rid, name) for rid, name in (await self._session.execute(stmt)).fetchall()]
+
     async def name_exists(self, household_id: int, name: str) -> bool:
         """Есть ли в семье рецепт с таким названием (без учёта регистра).
 
