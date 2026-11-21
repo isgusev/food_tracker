@@ -55,13 +55,17 @@ def test_typical_portion_rules():
             self.id, self.target_calories = id, kcal
     me, wife, kid = M(1, 2400), M(2, 1800), M(3, None)
     d = Decimal
-    # история есть у меня — у остальных пропорционально цели ккал (ребёнок без цели — 2000)
+    # история есть у меня — у остальных медиана семьи, без поправки на цель ккал
     t = typical_from([me, wife, kid], {1: [d(400), d(500), d(450)]}, "lunch", d(100))
-    assert t[1] == (d(450), "history") and t[2] == (d(340), "family") and t[3] == (d(375), "family")
+    assert t[1] == (d(450), "history") and t[2] == (d(450), "family") and t[3] == (d(450), "family")
     # истории нет — доля цели на приём пищи: 1800 × 25 % / 150 ккал на 100 г = 300 г
     assert typical_from([wife], {}, "breakfast", d(150))[2] == (d(300), "target")
-    # у рецепта есть стандартная порция (выход / порций) — она, с поправкой на цель: грибы 61 ккал не дадут кило
-    assert typical_from([wife, kid], {}, "lunch", d(61), standard=d(140)) == {2: (d(125), "recipe"), 3: (d(140), "recipe")}
+    # у рецепта есть порция (выход / порций) — каждому по одной, цель ккал её не меняет (21.11)
+    assert typical_from([me, wife, kid], {}, "lunch", d(61), standard=d(450)) == {
+        1: (d(450), "recipe"), 2: (d(450), "recipe"), 3: (d(450), "recipe")}
+    # своя история важнее порции рецепта, чужая — нет
+    t = typical_from([me, wife], {1: [d(300)]}, "dinner", d(100), standard=d(450))
+    assert t == {1: (d(300), "history"), 2: (d(450), "recipe")}
 
 
 async def test_typical_portions_endpoint(client):
@@ -158,10 +162,10 @@ async def test_autofill_period_validation_and_family_portions(client):
     await set_kcal(client, h, me, 2000)
     past = await plan(client, h, date_day=day(-1), recipe_id=rid, portions=[{"member_id": me, "weight_g": 400}])
     await client.post(f"/api/v1/plan/{past['id']}/eat", headers=h)
-    await cook(client, h, rid, vid, 600)
+    await cook(client, h, rid, vid, 800)
     items = await autofill(client, h, day(0), day(0))
     assert len(items) == 1
     w = {p["member_id"]: float(p["weight_g"]) for p in items[0]["portions"]}
-    assert w == {me: 400.0, kid: 200.0}                          # ребёнку — по цели ккал от моей истории
+    assert w == {me: 400.0, kid: 400.0}             # ребёнку — как едят в семье; цель ккал порцию не меняет (21.11)
     r = await client.post("/api/v1/plan/autofill", json={"start": day(3), "end": day(0)}, headers=h)
     assert r.status_code == 422

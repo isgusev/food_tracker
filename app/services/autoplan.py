@@ -122,21 +122,20 @@ def typical_from(
     kcal_per_100g: Decimal,
     standard: Decimal | None = None,
 ) -> dict[int, tuple[Decimal, str]]:
-    """Типичная порция каждого: медиана съеденного → по другим членам семьи пропорционально цели
-    ккал → стандартная порция рецепта (выход / порций) × цель ккал / 2000 → доля цели ккал на приём
-    пищи. Источник — history / family / recipe / target. Стандартная порция — раньше доли цели:
-    у лёгких блюд (грибы, овощи) доля цели даёт килограммовые порции."""
+    """Типичная порция каждого: своя медиана съеденного (так человек ест на самом деле — в том числе после
+    ручных правок) → одна порция рецепта (выход / порций) → медиана съеденного другими членами семьи → доля
+    цели ккал на приём пищи. Источник — history / recipe / family / target. Цель ккал размер порции блюда
+    не меняет (решение Ивана 21.11): каждому по порции, кто ест меньше — правит вручную, и это запоминается
+    историей. Доля цели остаётся последним запасным вариантом — для готовых продуктов и рецептов без порций."""
     out: dict[int, tuple[Decimal, str]] = {}
     known = {m.id: Decimal(str(median(history[m.id]))) for m in members if history.get(m.id)}
-    by_id = {m.id: m for m in members}
     for m in members:
         if m.id in known:
             out[m.id] = (_round5(known[m.id]), "history")
-        elif known:
-            ratios = [w * _kcal(m) / _kcal(by_id[o]) for o, w in known.items() if o in by_id]
-            out[m.id] = (_round5(sum(ratios, ZERO) / len(ratios)), "family")
         elif standard:
-            out[m.id] = (_round5(standard * _kcal(m) / DEFAULT_KCAL), "recipe")
+            out[m.id] = (_round5(standard), "recipe")
+        elif known:
+            out[m.id] = (_round5(Decimal(str(median(known.values())))), "family")
         else:
             share = MEAL_SHARE.get(meal_type, Decimal("0.3"))
             per100 = kcal_per_100g if kcal_per_100g and kcal_per_100g > 0 else Decimal("100")
