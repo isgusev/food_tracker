@@ -385,6 +385,8 @@ async def test_batch_check_hint(client):
     assert await check(950) == ("short", -50.0, 900.0)         # в допуске: одна закладка, порции уменьшатся
     assert await check(900) == ("ok", 0.0, 900.0)
     assert await check(1350) == ("ok", 0.0, 1350.0)            # полторы закладки ровно
+    assert (await check(902))[0] == "ok"                       # порция 450 округлена вверх — пара граммов не в счёт
+    assert (await check(895))[0] == "ok"
 
     # завтра уже стоит 100 г этой пасты — закладка общая: 800 + 100 = 900
     item = await plan(client, h, date_day=day(1), recipe_id=rid, portions=[{"member_id": me, "weight_g": 100}])

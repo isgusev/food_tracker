@@ -234,7 +234,11 @@ class PlanService:
         batches = batches_for(total, cooked, bool(recipe.allow_half), await self._plan.tolerance(household_id))
         leftover = batches * cooked - total
         portion = standard_portion(recipe)
-        if leftover < 0:
+        # расхождение в несколько граммов (порция 432,5 г округлена до 433) — не повод для подсказки
+        noise = max(Decimal(10), batches * cooked / 100)
+        if abs(leftover) < noise:
+            status = "ok"
+        elif leftover < 0:
             status = "short"
         elif portion is not None and 0 < leftover < portion:
             status = "leftover"
