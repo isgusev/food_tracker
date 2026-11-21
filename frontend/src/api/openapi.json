@@ -474,6 +474,68 @@
     "title": "BarcodeSuggestion",
     "type": "object"
    },
+   "BatchCheck": {
+    "description": "Хватит ли закладки рецепта под блюдо (подсказка в форме плана).\n\nstatus: pot — блюдо возьмёт готовое из холодильника; ok — остаток после готовки 0 или от порции и больше;\nleftover — останется меньше порции (leftover г); short — не хватит в пределах допуска, при готовке порции\nуменьшатся; none — проверять нечего (у рецепта нет выхода). Считается вместе с другими неприготовленными\nблюдами этого рецепта, пока закладка свежая (± keeps_days − 1 дней) — как в покупках (`batches_for`).\ntarget — сколько граммов дать этому блюду, чтобы съесть закладки целиком.",
+    "properties": {
+     "batches": {
+      "default": "0",
+      "title": "Batches",
+      "type": "string"
+     },
+     "cooked": {
+      "default": "0",
+      "title": "Cooked",
+      "type": "string"
+     },
+     "leftover": {
+      "default": "0",
+      "title": "Leftover",
+      "type": "string"
+     },
+     "others": {
+      "default": "0",
+      "title": "Others",
+      "type": "string"
+     },
+     "planned": {
+      "default": "0",
+      "title": "Planned",
+      "type": "string"
+     },
+     "portion": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Portion"
+     },
+     "status": {
+      "enum": [
+       "pot",
+       "ok",
+       "leftover",
+       "short",
+       "none"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "target": {
+      "default": "0",
+      "title": "Target",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "BatchCheck",
+    "type": "object"
+   },
    "BodyProfile-Input": {
     "description": "Параметры для расчёта целей (хранятся, чтобы не вводить каждый раз).",
     "properties": {
@@ -7450,6 +7512,97 @@
     ]
    }
   },
+  "/api/v1/plan/batch-check": {
+   "get": {
+    "description": "Подсказка формы плана: сколько останется от закладки после готовки (вместе с другими неприготовленными\nблюдами рецепта, пока закладка свежая). item_id — правка существующего блюда.",
+    "operationId": "batch_check_api_v1_plan_batch_check_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "recipe_id",
+      "required": true,
+      "schema": {
+       "title": "Recipe Id",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "date_day",
+      "required": true,
+      "schema": {
+       "format": "date",
+       "title": "Date Day",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "weight_g",
+      "required": true,
+      "schema": {
+       "anyOf": [
+        {
+         "minimum": 0.0,
+         "type": "number"
+        },
+        {
+         "type": "string"
+        }
+       ],
+       "title": "Weight G"
+      }
+     },
+     {
+      "in": "query",
+      "name": "item_id",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Item Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BatchCheck"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Batch Check",
+    "tags": [
+     "План питания"
+    ]
+   }
+  },
   "/api/v1/plan/portions/{portion_id}": {
    "delete": {
     "description": "Убрать порцию. Если она была последней — блюдо удаляется (ответ 204).",
@@ -7959,7 +8112,7 @@
   },
   "/api/v1/plan/typical-portions": {
    "get": {
-    "description": "Типичная порция каждого члена семьи для блюда/продукта: по съеденному за 90 дней,\nиначе по другим членам семьи (пропорционально цели ккал), иначе по доле цели на приём пищи.",
+    "description": "Типичная порция каждого члена семьи для блюда/продукта: своя медиана съеденного за 90 дней → порция\nрецепта (выход / порций) → как едят другие члены семьи → доля цели ккал на приём пищи.",
     "operationId": "typical_portions_api_v1_plan_typical_portions_get",
     "parameters": [
      {

@@ -28,7 +28,7 @@ from app.models.plan import MealItem, MealPortion
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
 from app.repositories.plan import PlanRepository
-from app.services.pots import fit_weights
+from app.services.pots import fit_weights, standard_portion
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.recipe import Recipe
 from app.repositories.household import HouseholdRepository
@@ -141,14 +141,6 @@ def typical_from(
             per100 = kcal_per_100g if kcal_per_100g and kcal_per_100g > 0 else Decimal("100")
             out[m.id] = (_round5(_kcal(m) * share / per100 * 100), "target")
     return out
-
-
-def standard_portion(recipe) -> Decimal | None:
-    """Порция по рецепту: выход / число порций (если порций больше одной — иначе это вся кастрюля)."""
-    if recipe is None or not recipe.default_servings or recipe.default_servings < 2:
-        return None
-    return Decimal(str(recipe.estimated_cooked_weight)) / recipe.default_servings
-
 
 
 _monday = monday

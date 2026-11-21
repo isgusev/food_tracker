@@ -16,6 +16,7 @@ from app.schemas.plan import (
     AcceptOut,
     AutofillIn,
     AutofillOut,
+    BatchCheck,
     TypicalPortion,
     EatOptionalWeight,
     MealItemCreate,
@@ -52,11 +53,25 @@ async def typical_portions(
     recipe_id: int | None = Query(default=None),
     variant_id: int | None = Query(default=None),
 ):
-    """Типичная порция каждого члена семьи для блюда/продукта: по съеденному за 90 дней,
-    иначе по другим членам семьи (пропорционально цели ккал), иначе по доле цели на приём пищи."""
+    """Типичная порция каждого члена семьи для блюда/продукта: своя медиана съеденного за 90 дней → порция
+    рецепта (выход / порций) → как едят другие члены семьи → доля цели ккал на приём пищи."""
     if meal_type not in MEAL_TYPES or (recipe_id is None) == (variant_id is None):
         raise ValidationError("Нужны meal_type и ровно одно из recipe_id / variant_id")
     return await service.typical_for(me.household_id, meal_type, recipe_id, variant_id)
+
+
+@router.get("/batch-check", response_model=BatchCheck)
+async def batch_check(
+    service: PlanServiceDep,
+    me: CurrentMemberDep,
+    recipe_id: int = Query(),
+    date_day: date = Query(),
+    weight_g: Decimal = Query(ge=0),
+    item_id: int | None = Query(default=None),
+):
+    """Подсказка формы плана: сколько останется от закладки после готовки (вместе с другими неприготовленными
+    блюдами рецепта, пока закладка свежая). item_id — правка существующего блюда."""
+    return await service.batch_check(me.household_id, recipe_id, date_day, weight_g, clock.today(), item_id)
 
 
 @router.post("/autofill", response_model=AutofillOut)

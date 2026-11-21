@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date as date_type
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -146,6 +146,25 @@ class TypicalPortion(BaseModel):
     member_id: int
     weight_g: Decimal
     source: str   # history — по съеденному · family — по другим членам семьи · recipe — порция рецепта · target — по цели ккал
+
+
+class BatchCheck(BaseModel):
+    """Хватит ли закладки рецепта под блюдо (подсказка в форме плана).
+
+    status: pot — блюдо возьмёт готовое из холодильника; ok — остаток после готовки 0 или от порции и больше;
+    leftover — останется меньше порции (leftover г); short — не хватит в пределах допуска, при готовке порции
+    уменьшатся; none — проверять нечего (у рецепта нет выхода). Считается вместе с другими неприготовленными
+    блюдами этого рецепта, пока закладка свежая (± keeps_days − 1 дней) — как в покупках (`batches_for`).
+    target — сколько граммов дать этому блюду, чтобы съесть закладки целиком."""
+
+    status: Literal["pot", "ok", "leftover", "short", "none"]
+    cooked: Decimal = Decimal(0)          # выход одной закладки
+    batches: Decimal = Decimal(0)
+    planned: Decimal = Decimal(0)         # это блюдо
+    others: Decimal = Decimal(0)          # другие блюда той же закладки
+    leftover: Decimal = Decimal(0)        # < 0 — нехватка
+    portion: Optional[Decimal] = None     # порция рецепта (выход / порций)
+    target: Decimal = Decimal(0)
 
 
 class AutofillIn(BaseModel):

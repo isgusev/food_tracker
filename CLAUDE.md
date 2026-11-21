@@ -24,7 +24,8 @@
   Визуальная система — `docs/DESIGN.md` («эмалированная посуда»: ободок `--rim`, клюв `--beak` — одно место на экране,
   карандаш для черновиков; Golos Text + Unbounded, свои шрифты). Готово: вход, оболочка, «Сегодня», **План** (неделя
   `views/plan/PlanView.vue`, день `DayView.vue`, окна `components/plan/*`: `AddItemModal`, `PlanItemModal`,
-  `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`), **Холодильник** (`views/fridge/FridgeView.vue`:
+  `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`, `BatchHint` — строка «останется меньше порции» по
+  `GET /plan/batch-check`), **Холодильник** (`views/fridge/FridgeView.vue`:
   кастрюли, морозилка, архив; `components/fridge/CookModal`, `PotModal`; вкладка «Продукты» — `components/stock/*`:
   `StockTab`, `AddLotModal`, `PacksEditor`, `SplitLotModal`, `StockItemModal`, `QuickInventory`); состав блюда —
   `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; **Покупки**
@@ -140,6 +141,10 @@
   `recipe` — она в `CookingLogRepository.full_query`). Типичные порции — `GET /plan/typical-portions` (своя медиана
   съеденного за 90 дн. → одна порция рецепта (выход / порций, если порций > 1) → медиана съеденного другими → доля цели
   ккал на приём; цель ккал размер порции блюда не меняет — решение 21.11); форма «Добавить в план» берёт их, если на устройстве нет «как в прошлый раз».
+  `GET /plan/batch-check {recipe_id, date_day, weight_g, item_id?}` (`PlanService.batch_check`) — что останется от
+  закладки после готовки, вместе с другими блюдами рецепта без кастрюли в пределах ± (keeps_days − 1) дн. (тот же
+  `batches_for`): `leftover` — меньше порции рецепта, `short` — больше закладки в пределах допуска, `pot` — возьмут из
+  кастрюли; `target` — вес блюда, чтобы съесть закладку целиком («Разделить всю закладку» — пропорционально).
   `POST /plan/autofill {start, end, meal_types?, dry_run?, cook?}` (этап 2) — только ПУСТЫЕ ячейки: остатки холодильника
   (пока свежие), заготовки (≤ 14 дн. — в любой день, иначе в дни «без готовки»), затем готовки по оценке (`Scoring` в
   `autoplan.py`: давно не готовили / срок продуктов ≤ 3 дн. / общие товары / белок / цена при тугом бюджете / штраф
@@ -198,7 +203,7 @@
   количества — одна упаковка. Чек добавляет с `merge=False` (строку сразу отмечает купленной).
 - **Покупки** = потребность периода − (запасы − съедим до начала периода); рецепт — целыми закладками
   за период (`Recipe.allow_half` — шаг полкастрюли; на шаг меньше, если не хватает в пределах допуска — `batches_for`
-  в `shopping.py`, то же правило `fits`, что у кастрюли), затем всегда до целых упаковок (упаковки — по всем
+  в `pots.py`, то же правило `fits`, что у кастрюли), затем всегда до целых упаковок (упаковки — по всем
   брендам товара; нет упаковки — в списке «📦 Упаковка?», добавили — список пересчитывается); общий
   `ShoppingList` (один активный на семью), «куплено» сразу создаёт партию. С допуском семьи
   `pick_packages(..., tolerance)` берёт на упаковку меньше, если недобор ≤ допуска (400 г, пачка 360 г → одна),
@@ -214,7 +219,7 @@
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 142 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/python -m pytest -q              # 143 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
 .venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0026)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/

@@ -364,3 +364,39 @@ async def test_join_keeps_stock_shopping_and_settings(client):
     assert (await client.get("/api/v1/shopping-lists/active", headers=anna)).status_code == 200
     names = [t["name"] for t in (await client.get("/api/v1/plan/templates", headers=ivan)).json()]
     assert names == ["Неделя Анны"]
+
+
+async def test_batch_check_hint(client):
+    """Подсказка формы: что останется от закладки (паста: выход 900 г, 2 порции, «можно половиной», допуск 15 %)."""
+    from tests.helpers import recipe
+    h = await register_and_login(client, "bcheck", "bcheck@test.com")
+    vid, _ = await build_recipe_stack(client, h)               # категория рецептов и продукт
+    rid = await recipe(client, h, "Паста", vid, cooked=900, servings=2, allow_half=True)
+    me = await me_id(client, h)
+
+    async def check(weight, date_day=day(0), **kw):
+        r = await client.get("/api/v1/plan/batch-check", headers=h,
+                             params={"recipe_id": rid, "date_day": date_day, "weight_g": weight, **kw})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        return j["status"], float(j["leftover"]), float(j["target"])
+
+    assert await check(800) == ("leftover", 100.0, 900.0)      # останется 100 г — меньше порции 450 г
+    assert await check(950) == ("short", -50.0, 900.0)         # в допуске: одна закладка, порции уменьшатся
+    assert await check(900) == ("ok", 0.0, 900.0)
+    assert await check(1350) == ("ok", 0.0, 1350.0)            # полторы закладки ровно
+
+    # завтра уже стоит 100 г этой пасты — закладка общая: 800 + 100 = 900
+    item = await plan(client, h, date_day=day(1), recipe_id=rid, portions=[{"member_id": me, "weight_g": 100}])
+    assert await check(800) == ("ok", 0.0, 800.0)
+    assert (await check(800, date_day=day(5)))[0] == "leftover"    # через 5 дней закладка уже другая
+    # правка самого блюда: в «других» оно не считается
+    assert await check(100, date_day=day(1), item_id=item["id"]) == ("leftover", 350.0, 450.0)
+
+    # сварили — блюда берут из холодильника
+    await cook(client, h, rid, vid, 600)
+    assert (await check(400))[0] == "pot"                      # свободно 500 г
+    assert (await check(100, date_day=day(1), item_id=item["id"]))[0] == "pot"
+    bad = await client.get("/api/v1/plan/batch-check", headers=h,
+                           params={"recipe_id": 999999, "date_day": day(0), "weight_g": 100})
+    assert bad.status_code == 404

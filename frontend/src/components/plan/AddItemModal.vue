@@ -10,6 +10,7 @@ import { activeMembers, toast } from "../../session";
 import { MEALS, bjuLine, dayMonthShort, fmt, fmtQty, grams, local, num, packageGrams, weekdayShort } from "../../util";
 import ItemPicker, { type PickerItem } from "../ItemPicker.vue";
 import ModalSheet from "../ModalSheet.vue";
+import BatchHint from "./BatchHint.vue";
 import OffDraftCard from "../finder/OffDraftCard.vue";
 import ProductFinder from "../finder/ProductFinder.vue";
 
@@ -125,6 +126,13 @@ watch([recipeId, total, kind], async () => {
   } catch { /* подсказка необязательна */ }
 });
 const potFree = computed(() => (potStatus.value ? num(potStatus.value.available_g) - num(potStatus.value.planned_g) : 0));
+
+// «Разделить всю закладку»: порции (и гостей) — пропорционально под target граммов
+function fitTo(target: number) {
+  const k = total.value > 0 ? target / total.value : 1;
+  for (const r of rows.value) if (r.on) r.weight = Math.round(num(r.weight) * k);
+  if (num(guests.value)) guestWeight.value = Math.round(num(guestWeight.value) * k);
+}
 
 function toggleDate(d: string) {
   const i = dates.value.indexOf(d);
@@ -243,6 +251,9 @@ async function save() {
       <template v-if="potFree >= total">Свободного хватает — возьмём из кастрюли.</template>
       <template v-else>Свободно только {{ grams(Math.max(0, potFree)) }} — блюдо попадёт в покупки как «надо приготовить».</template>
     </div>
+
+    <BatchHint v-if="kind === 'recipe' && dates.length === 1 && !(potStatus?.has_active_pot && potFree >= total)"
+               :recipe-id="recipeId" :date="dates[0]" :weight="total" :disabled="busy" @fit="fitTo" />
 
     <div class="field">
       <span class="lbl">Приём пищи</span>

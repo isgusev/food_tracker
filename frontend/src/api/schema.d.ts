@@ -541,6 +541,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/plan/batch-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Batch Check
+         * @description Подсказка формы плана: сколько останется от закладки после готовки (вместе с другими неприготовленными
+         *     блюдами рецепта, пока закладка свежая). item_id — правка существующего блюда.
+         */
+        get: operations["batch_check_api_v1_plan_batch_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plan/portions/{portion_id}": {
         parameters: {
             query?: never;
@@ -709,8 +730,8 @@ export interface paths {
         };
         /**
          * Typical Portions
-         * @description Типичная порция каждого члена семьи для блюда/продукта: по съеденному за 90 дней,
-         *     иначе по другим членам семьи (пропорционально цели ккал), иначе по доле цели на приём пищи.
+         * @description Типичная порция каждого члена семьи для блюда/продукта: своя медиана съеденного за 90 дней → порция
+         *     рецепта (выход / порций) → как едят другие члены семьи → доля цели ккал на приём пищи.
          */
         get: operations["typical_portions_api_v1_plan_typical_portions_get"];
         put?: never;
@@ -1930,6 +1951,55 @@ export interface components {
             package_unit?: string | null;
             /** Proteins */
             proteins?: string | null;
+        };
+        /**
+         * BatchCheck
+         * @description Хватит ли закладки рецепта под блюдо (подсказка в форме плана).
+         *
+         *     status: pot — блюдо возьмёт готовое из холодильника; ok — остаток после готовки 0 или от порции и больше;
+         *     leftover — останется меньше порции (leftover г); short — не хватит в пределах допуска, при готовке порции
+         *     уменьшатся; none — проверять нечего (у рецепта нет выхода). Считается вместе с другими неприготовленными
+         *     блюдами этого рецепта, пока закладка свежая (± keeps_days − 1 дней) — как в покупках (`batches_for`).
+         *     target — сколько граммов дать этому блюду, чтобы съесть закладки целиком.
+         */
+        BatchCheck: {
+            /**
+             * Batches
+             * @default 0
+             */
+            batches?: string;
+            /**
+             * Cooked
+             * @default 0
+             */
+            cooked?: string;
+            /**
+             * Leftover
+             * @default 0
+             */
+            leftover?: string;
+            /**
+             * Others
+             * @default 0
+             */
+            others?: string;
+            /**
+             * Planned
+             * @default 0
+             */
+            planned?: string;
+            /** Portion */
+            portion?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pot" | "ok" | "leftover" | "short" | "none";
+            /**
+             * Target
+             * @default 0
+             */
+            target?: string;
         };
         /**
          * BodyProfile
@@ -4733,6 +4803,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutofillOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    batch_check_api_v1_plan_batch_check_get: {
+        parameters: {
+            query: {
+                recipe_id: number;
+                date_day: string;
+                weight_g: number | string;
+                item_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BatchCheck"];
                 };
             };
             /** @description Validation Error */

@@ -15,11 +15,11 @@ from decimal import Decimal
 
 from app.core import clock
 from app.core.exceptions import NotFoundError, ValidationError
-from app.domain import _ceil, dec, grams_to_base, pick_packages, quantize
+from app.domain import dec, grams_to_base, pick_packages, quantize
 from app.models.product import Product
 from app.models.stock import ShoppingLine, ShoppingList
 from app.repositories.plan import PlanRepository
-from app.services.pots import fits, remaining_weight
+from app.services.pots import batches_for, remaining_weight
 from app.repositories.recipe import RecipeRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
 from app.services.naming import brand_of
@@ -60,17 +60,6 @@ class Needs:
         key = exact_key(product) if exact else product.item_key
         need = self.by_key.setdefault(key, Need(product=product, variant_id=variant_id, exact=exact))
         need.grams += grams
-
-
-def batches_for(need: Decimal, cooked: Decimal, allow_half: bool, tolerance: Decimal) -> Decimal:
-    """Сколько закладок готовить под need граммов: вверх до целой (или половины — «можно половиной»), но на шаг
-    меньше, если её не хватает в пределах допуска — по тому же правилу, что кастрюля (`fits`): приготовят меньше,
-    и привязанные порции уменьшатся пропорционально."""
-    step = Decimal("0.5") if allow_half else Decimal(1)
-    batches = Decimal(_ceil(quantize(need / cooked, "0.001") / step)) * step
-    if batches > step and fits(need, (batches - step) * cooked, tolerance):
-        batches -= step
-    return batches
 
 
 def exact_key(product: Product) -> str:

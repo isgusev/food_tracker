@@ -426,7 +426,7 @@ def test_batches_for_uses_tolerance():
     """Паста: выход 900 г, «можно половиной», допуск 15 %."""
     from decimal import Decimal as D
 
-    from app.services.shopping import batches_for
+    from app.services.pots import batches_for
     tol = D("0.15")
     assert batches_for(D(950), D(900), True, tol) == 1        # 950 × 0,85 ≤ 900 — хватит одной
     assert batches_for(D(1030), D(900), True, tol) == 1       # 875,5 ≤ 900

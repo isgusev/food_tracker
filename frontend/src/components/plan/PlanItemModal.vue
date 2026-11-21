@@ -6,6 +6,7 @@ import { api, ok } from "../../api/client";
 import { activeMembers, toast } from "../../session";
 import { MEALS, MEAL_LABEL, dayMonthShort, fmt, grams, num, weekdayShort } from "../../util";
 import ModalSheet from "../ModalSheet.vue";
+import BatchHint from "./BatchHint.vue";
 import { canSwap, itemBadge, type Item, type Portion } from "../../plan";
 
 const props = defineProps<{ item: Item }>();
@@ -70,6 +71,19 @@ const addPortion = () => run(async () => {
 const accept = () => run(() => ok(api.POST("/api/v1/plan/{item_id}/accept", iid())), "Принято");
 const pin = () => run(() => ok(api.PATCH("/api/v1/plan/{item_id}", { ...iid(), body: { pinned: !it.value.pinned } })), it.value.pinned ? "Откреплено" : "Закреплено");
 const swap = () => run(() => ok(api.POST("/api/v1/plan/{item_id}/alternative", iid())), "Другой вариант");
+// Подсказка закладки: несъеденные порции (с правками в полях) блюда-рецепта без кастрюли
+const openWeight = computed(() => it.value.portions.filter((p) => !p.is_eaten).reduce((s, p) => s + num(weights.value[p.id]), 0));
+const showBatch = computed(() => !!it.value.recipe_id && !it.value.fridge_pot_id && openWeight.value > 0);
+/** «Разделить всю закладку»: несъеденные порции — пропорционально под target, сразу сохраняются. */
+const fitTo = (target: number) => run(async () => {
+  const k = openWeight.value > 0 ? target / openWeight.value : 1;
+  let res: Item | undefined;
+  for (const p of it.value.portions.filter((x) => !x.is_eaten)) {
+    const w = Math.round(num(weights.value[p.id]) * k);
+    if (w > 0 && w !== num(p.weight_g)) res = await ok(api.PATCH("/api/v1/plan/portions/{portion_id}", { ...pid(p), body: { weight_g: w } }));
+  }
+  return res;
+}, "Порции подогнаны под закладку");
 const badge = computed(() => itemBadge(it.value));
 const uneaten = computed(() => it.value.portions.filter((p) => !p.is_eaten).length);
 </script>
@@ -105,6 +119,9 @@ const uneaten = computed(() => it.value.portions.filter((p) => !p.is_eaten).leng
         </div>
       </div>
     </div>
+
+    <BatchHint v-if="showBatch" :recipe-id="it.recipe_id ?? null" :date="it.date_day" :weight="openWeight" :item-id="it.id"
+               :disabled="busy" @fit="fitTo" />
 
     <div class="row">
       <select v-model="addWho" class="who-sel" aria-label="Добавить едока">

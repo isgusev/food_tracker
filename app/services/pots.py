@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import ROUND_FLOOR, Decimal
 
-from app.domain import dec
+from app.domain import _ceil, dec, quantize
 from app.models.plan import MealItem
 from app.models.recipe import RecipeCookingLog
 from app.repositories.plan import PlanRepository
@@ -36,6 +36,23 @@ def remaining_weight(item: MealItem) -> Decimal:
 def fits(planned: Decimal, available: Decimal, tolerance: Decimal) -> bool:
     """Хватает ли: есть не меньше плана за вычетом допуска (доля 0…1)."""
     return planned * (1 - tolerance) <= available
+
+
+def batches_for(need: Decimal, cooked: Decimal, allow_half: bool, tolerance: Decimal) -> Decimal:
+    """Сколько закладок готовить под need граммов: вверх до целой (или половины — «можно половиной»), но на шаг
+    меньше, если её не хватает в пределах допуска (`fits`): приготовят меньше, и привязанные порции уменьшатся."""
+    step = Decimal("0.5") if allow_half else Decimal(1)
+    batches = Decimal(_ceil(quantize(need / cooked, "0.001") / step)) * step
+    if batches > step and fits(need, (batches - step) * cooked, tolerance):
+        batches -= step
+    return batches
+
+
+def standard_portion(recipe) -> Decimal | None:
+    """Порция по рецепту: выход / число порций (если порций больше одной — иначе это вся кастрюля)."""
+    if recipe is None or not recipe.default_servings or recipe.default_servings < 2:
+        return None
+    return Decimal(str(recipe.estimated_cooked_weight)) / recipe.default_servings
 
 
 def shrink(weights: dict, available: Decimal) -> dict:

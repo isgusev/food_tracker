@@ -32,10 +32,11 @@ from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
 from app.repositories.plan import PlanRepository
-from app.services.pots import PotService, remaining_weight, set_remaining
+from app.services.pots import PotService, batches_for, remaining_weight, set_remaining, standard_portion
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.plan import (
+    BatchCheck,
     TemplateApplied,
     TemplateResponse,
     MealItemCreate,
@@ -200,6 +201,49 @@ class PlanService:
             member = await self._members.get(p.member_id)
             if member is None or member.household_id != household_id:
                 raise NotFoundError(f"Член семьи #{p.member_id} не найден")
+
+    async def batch_check(
+        self, household_id: int, recipe_id: int, day: date, weight: Decimal, today: date, item_id: int | None = None,
+    ) -> BatchCheck:
+        """Подсказка формы: что останется от закладки после готовки (BatchCheck). item_id — правка блюда плана
+        (само оно в «других» не считается; привязано к кастрюле — status pot)."""
+        recipe = await self._recipes.get_by_id(recipe_id, household_id=household_id)
+        if recipe is None:
+            raise NotFoundError("Рецепт не найден")
+        cooked = _d(recipe.estimated_cooked_weight)
+        if cooked <= 0 or weight <= 0:
+            return BatchCheck(status="none", cooked=cooked, planned=weight)
+        if item_id is not None:
+            item = await self.get_owned_item(item_id, household_id)
+            if item.cooking_log_id is not None:
+                return BatchCheck(status="pot", cooked=cooked, planned=weight)
+        else:
+            pot = await self._cooking_logs.find_active_pot(household_id, recipe_id)
+            if pot is not None:
+                booked = (await self._plan.reserved_by_pot(household_id)).get(pot.id, ZERO)
+                if _d(pot.current_remaining_weight) - booked >= weight:
+                    return BatchCheck(status="pot", cooked=cooked, planned=weight)
+        span = timedelta(days=max(1, recipe.keeps_days or 2) - 1)
+        others = sum(
+            (remaining_weight(i) for i in await self._plan.unattached_for_recipe(
+                household_id, recipe_id, max(today, day - span))
+             if i.date_day <= day + span and i.id != item_id),
+            ZERO,
+        )
+        total = weight + others
+        batches = batches_for(total, cooked, bool(recipe.allow_half), await self._plan.tolerance(household_id))
+        leftover = batches * cooked - total
+        portion = standard_portion(recipe)
+        if leftover < 0:
+            status = "short"
+        elif portion is not None and 0 < leftover < portion:
+            status = "leftover"
+        else:
+            status = "ok"
+        return BatchCheck(
+            status=status, cooked=cooked, batches=batches, planned=weight, others=others,
+            leftover=leftover, portion=portion, target=max(ZERO, batches * cooked - others),
+        )
 
     async def create(self, household_id: int, user_id: int, data: MealItemCreate) -> MealItemResponse:
         if data.variant_id is not None:
