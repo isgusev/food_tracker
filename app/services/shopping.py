@@ -19,7 +19,7 @@ from app.domain import _ceil, dec, grams_to_base, pick_packages, quantize
 from app.models.product import Product
 from app.models.stock import ShoppingLine, ShoppingList
 from app.repositories.plan import PlanRepository
-from app.services.pots import remaining_weight
+from app.services.pots import fits, remaining_weight
 from app.repositories.recipe import RecipeRepository
 from app.repositories.stock import ShoppingListRepository, StockRepository
 from app.services.naming import brand_of
@@ -60,6 +60,17 @@ class Needs:
         key = exact_key(product) if exact else product.item_key
         need = self.by_key.setdefault(key, Need(product=product, variant_id=variant_id, exact=exact))
         need.grams += grams
+
+
+def batches_for(need: Decimal, cooked: Decimal, allow_half: bool, tolerance: Decimal) -> Decimal:
+    """Сколько закладок готовить под need граммов: вверх до целой (или половины — «можно половиной»), но на шаг
+    меньше, если её не хватает в пределах допуска — по тому же правилу, что кастрюля (`fits`): приготовят меньше,
+    и привязанные порции уменьшатся пропорционально."""
+    step = Decimal("0.5") if allow_half else Decimal(1)
+    batches = Decimal(_ceil(quantize(need / cooked, "0.001") / step)) * step
+    if batches > step and fits(need, (batches - step) * cooked, tolerance):
+        batches -= step
+    return batches
 
 
 def exact_key(product: Product) -> str:
@@ -114,14 +125,12 @@ class ShoppingService:
             elif item.recipe_id is not None:
                 recipe_need[item.recipe_id] = recipe_need.get(item.recipe_id, ZERO) + need
         recipes = await self._recipes.get_many_full(set(recipe_need))
+        tolerance = await self._stock.tolerance(household_id) if recipe_need else ZERO
         for recipe_id, need in recipe_need.items():
             recipe = recipes.get(recipe_id)
             if recipe is None or _d(recipe.estimated_cooked_weight) <= 0:
                 continue
-            portions = quantize(need / _d(recipe.estimated_cooked_weight), "0.001")
-            # «можно половиной» — шаг полкастрюли, иначе — целая
-            step = Decimal("0.5") if recipe.allow_half else Decimal(1)
-            batches = Decimal(_ceil(portions / step)) * step
+            batches = batches_for(need, _d(recipe.estimated_cooked_weight), bool(recipe.allow_half), tolerance)
             for ing in recipe.template_ingredients:
                 needs.add(await product_of(ing.variant_id), ing.variant_id, _d(ing.weight_g) * batches, exact=bool(ing.exact))
         return needs

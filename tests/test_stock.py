@@ -373,6 +373,13 @@ async def test_recipe_bought_by_whole_batches_or_halves(client):
     assert float((await preview(client, h, TODAY, day(1)))[OATS]["need"]) == 90
     assert float((await preview(client, h))[OATS]["need"]) == 30           # 1/3 → половина
 
+    # не хватает в пределах допуска (15 %) — на шаг меньше, как и кастрюля: 330 г при выходе 300 → одна закладка
+    await plan(client, h, date_day=day(2), recipe_id=recipe_id, meal="dinner", portions=[{"member_id": me, "weight_g": 330}])
+    assert float((await preview(client, h, day(2)))[OATS]["need"]) == 60
+    await client.patch("/api/v1/household", json={"portion_tolerance": 5}, headers=h)
+    assert float((await preview(client, h, day(2)))[OATS]["need"]) == 90      # 5 % не хватает → полторы
+    await client.patch("/api/v1/household", json={"portion_tolerance": 15}, headers=h)
+
     # упаковка есть — покупка всегда целыми упаковками
     oats = await product_of_variant(client, h, oats_v)
     await client.post(f"/api/v1/products/{oats['id']}/packages", json={"amount": 500}, headers=h)
@@ -413,3 +420,17 @@ async def test_extra_purchase_merges_and_survives_regeneration(client):
     # вне плана + ещё раз — та же строка
     ls = (await client.post(f"/api/v1/shopping-lists/{lst['id']}/lines", json={"product_id": yogurt["id"], "quantity": 140}, headers=h)).json()["lines"]
     assert [(float(l["needed"]), l["is_extra"]) for l in ls] == [(420.0, True)]
+
+
+def test_batches_for_uses_tolerance():
+    """Паста: выход 900 г, «можно половиной», допуск 15 %."""
+    from decimal import Decimal as D
+
+    from app.services.shopping import batches_for
+    tol = D("0.15")
+    assert batches_for(D(950), D(900), True, tol) == 1        # 950 × 0,85 ≤ 900 — хватит одной
+    assert batches_for(D(1030), D(900), True, tol) == 1       # 875,5 ≤ 900
+    assert batches_for(D(1100), D(900), True, tol) == D("1.5")  # 935 > 900
+    assert batches_for(D(1100), D(900), False, tol) == 2
+    assert batches_for(D(100), D(900), True, tol) == D("0.5")   # меньше полшага не бывает
+    assert batches_for(D(1850), D(900), False, tol) == 2      # 1572,5 ≤ 1800
