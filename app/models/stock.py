@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -49,6 +50,14 @@ class HouseholdProduct(Base):
     is_low = Column(Boolean, default=False, nullable=False)
     # Списание не нашло остатка — учёт, похоже, разошёлся с реальностью
     needs_check = Column(Boolean, default=False, nullable=False)
+    # «Обычно берём» (docs/AUTOPLAN.md, 3.6): auto — по статистике покупок, always — всегда предлагать,
+    # never — не предлагать (и не ставить в план); regular_qty — своё количество в неделю
+    regular = Column(String(8), default="auto", nullable=False, server_default="auto")
+    regular_qty = Column(Numeric(9, 1), nullable=True)
+    # Снек/сладкое — в квоту, даже если категория продукта не отмечена у семьи
+    is_snack = Column(Boolean, default=False, nullable=False, server_default="false")
+
+    __table_args__ = (CheckConstraint("regular IN ('auto', 'always', 'never')", name="regular"),)
 
 
 class StockLot(Base):
@@ -74,6 +83,7 @@ class StockLot(Base):
     purchased_on = Column(Date, nullable=False)
     expires_on = Column(Date, nullable=True)
     source = Column(String(16), nullable=False, default="purchase")  # purchase | manual | inventory
+    __table_args__ = (CheckConstraint("source IN ('purchase', 'manual', 'inventory')", name="source"),)
     created_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -102,7 +112,9 @@ class StockMovement(Base):
         Integer, ForeignKey("stock_lots.id", ondelete="CASCADE"), nullable=True, index=True
     )
     delta = Column(Numeric(9, 1), nullable=False)
-    reason = Column(String(16), nullable=False)  # purchase | cook | eat | write_off | inventory
+    reason = Column(String(16), nullable=False)  # purchase | manual | cook | eat | write_off | inventory
+    __table_args__ = (CheckConstraint(
+        "reason IN ('purchase', 'manual', 'inventory', 'cook', 'eat', 'write_off')", name="reason"),)
     pot_id = Column(
         Integer, ForeignKey("recipe_cooking_logs.id", ondelete="SET NULL"), nullable=True,
         index=True,
@@ -152,6 +164,7 @@ class ShoppingList(Base):
             postgresql_where=text("status = 'active'"),
             sqlite_where=text("status = 'active'"),
         ),
+        CheckConstraint("status IN ('active', 'closed')", name="status"),
     )
 
 
@@ -163,7 +176,7 @@ class ShoppingLine(Base):
         Integer, ForeignKey("shopping_lists.id", ondelete="CASCADE"), nullable=False, index=True
     )
     product_id = Column(
-        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     variant_id = Column(
         Integer, ForeignKey("product_variants.id", ondelete="SET NULL"), nullable=True

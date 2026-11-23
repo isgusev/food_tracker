@@ -3,9 +3,10 @@ from __future__ import annotations
 
 
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Generic, TypeVar
 
-from sqlalchemy import Select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import Base
@@ -18,6 +19,12 @@ class BaseRepository(Generic[ModelT]):
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def tolerance(self, household_id: int) -> Decimal:
+        """Допуск семьи (кастрюля и упаковки, Household.portion_tolerance) долей 0…1."""
+        from app.models.household import Household  # модели импортируют Base — без цикла
+        pct = await self._session.scalar(select(Household.portion_tolerance).where(Household.id == household_id))
+        return Decimal(15 if pct is None else pct) / 100
 
     async def get(self, pk: int) -> ModelT | None:
         return await self._session.get(self.model, pk)

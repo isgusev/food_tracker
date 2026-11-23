@@ -69,7 +69,7 @@ async function request(method, path, { params, json, form } = {}) {
   try {
     resp = await fetch(url, { method, headers, body });
   } catch {
-    throw new ApiError(0, "Сервер недоступен. Запущен ли uvicorn?");
+    throw new ApiError(0, "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз");
   }
   if (resp.status === 204) return null;
   let data = null;

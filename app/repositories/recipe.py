@@ -50,6 +50,13 @@ class RecipeRepository(BaseRepository[Recipe]):
             stmt = stmt.where(Recipe.household_id == household_id)
         return (await self._session.execute(stmt)).unique().scalar_one_or_none()
 
+    async def get_many_full(self, ids: set[int]) -> dict[int, Recipe]:
+        """Несколько рецептов с составом одним запросом."""
+        if not ids:
+            return {}
+        stmt = self.full_query().where(Recipe.id.in_(ids))
+        return {r.id: r for r in (await self._session.execute(stmt)).unique().scalars().all()}
+
     async def list_full(
         self, household_id: int | None = None, limit: int = 100, offset: int = 0
     ) -> list[Recipe]:
@@ -66,6 +73,11 @@ class RecipeRepository(BaseRepository[Recipe]):
             Recipe.template_ingredients.any(RecipeTemplateIngredient.variant_id == variant_id)
         )
         return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def names(self, household_id: int) -> list[tuple[int, str]]:
+        """(id, название) всех рецептов семьи — для сравнения названий в Python (кириллица)."""
+        stmt = select(Recipe.id, Recipe.name).where(Recipe.household_id == household_id).order_by(Recipe.id)
+        return [(rid, name) for rid, name in (await self._session.execute(stmt)).fetchall()]
 
     async def name_exists(self, household_id: int, name: str) -> bool:
         """Есть ли в семье рецепт с таким названием (без учёта регистра).
@@ -90,6 +102,7 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             joinedload(RecipeCookingLog.actual_ingredients).joinedload(
                 RecipeActualIngredient.variant
             ),
+            joinedload(RecipeCookingLog.recipe),
         )
 
     async def get_full(self, log_id: int) -> RecipeCookingLog | None:
@@ -111,6 +124,48 @@ class CookingLogRepository(BaseRepository[RecipeCookingLog]):
             stmt = stmt.where(RecipeCookingLog.is_finished.is_(False))
         stmt = stmt.order_by(RecipeCookingLog.cooked_at.desc()).limit(limit).offset(offset)
         return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def active_with_recipe(self, household_id: int) -> list[RecipeCookingLog]:
+        """Недоеденные кастрюли и заготовки семьи (с рецептом) — для автоплана."""
+        stmt = (
+            select(RecipeCookingLog)
+            .options(joinedload(RecipeCookingLog.recipe))
+            .where(
+                RecipeCookingLog.household_id == household_id,
+                RecipeCookingLog.is_finished.is_(False),
+                RecipeCookingLog.is_discarded.is_(False),
+                RecipeCookingLog.recipe_id.isnot(None),
+            )
+            .order_by(RecipeCookingLog.cooked_at, RecipeCookingLog.id)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def of_household(self, household_id: int) -> list[RecipeCookingLog]:
+        """Все кастрюли семьи (и закончившиеся) — без связей."""
+        stmt = select(RecipeCookingLog).where(RecipeCookingLog.household_id == household_id)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def discarded_between(self, household_id: int, t0, t1) -> list[RecipeCookingLog]:
+        """Выброшенные кастрюли, приготовленные в полуинтервале UTC [t0, t1) — с рецептом."""
+        stmt = (
+            select(RecipeCookingLog)
+            .where(RecipeCookingLog.household_id == household_id, RecipeCookingLog.is_discarded.is_(True),
+                   RecipeCookingLog.cooked_at >= t0, RecipeCookingLog.cooked_at < t1)
+            .options(joinedload(RecipeCookingLog.recipe))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def last_cooked(self, household_id: int) -> dict:
+        """Последняя готовка каждого рецепта семьи — местный день."""
+        from sqlalchemy import func
+
+        from app.core import clock
+        stmt = (
+            select(RecipeCookingLog.recipe_id, func.max(RecipeCookingLog.cooked_at))
+            .where(RecipeCookingLog.household_id == household_id, RecipeCookingLog.recipe_id.isnot(None))
+            .group_by(RecipeCookingLog.recipe_id)
+        )
+        return {int(r): clock.local_date(t) for r, t in (await self._session.execute(stmt)).all() if t is not None}
 
     async def find_active_pot(self, household_id: int, recipe_id: int) -> RecipeCookingLog | None:
         """Самая свежая недоеденная кастрюля семьи по рецепту."""

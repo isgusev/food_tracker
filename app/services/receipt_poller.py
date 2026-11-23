@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core import clock
 from app.core.exceptions import ServiceUnavailableError
 from app.repositories.receipt import ReceiptRepository
 from app.services import receipt_client
@@ -25,8 +26,7 @@ log = logging.getLogger("receipts")
 EXPIRED_MESSAGE = "Чек так и не дошёл до налоговой — проверьте QR-код или занесите покупки вручную"
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+_now = clock.utc_now  # метки времени в базе — UTC без пояса
 
 
 async def refresh_pending_once(

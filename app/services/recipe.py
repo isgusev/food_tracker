@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.core import clock
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain import (
     ZERO,
@@ -23,6 +22,7 @@ from app.models.recipe import (
     RecipeTemplateIngredient,
 )
 from app.repositories.plan import PlanRepository
+from app.services.pots import PotService, set_remaining
 from app.services.stock import StockService
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import (
@@ -115,6 +115,9 @@ def _grams_by_variant(lines) -> dict[int, Decimal]:
     return out
 
 
+# Заготовка в морозилке по умолчанию годна столько дней (docs/AUTOPLAN.md, 3.2)
+FREEZER_DAYS = 60
+
 class RecipeService:
     def __init__(
         self,
@@ -124,7 +127,9 @@ class RecipeService:
         variants: VariantRepository,
         plan: PlanRepository,
         stock: StockService,
+        pots: PotService,
     ) -> None:
+        self._pot_svc = pots
         self._recipes = recipes
         self._categories = categories
         self._cooking_logs = cooking_logs
@@ -170,6 +175,11 @@ class RecipeService:
             created_by_user=data.created_by_user,
             default_servings=data.default_servings,
             allow_half=data.allow_half,
+            in_rotation=data.in_rotation,
+            effort=data.effort,
+            meal_types=data.meal_types,
+            keeps_days=data.keeps_days,
+            is_freezable=data.is_freezable,
             total_raw_weight=quantize(total_raw),
             estimated_cooked_weight=data.estimated_cooked_weight,
             calories_per_100g=quantize(per_100.calories),
@@ -227,6 +237,12 @@ class RecipeService:
             recipe.default_servings = fields["default_servings"]
         if fields.get("allow_half") is not None:
             recipe.allow_half = fields["allow_half"]
+        # поля автоплана; meal_types: null — «любые приёмы пищи»
+        for key in ("in_rotation", "effort", "keeps_days", "is_freezable"):
+            if fields.get(key) is not None:
+                setattr(recipe, key, fields[key])
+        if "meal_types" in fields:
+            recipe.meal_types = data.meal_types
 
         new_weight = fields.get("estimated_cooked_weight", recipe.estimated_cooked_weight)
         if "ingredients" in fields:
@@ -295,9 +311,8 @@ class RecipeService:
 
         # Блюда плана по этому рецепту резервируются в свежей кастрюле —
         # начиная с сегодняшнего дня и только сколько влезает в выход блюда
-        await self._plan.attach_to_new_pot(
-            household_id, recipe_id, pot.id, from_date=today, capacity_g=data.total_cooked_weight
-        )
+        # (вышло чуть меньше плана — в пределах допуска семьи порции уменьшаются пропорционально)
+        await self._pot_svc.attach_new(pot, from_date=today)
 
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
@@ -382,11 +397,11 @@ class RecipeService:
         remainder = data.current_remaining_weight
         if remainder > pot.total_cooked_weight:
             raise ValidationError("Остаток не может превышать общий вес готового блюда")
-        pot.current_remaining_weight = remainder
-        pot.is_finished = remainder <= ZERO
+        set_remaining(pot, remainder)
         await self._cooking_logs.flush()
-        # остатка стало меньше — поздние блюда, которым не хватает, снова «надо приготовить»
-        await self._plan.release_overbooked(pot.id, remainder)
+        # остатка стало меньше: в пределах допуска — порции уменьшаются пропорционально,
+        # иначе поздние блюда, которым не хватает, снова «надо приготовить»
+        await self._pot_svc.release(pot.id, shrink_ok=True)
         return pot
 
     # --- АРХИВ ХОЛОДИЛЬНИКА ---
@@ -446,6 +461,28 @@ class RecipeService:
             events.append("блюдо доедено")
         return events
 
+    async def freeze_pot(self, pot: RecipeCookingLog, keeps_until: date | None, today: date) -> RecipeCookingLog:
+        """«❄️ Заморозить остаток»: кастрюля становится заготовкой в морозилке (по умолчанию +60 дней).
+        Резерв, «съел» и остаток работают как у обычной кастрюли."""
+        if pot.is_finished or pot.is_discarded:
+            raise ValidationError("Кастрюля уже закончилась — замораживать нечего")
+        if keeps_until is not None and keeps_until < today:
+            raise ValidationError("Срок заготовки не может быть в прошлом")
+        pot.is_frozen = True
+        pot.keeps_until = keeps_until or today + timedelta(days=FREEZER_DAYS)
+        await self._cooking_logs.flush()
+        return await self.get_owned_pot(pot.id, pot.household_id)
+
+    async def unfreeze_pot(self, pot: RecipeCookingLog, today: date) -> RecipeCookingLog:
+        """Достали из морозилки: снова обычная кастрюля, есть — как свежую (Recipe.keeps_days)."""
+        if not pot.is_frozen:
+            raise ValidationError("Это не заготовка из морозилки")
+        days = pot.recipe.keeps_days if pot.recipe is not None else 2
+        pot.is_frozen = False
+        pot.keeps_until = today + timedelta(days=days - 1)
+        await self._cooking_logs.flush()
+        return await self.get_owned_pot(pot.id, pot.household_id)
+
     async def mark_pot_discarded(self, pot: RecipeCookingLog) -> RecipeCookingLog:
         """Пометить кастрюлю удалённой: остаток выбрасывается, запись уходит в архив.
 
@@ -454,8 +491,7 @@ class RecipeService:
         сохранилась в архиве холодильника.
         """
         pot.is_discarded = True
-        pot.is_finished = True
-        pot.current_remaining_weight = ZERO
+        set_remaining(pot, ZERO)
         # несъеденные блюда плана снова «надо приготовить» по шаблону
         await self._plan.detach_from_pot(pot.id)
         await self._cooking_logs.flush()
@@ -464,17 +500,27 @@ class RecipeService:
         return full
 
     async def replace_pot_ingredients(
-        self, pot: RecipeCookingLog, data: CookingLogUpdateIngredients
+        self, pot: RecipeCookingLog, data: CookingLogUpdateIngredients, today: date
     ) -> RecipeCookingLog:
         """Полная замена фактической закладки кастрюли с пересчётом КБЖУ.
 
-        Остаток в кастрюле остаётся прежним (вес еды мы не меняем), но его
-        пищевая ценность пересчитывается по новому составу.
+        Без total_cooked_weight вес еды прежний — пересчитывается только пищевая ценность.
+        С ним (положили больше/меньше — и вышло больше/меньше) остаток сдвигается на ту же
+        разницу (съеденное не меняется): стало больше — к кастрюле довязываются блюда плана,
+        которым не хватало; меньше — поздним, кому не хватит, «надо приготовить» (с допуском семьи).
         """
+        old_total = Decimal(str(pot.total_cooked_weight))
+        new_total = data.total_cooked_weight if data.total_cooked_weight is not None else old_total
+        eaten = old_total - Decimal(str(pot.current_remaining_weight))
+        if new_total < eaten:
+            raise ValidationError(f"Из кастрюли уже съели {quantize(eaten)} г — готового не может быть меньше")
         # запасы: спишем/вернём только разницу между старым и новым составом
         old_grams = _grams_by_variant(pot.actual_ingredients)
         total_raw, totals = await _sum_ingredients(data.ingredients, self._variants)
-        per_100 = per_100g_from_totals(totals, pot.total_cooked_weight)
+        per_100 = per_100g_from_totals(totals, new_total)
+        if new_total != old_total:
+            pot.total_cooked_weight = new_total
+            set_remaining(pot, new_total - eaten)
 
         pot.total_raw_weight = quantize(total_raw)
         pot.actual_ingredients = [
@@ -490,6 +536,10 @@ class RecipeService:
         full = await self._cooking_logs.get_full(pot.id)
         assert full is not None
         await self._stock.adjust_pot(
-            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, clock.today()
+            full, old_grams, _grams_by_variant(full.actual_ingredients), pot.user_id, today
         )
-        return full
+        if new_total > old_total:
+            await self._pot_svc.attach_more(full, today)
+        elif new_total < old_total:
+            await self._pot_svc.release(full.id, shrink_ok=True)
+        return await self._cooking_logs.get_full(pot.id)

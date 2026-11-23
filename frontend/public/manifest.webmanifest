@@ -1,0 +1,22 @@
+{
+  "name": "ЕлиГуси — план питания семьи",
+  "short_name": "ЕлиГуси",
+  "id": "/next/",
+  "start_url": "/next/#/today",
+  "scope": "/next/",
+  "display": "standalone",
+  "background_color": "#0e1512",
+  "theme_color": "#2f7d5b",
+  "lang": "ru",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Покупки", "url": "/next/#/shopping" },
+    { "name": "План", "url": "/next/#/plan" },
+    { "name": "Холодильник", "url": "/next/#/fridge" }
+  ]
+}

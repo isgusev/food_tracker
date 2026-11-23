@@ -7,7 +7,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.common import ORMModel
+from app.schemas.common import ORMModel, meal_list
 
 
 class Targets(BaseModel):
@@ -94,17 +94,20 @@ class HouseholdResponse(ORMModel):
     name: str
     invite_code: str
     monthly_budget: Optional[Decimal] = None
+    portion_tolerance: int = 15
     me_member_id: int
     members: list[MemberResponse]
 
 
 class HouseholdUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    # допуск кастрюли и упаковок, % (0 — строго по плану)
+    portion_tolerance: Optional[int] = Field(default=None, ge=0, le=30)
 
     @field_validator("name")
     @classmethod
-    def _strip(cls, v: str) -> str:
-        return _clean_name(v)
+    def _strip(cls, v: Optional[str]) -> Optional[str]:
+        return _clean_name(v) if v is not None else v
 
 
 class JoinRequest(BaseModel):
@@ -114,3 +117,41 @@ class JoinRequest(BaseModel):
     @classmethod
     def _norm(cls, v: str) -> str:
         return v.strip().upper()
+
+
+def _weekdays(v):
+    if v is None:
+        return v
+    if any(d < 0 or d > 6 for d in v):
+        raise ValueError("Дни недели — от 0 (пн) до 6 (вс)")
+    return sorted(set(v))
+
+
+class PlannerSettingsOut(BaseModel):
+    """Настройки автоплана (docs/AUTOPLAN.md, 3.3)."""
+
+    meal_types: Optional[list[str]] = None      # какие приёмы заполнять; None — все
+    no_cook_days: list[int] = []                # дни недели без готовки (0 = пн)
+    special_days: list[int] = []                # дни для «эдакого»; пусто — любой
+    max_special_per_week: int = 1
+    snack_categories: list[int] = []            # категории продуктов «снеки и сладкое»
+    snack_quota: Optional[Decimal] = None       # квота на снеки, ₽ в неделю; None — без квоты
+
+
+class PlannerSettingsUpdate(BaseModel):
+    meal_types: Optional[list[str]] = None
+    no_cook_days: Optional[list[int]] = None
+    special_days: Optional[list[int]] = None
+    max_special_per_week: Optional[int] = Field(default=None, ge=0, le=7)
+    snack_categories: Optional[list[int]] = None
+    snack_quota: Optional[Decimal] = Field(default=None, ge=0, le=Decimal("9999999"))   # 0 или null — без квоты
+
+    @field_validator("meal_types")
+    @classmethod
+    def _meals(cls, v):
+        return meal_list(v, empty_is_any=False)
+
+    @field_validator("no_cook_days", "special_days")
+    @classmethod
+    def _days(cls, v):
+        return _weekdays(v)

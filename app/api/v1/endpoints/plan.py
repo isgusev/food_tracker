@@ -7,8 +7,17 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Query, Response
 
-from app.api.deps import CurrentMemberDep, CurrentUserDep, PlanServiceDep
+from app.api.deps import AutoplanServiceDep, CurrentMemberDep, CurrentUserDep, PlanServiceDep
+from app.core import clock
+from app.core.exceptions import ValidationError
+from app.domain import MEAL_TYPES
 from app.schemas.plan import (
+    AcceptIn,
+    AcceptOut,
+    AutofillIn,
+    AutofillOut,
+    BatchCheck,
+    TypicalPortion,
     EatOptionalWeight,
     MealItemCreate,
     MealItemMove,
@@ -34,6 +43,53 @@ async def list_plan(
 ):
     """Блюда семьи за период с порциями и КБЖУ каждой порции."""
     return await service.list_range(me.household_id, start_date, end_date)
+
+
+@router.get("/typical-portions", response_model=list[TypicalPortion])
+async def typical_portions(
+    service: AutoplanServiceDep,
+    me: CurrentMemberDep,
+    meal_type: str = Query(),
+    recipe_id: int | None = Query(default=None),
+    variant_id: int | None = Query(default=None),
+):
+    """Типичная порция каждого члена семьи для блюда/продукта: своя медиана съеденного за 90 дней → порция
+    рецепта (выход / порций) → как едят другие члены семьи → доля цели ккал на приём пищи."""
+    if meal_type not in MEAL_TYPES or (recipe_id is None) == (variant_id is None):
+        raise ValidationError("Нужны meal_type и ровно одно из recipe_id / variant_id")
+    return await service.typical_for(me.household_id, meal_type, recipe_id, variant_id)
+
+
+@router.get("/batch-check", response_model=BatchCheck)
+async def batch_check(
+    service: PlanServiceDep,
+    me: CurrentMemberDep,
+    recipe_id: int = Query(),
+    date_day: date = Query(),
+    weight_g: Decimal = Query(ge=0),
+    item_id: int | None = Query(default=None),
+):
+    """Подсказка формы плана: сколько останется от закладки после готовки (вместе с другими неприготовленными
+    блюдами рецепта, пока закладка свежая). item_id — правка существующего блюда."""
+    return await service.batch_check(me.household_id, recipe_id, date_day, weight_g, clock.today(), item_id)
+
+
+@router.post("/autofill", response_model=AutofillOut)
+async def autofill(payload: AutofillIn, service: AutoplanServiceDep, me: CurrentMemberDep, user: CurrentUserDep):
+    """✨ Предложить: заполнить ПУСТЫЕ ячейки периода — остатки в холодильнике, заготовки из морозилки
+    (скоро истекает срок или день «без готовки»), затем готовки по оценке (docs/AUTOPLAN.md, 4.1–4.2).
+    Прежние предложения (auto без 📌, без кастрюли и съеденного) заменяются; ручной план не трогается.
+    cook=false — только приготовленное; dry_run — только показать."""
+    return await service.autofill(
+        me.household_id, user.id, payload.start, payload.end, payload.meal_types, payload.dry_run,
+        clock.today(), cook=payload.cook,
+    )
+
+
+@router.post("/accept", response_model=AcceptOut)
+async def accept_range(payload: AcceptIn, service: PlanServiceDep, me: CurrentMemberDep):
+    """«Принять всё»: предложения автоплана за период становятся обычными блюдами."""
+    return AcceptOut(accepted=await service.accept_range(me.household_id, payload.start, payload.end))
 
 
 @router.post("", response_model=MealItemResponse, status_code=201)
@@ -82,9 +138,25 @@ async def pot_status(
 
 @router.patch("/{item_id}", response_model=MealItemResponse)
 async def move_item(item_id: int, payload: MealItemMove, service: PlanServiceDep, me: CurrentMemberDep):
-    """Перенести блюдо на другой день / приём пищи."""
+    """Перенести блюдо на другой день / приём пищи; pinned — «📌 закрепить» (перегенерация не тронет)."""
     item = await service.get_owned_item(item_id, me.household_id)
     return await service.move(item, payload)
+
+
+@router.post("/{item_id}/accept", response_model=MealItemResponse)
+async def accept_item(item_id: int, service: PlanServiceDep, me: CurrentMemberDep):
+    """«✓ Принять» предложение автоплана — блюдо становится обычным."""
+    return await service.accept(await service.get_owned_item(item_id, me.household_id))
+
+
+@router.post("/{item_id}/alternative", response_model=MealItemResponse)
+async def alternative(
+    item_id: int, service: PlanServiceDep, autoplan: AutoplanServiceDep, me: CurrentMemberDep, user: CurrentUserDep
+):
+    """🔄 Другой вариант: следующий по оценке рецепт на ту же ячейку (та же закладка — вместе с ним)."""
+    item = await service.get_owned_item(item_id, me.household_id)
+    new_id = await autoplan.alternative(item, user.id, clock.today())
+    return await service.response(new_id)
 
 
 @router.delete("/{item_id}", status_code=204)
@@ -98,7 +170,7 @@ async def delete_item(item_id: int, service: PlanServiceDep, me: CurrentMemberDe
 async def eat_all(item_id: int, service: PlanServiceDep, me: CurrentMemberDep):
     """«Все поели»: все несъеденные порции — съедено по плану."""
     item = await service.get_owned_item(item_id, me.household_id)
-    return await service.eat_all(item)
+    return await service.eat_all(item, clock.today())
 
 
 @router.post("/{item_id}/portions", response_model=MealItemResponse, status_code=201)
@@ -112,7 +184,7 @@ async def update_portion(
     portion_id: int, payload: PortionWeightIn, service: PlanServiceDep, me: CurrentMemberDep
 ):
     item, portion = await service.get_owned_portion(portion_id, me.household_id)
-    return await service.update_portion(item, portion, payload.weight_g)
+    return await service.update_portion(item, portion, payload.weight_g, clock.today())
 
 
 @router.delete("/portions/{portion_id}", response_model=MealItemResponse | None)
@@ -129,7 +201,7 @@ async def eat_portion(
 ):
     """Съедено (вес по факту; без веса — как в плане). Списывается из кастрюли."""
     item, portion = await service.get_owned_portion(portion_id, me.household_id)
-    return await service.eat_portion(item, portion, payload.weight_g)
+    return await service.eat_portion(item, portion, payload.weight_g, clock.today())
 
 
 @router.post("/portions/{portion_id}/uneat", response_model=MealItemResponse)

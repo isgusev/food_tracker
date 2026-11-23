@@ -113,6 +113,12 @@ export const MoneyView = {
           </div>
         </div>
 
+        <div class="card stack tight" v-if="n(data.snack_spent) > 0 || data.snack_quota">
+          <span class="small muted">Снеки и сладкое</span>
+          <div class="row between"><b class="num" style="font-size: 20px">{{ rub(data.snack_spent) }}</b>
+            <span v-if="data.snack_quota" class="small muted">квота {{ rub(data.snack_quota) }} в неделю</span></div>
+          <span class="tiny muted">Категории снеков и квота — в «Семья → Планировщик».</span>
+        </div>
         <div class="card stack" v-if="data.by_category.length">
           <h2>Траты по категориям</h2>
           <div v-for="c in data.by_category" :key="c.name" class="stack tight" :title="c.name + ': ' + rub(c.spent)">

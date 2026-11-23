@@ -2,64 +2,29 @@
 from __future__ import annotations
 
 
-import pytest
+import datetime as dt
 
-from tests.test_api import (
-    TODAY,
+import pytest
+from tests.helpers import (
+    add_child,
     build_recipe_stack,
     cook,
     create_ready_product,
     day,
+    get_item,
+    household,
+    me_id,
+    plan,
+    pot_remaining,
     register_and_login,
+    shopping,
+    TODAY,
 )
+
 
 pytestmark = pytest.mark.anyio
 
 # Каша: 60 г овсянки (380 ккал/100 г = 228 ккал) на выход 300 г → 76 ккал/100 г
-
-
-async def household(client, h) -> dict:
-    r = await client.get("/api/v1/household", headers=h)
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-async def me_id(client, h) -> int:
-    return (await household(client, h))["me_member_id"]
-
-
-async def add_child(client, h, name="Маша", calories=1400) -> int:
-    r = await client.post(
-        "/api/v1/household/members",
-        json={"name": name, "targets": {"calories": calories, "proteins": 50}},
-        headers=h,
-    )
-    assert r.status_code == 201, r.text
-    return next(m["id"] for m in r.json()["members"] if m["name"] == name)
-
-
-async def plan(client, h, *, date_day=TODAY, meal="dinner", recipe_id=None, variant_id=None, portions):
-    body = {"date_day": date_day, "meal_type": meal, "portions": portions}
-    body["recipe_id" if recipe_id else "variant_id"] = recipe_id or variant_id
-    r = await client.post("/api/v1/plan", json=body, headers=h)
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-async def get_item(client, h, item_id, date_day=TODAY) -> dict:
-    r = await client.get("/api/v1/plan", params={"start_date": date_day, "end_date": date_day}, headers=h)
-    return next(i for i in r.json() if i["id"] == item_id)
-
-
-async def shopping(client, h, start=TODAY, end=None) -> dict[int, float]:
-    r = await client.get("/api/v1/shopping-list", params={"start_date": start, "end_date": end or start}, headers=h)
-    assert r.status_code == 200, r.text
-    return {i["variant_id"]: float(i["to_buy"]) for i in r.json()["items"]}
-
-
-async def pot_remaining(client, h, pot_id) -> float:
-    pots = (await client.get("/api/v1/recipes/cooking-logs", params={"include_finished": True}, headers=h)).json()
-    return float(next(p for p in pots if p["id"] == pot_id)["current_remaining_weight"])
 
 
 def portion_of(item, member_id):
@@ -363,3 +328,77 @@ async def test_portion_add_and_last_portion_delete_removes_item(client):
     assert r.status_code == 204
     r = await client.get("/api/v1/plan", params={"start_date": TODAY, "end_date": TODAY}, headers=h)
     assert r.json() == []
+
+
+async def test_join_keeps_stock_shopping_and_settings(client):
+    """Вступление в семью переносит всё: запасы, списки покупок, настройки товаров, шаблоны недель.
+    Совпадения (настройка того же товара, второй активный список) решаются в пользу новой семьи."""
+    ivan = await register_and_login(client, "ivan5", "ivan5@test.com")
+    await build_recipe_stack(client, ivan)
+    oats = (await client.get("/api/v1/products/", headers=ivan)).json()[0]["id"]
+    code = (await household(client, ivan))["invite_code"]
+    await client.patch(f"/api/v1/stock/items/{oats}", json={"regular": "always"}, headers=ivan)
+    await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=ivan)
+
+    anna = await register_and_login(client, "anna5", "anna5@test.com")
+    r = await client.post("/api/v1/stock/lots", json={"product_id": oats, "quantity": 500, "price": 80}, headers=anna)
+    assert r.status_code == 201, r.text
+    await client.patch(f"/api/v1/stock/items/{oats}", json={"regular": "never", "is_snack": True}, headers=anna)
+    await client.post("/api/v1/shopping-lists", json={"start_date": TODAY, "end_date": TODAY}, headers=anna)
+    rcat = (await client.post("/api/v1/recipes/categories", json={"name": "Обеды Анны"}, headers=anna)).json()["id"]
+    vid = (await client.get("/api/v1/products/", headers=anna)).json()[0]["manufacturers"][0]["variants"][0]["id"]
+    r = await client.post("/api/v1/recipes/", headers=anna, json={
+        "name": "Каша Анны", "recipe_category_id": rcat, "estimated_cooked_weight": 300,
+        "ingredients": [{"variant_id": vid, "weight_g": 60}]})
+    recipe_id = r.json()["id"]
+    await plan(client, anna, recipe_id=recipe_id, portions=[{"member_id": await me_id(client, anna), "weight_g": 200}])
+    monday = (dt.date.fromisoformat(TODAY) - dt.timedelta(days=dt.date.fromisoformat(TODAY).weekday())).isoformat()
+    r = await client.post("/api/v1/plan/templates", json={"name": "Неделя Анны", "week_start": monday}, headers=anna)
+    assert r.status_code == 201, r.text
+
+    r = await client.post("/api/v1/household/join", json={"invite_code": code}, headers=anna)
+    assert r.status_code == 200, r.text
+    stock = {i["product_id"]: i for i in (await client.get("/api/v1/stock", headers=ivan)).json()}
+    assert float(stock[oats]["remaining"]) == 500                  # запасы Анны теперь общие
+    assert stock[oats]["regular"] == "always" and not stock[oats]["is_snack"]   # настройка семьи Ивана
+    assert (await client.get("/api/v1/shopping-lists/active", headers=anna)).status_code == 200
+    names = [t["name"] for t in (await client.get("/api/v1/plan/templates", headers=ivan)).json()]
+    assert names == ["Неделя Анны"]
+
+
+async def test_batch_check_hint(client):
+    """Подсказка формы: что останется от закладки (паста: выход 900 г, 2 порции, «можно половиной», допуск 15 %)."""
+    from tests.helpers import recipe
+    h = await register_and_login(client, "bcheck", "bcheck@test.com")
+    vid, _ = await build_recipe_stack(client, h)               # категория рецептов и продукт
+    rid = await recipe(client, h, "Паста", vid, cooked=900, servings=2, allow_half=True)
+    me = await me_id(client, h)
+
+    async def check(weight, date_day=day(0), **kw):
+        r = await client.get("/api/v1/plan/batch-check", headers=h,
+                             params={"recipe_id": rid, "date_day": date_day, "weight_g": weight, **kw})
+        assert r.status_code == 200, r.text
+        j = r.json()
+        return j["status"], float(j["leftover"]), float(j["target"])
+
+    assert await check(800) == ("leftover", 100.0, 900.0)      # останется 100 г — меньше порции 450 г
+    assert await check(950) == ("short", -50.0, 900.0)         # в допуске: одна закладка, порции уменьшатся
+    assert await check(900) == ("ok", 0.0, 900.0)
+    assert await check(1350) == ("ok", 0.0, 1350.0)            # полторы закладки ровно
+    assert (await check(902))[0] == "ok"                       # порция 450 округлена вверх — пара граммов не в счёт
+    assert (await check(895))[0] == "ok"
+
+    # завтра уже стоит 100 г этой пасты — закладка общая: 800 + 100 = 900
+    item = await plan(client, h, date_day=day(1), recipe_id=rid, portions=[{"member_id": me, "weight_g": 100}])
+    assert await check(800) == ("ok", 0.0, 800.0)
+    assert (await check(800, date_day=day(5)))[0] == "leftover"    # через 5 дней закладка уже другая
+    # правка самого блюда: в «других» оно не считается
+    assert await check(100, date_day=day(1), item_id=item["id"]) == ("leftover", 350.0, 450.0)
+
+    # сварили — блюда берут из холодильника
+    await cook(client, h, rid, vid, 600)
+    assert (await check(400))[0] == "pot"                      # свободно 500 г
+    assert (await check(100, date_day=day(1), item_id=item["id"]))[0] == "pot"
+    bad = await client.get("/api/v1/plan/batch-check", headers=h,
+                           params={"recipe_id": 999999, "date_day": day(0), "weight_g": 100})
+    assert bad.status_code == 404

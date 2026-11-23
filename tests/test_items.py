@@ -6,8 +6,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.items import core_tokens
-from tests.test_api import TODAY, register_and_login
-from tests.test_plan import me_id, plan
+from tests.helpers import me_id, plan, register_and_login, TODAY
 
 pytestmark = pytest.mark.anyio
 
@@ -58,8 +57,8 @@ async def test_suggest_and_merge_items_one_shopping_line(client):
     assert len(ls) == 1 and ls[0]["product_name"] == "Кефир 3,2%" and float(ls[0]["needed"]) == 500
     # запас любого бренда товара закрывает потребность
     await client.post("/api/v1/stock/lots", json={"product_id": c["id"], "quantity": 999}, headers=h)   # другой товар — не в счёт
-    await client.post("/api/v1/stock/lots", json={"product_id": b["id"], "quantity": 450}, headers=h)
-    assert float((await lines(client, h))[0]["needed"]) == 50
+    await client.post("/api/v1/stock/lots", json={"product_id": b["id"], "quantity": 400}, headers=h)
+    assert float((await lines(client, h))[0]["needed"]) == 100
     assert (await client.get("/api/v1/items/suggestions", headers=h)).json() == []
 
 

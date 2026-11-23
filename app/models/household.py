@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import JSON, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -20,6 +20,9 @@ class Household(Base):
     invite_code = Column(String(16), unique=True, nullable=False)
     # Бюджет на продукты в месяц, ₽ (необязательно)
     monthly_budget = Column(Numeric(10, 2), nullable=True)
+    # Допуск, %: кастрюля вышла меньше плана не больше чем на него — порции уменьшаются
+    # пропорционально, а не «не хватает»; в покупках — недобор до целой упаковки
+    portion_tolerance = Column(Integer, nullable=False, default=15, server_default="15")
     created_at = Column(DateTime, server_default=func.now())
 
     members = relationship(
@@ -58,8 +61,28 @@ class HouseholdMember(Base):
     weight_kg = Column(Numeric(4, 1), nullable=True)
     activity = Column(Numeric(3, 2), nullable=True)        # КФА: 1.4 / 1.6 / 1.9 / 2.2
     goal = Column(String(8), nullable=True)                # "maintain" | "lose" | "gain"
+    __table_args__ = (
+        CheckConstraint("sex IN ('m', 'f')", name="sex"),
+        CheckConstraint("goal IN ('maintain', 'lose', 'gain')", name="goal"),
+    )
 
     created_at = Column(DateTime, server_default=func.now())
 
     household = relationship("Household", back_populates="members")
     user = relationship("User")
+
+
+class PlannerSettings(Base):
+    """Настройки автоплана семьи (docs/AUTOPLAN.md, 3.3). Нет строки — значения по умолчанию."""
+
+    __tablename__ = "planner_settings"
+
+    household_id = Column(Integer, ForeignKey("households.id", ondelete="CASCADE"), primary_key=True)
+    meal_types = Column(JSON, nullable=True)          # какие приёмы заполнять; NULL — все
+    no_cook_days = Column(JSON, nullable=True)        # дни недели без готовки (0 = пн)
+    special_days = Column(JSON, nullable=True)        # дни для «эдакого»; пусто — любой
+    max_special_per_week = Column(Integer, nullable=False, default=1, server_default="1")
+    # Снеки и сладкое (этап 3): категории продуктов семьи и квота ₽ в неделю (NULL — квоты нет)
+    snack_categories = Column(JSON, nullable=True)
+    snack_quota = Column(Numeric(10, 2), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

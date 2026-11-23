@@ -6,11 +6,10 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_access_token
-from app.db.session import SessionDep, get_session
+from app.db.session import SessionDep
 from app.models.household import HouseholdMember
 from app.models.user import User
 from app.repositories.household import HouseholdRepository, MemberRepository
@@ -34,14 +33,18 @@ from app.repositories.user import InviteRepository, UserRepository
 from app.services.auth import AuthService
 from app.services.household import HouseholdService
 from app.services.items import ItemService
+from app.services.autoplan import AutoplanService
 from app.services.plan import PlanService
+from app.services.pots import PotService
 from app.services.finance import FinanceService
+from app.services.regular import RegularService
+from app.services.shopping import ShoppingService
 from app.services.stock import StockService
 from app.services.product import ProductService
 from app.services.receipt import ReceiptService
 from app.services.recipe import RecipeService
+from app.services.recipe_import import RecipeImportService
 
-SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 # --- АУТЕНТИФИКАЦИЯ ---
@@ -139,12 +142,28 @@ def get_product_service(session: SessionDep) -> ProductService:
 
 
 def get_stock_service(session: SessionDep) -> StockService:
-    return StockService(
+    return StockService(stock=StockRepository(session))
+
+
+def get_shopping_service(session: SessionDep) -> ShoppingService:
+    return ShoppingService(
         stock=StockRepository(session),
         lists=ShoppingListRepository(session),
         plan=PlanRepository(session),
         recipes=RecipeRepository(session),
+        stock_service=get_stock_service(session),
     )
+
+
+def get_regular_service(session: SessionDep) -> RegularService:
+    return RegularService(
+        stock=StockRepository(session), lists=ShoppingListRepository(session),
+        households=HouseholdRepository(session), shopping=get_shopping_service(session),
+    )
+
+
+def get_pot_service(session: SessionDep) -> PotService:
+    return PotService(plan=PlanRepository(session), cooking_logs=CookingLogRepository(session))
 
 
 def get_recipe_service(session: SessionDep) -> RecipeService:
@@ -155,6 +174,7 @@ def get_recipe_service(session: SessionDep) -> RecipeService:
         variants=VariantRepository(session),
         plan=PlanRepository(session),
         stock=get_stock_service(session),
+        pots=get_pot_service(session),
     )
 
 
@@ -166,23 +186,55 @@ def get_plan_service(session: SessionDep) -> PlanService:
         variants=VariantRepository(session),
         members=MemberRepository(session),
         stock=get_stock_service(session),
+        pots=get_pot_service(session),
+    )
+
+
+def get_recipe_import_service(session: SessionDep) -> RecipeImportService:
+    return RecipeImportService(
+        recipes_svc=get_recipe_service(session),
+        recipes=RecipeRepository(session),
+        categories=RecipeCategoryRepository(session),
+        products=ProductRepository(session),
     )
 
 
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 RecipeServiceDep = Annotated[RecipeService, Depends(get_recipe_service)]
+RecipeImportServiceDep = Annotated[RecipeImportService, Depends(get_recipe_import_service)]
 def get_finance_service(session: SessionDep) -> FinanceService:
     return FinanceService(
-        session=session,
         stock_repo=StockRepository(session),
+        cooking_logs=CookingLogRepository(session),
+        plan=PlanRepository(session),
+        households=HouseholdRepository(session),
         recipes=RecipeRepository(session),
-        stock=get_stock_service(session),
+        shopping=get_shopping_service(session),
+        regular=get_regular_service(session),
     )
 
 
 PlanServiceDep = Annotated[PlanService, Depends(get_plan_service)]
+
+
+def get_autoplan_service(session: SessionDep) -> AutoplanService:
+    return AutoplanService(
+        plan=PlanRepository(session),
+        cooking_logs=CookingLogRepository(session),
+        members=MemberRepository(session),
+        recipes=RecipeRepository(session),
+        variants=VariantRepository(session),
+        households=HouseholdRepository(session),
+        stock=StockRepository(session),
+        finance=get_finance_service(session),
+    )
+
+
+AutoplanServiceDep = Annotated[AutoplanService, Depends(get_autoplan_service)]
 FinanceServiceDep = Annotated[FinanceService, Depends(get_finance_service)]
 StockServiceDep = Annotated[StockService, Depends(get_stock_service)]
+ShoppingServiceDep = Annotated[ShoppingService, Depends(get_shopping_service)]
+RegularServiceDep = Annotated[RegularService, Depends(get_regular_service)]
 
 
 def get_receipt_service(session: SessionDep) -> ReceiptService:
@@ -192,6 +244,7 @@ def get_receipt_service(session: SessionDep) -> ReceiptService:
         lists=ShoppingListRepository(session),
         stock_repo=StockRepository(session),
         stock=get_stock_service(session),
+        shopping=get_shopping_service(session),
     )
 
 

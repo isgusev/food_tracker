@@ -19,7 +19,7 @@ from app.services.receipt import (
     parse_qr,
     product_score,
 )
-from tests.test_api import TODAY, register_and_login
+from tests.helpers import register_and_login, TODAY
 
 pytestmark = pytest.mark.anyio
 

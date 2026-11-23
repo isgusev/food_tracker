@@ -14,9 +14,51 @@
 - Backend: FastAPI + SQLAlchemy 2.0 async + PostgreSQL 16 (asyncpg), Alembic, Pydantic v2, JWT.
   Слои: `app/models` → `app/repositories` (только SQL) → `app/services` (вся логика) →
   `app/api/v1/endpoints` (тонкие роутеры). Доменные ошибки → HTTP в `app/api/error_handlers.py`.
-- Frontend: `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`, Node на машине нет),
-  раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — `web/js/views/*.js`,
-  общее состояние — `web/js/store.js`. PWA: `web/sw.js` (network-first), `manifest.webmanifest`.
+- **Новый frontend (этап 5, переезд):** `frontend/` — Vite 8 + Vue 3 + TypeScript, раздаётся API на `/next/` (собранный
+  `frontend/dist`; в Docker — стадия `web-next` на `node:22-slim`). Клиент API — `openapi-fetch` с типами из OpenAPI:
+  `scripts/export_openapi.py` → `frontend/src/api/openapi.json` → `schema.d.ts` (`npm run api`; CI проверяет, что они
+  совпадают с API — **после изменения схем/эндпоинтов выполнить `npm run api` и закоммитить**). `src/api/client.ts`
+  (`api`, `ok()` — сеть недоступна → `ApiError` со `status 0`; `fetch` берётся в момент запроса, его можно подменить
+  в проверке; токен `ft.token` — общий со старым интерфейсом), `src/session.ts` (пользователь, семья, выбранный
+  член семьи — тот же ключ `ft.viewMember.<id>`), экраны `src/views/*.vue`, компоненты `src/components/*.vue`.
+  Визуальная система — `docs/DESIGN.md` («эмалированная посуда»: ободок `--rim`, клюв `--beak` — одно место на экране,
+  карандаш для черновиков; Golos Text + Unbounded, свои шрифты). Готово: вход, оболочка, «Сегодня», **План** (неделя
+  `views/plan/PlanView.vue`, день `DayView.vue`, окна `components/plan/*`: `AddItemModal`, `PlanItemModal`,
+  `TemplatesModal`, `PlanEntry`, `MemberSwitch`, `MacroMeters`, `BatchHint` — строка «останется меньше порции» по
+  `GET /plan/batch-check`), **Холодильник** (`views/fridge/FridgeView.vue`:
+  кастрюли, морозилка, архив; `components/fridge/CookModal`, `PotModal`; вкладка «Продукты» — `components/stock/*`:
+  `StockTab`, `AddLotModal`, `PacksEditor`, `SplitLotModal`, `StockItemModal`, `QuickInventory`); состав блюда —
+  `components/finder/IngredientsEditor.vue` + `resolveDraftIngredients` в `drafts.ts`; **Покупки**
+  (`views/shopping/ShoppingView.vue`; `components/shopping/*`: `BoughtModal`, `PackageModal`, `ExtraModal`,
+  `RegularBlock`, `ReceiptModal` — отдельный кусок; `src/shopping.ts` — `pkgText`, `lineQty`, офлайн-очередь
+  `toggleLine`/`flushQueue` с тем же ключом `ft.shopQueue`; `?start&end` в адресе — сразу сформировать за период); **Рецепты** (`views/recipes/RecipesView.vue`,
+  `components/recipes/RecipeModal.vue` — просмотр и правка, `ImportModal.vue` — импорт из YAML); **Продукты** (`views/catalog/CatalogView.vue`;
+  `components/catalog/*`: `ProductModal`, `NewProductModal`, `ItemsPanel` — отдельный кусок, `MoveModal`); **Семья** (`views/family/FamilyView.vue`; `components/family/MemberCard.vue`,
+  `PlannerSettings.vue`); **Деньги** (`views/money/MoneyView.vue`: `GET /finance/summary` за месяц,
+  `PUT /finance/budget`); «Ещё» — `views/MoreView.vue`, список разделов — `src/nav.ts`
+  (`MORE`: на телефоне в «Ещё», на компьютере — сразу в левой колонке); все экраны уже в новом интерфейсе;
+  вход и регистрация — `views/LoginView.vue` (`/login`, `/register?code=…` — ссылка-приглашение из «Семьи»),
+  правило «куда увести по состоянию входа» — `authRedirect` в `router.ts` (и в `beforeEach`, и в `App` после
+  `loadSession()` + `router.isReady()`). После деплоя старые куски сборки удаляются — `main.ts` перезагружает страницу один раз при ошибке
+  загрузки куска (`vite:preloadError`, `errorHandler`, `router.onError`; защита от цикла — `ft.reloadedForChunk`).
+  **Офлайн (PWA):** `frontend/sw.js` — исходник service worker; плагин `serviceWorker()` в `vite.config.ts` подставляет
+  `PRECACHE` (файлы сборки) и `VERSION` → `dist/sw.js` (регистрируется в `main.ts` только в продакшен-сборке). Сборка
+  — из кэша, страница и чтение API (`API_PREFIXES`) — «сначала сеть», копия помечается `X-Offline-Copy` → `network.online`
+  в `api/client.ts` → плашка в `App.vue`. Новый раздел API, нужный без сети, — добавить в `API_PREFIXES`. Манифест и
+  иконки — `frontend/public/`. Встроенный браузер Claude service worker не регистрирует — офлайн проверять в headless
+  Chrome (`--remote-debugging-port`, скрипт через CDP), выключая временный сервер.
+  Общее: `src/catalog.ts` (продукты/рецепты, `variantIndex`, `activeVariants`, `ensureCatalog`), `src/plan.ts`
+  (`itemBadge`, `portionOf`, `memberMacros`, `portionMemoryKey` — те же ключи `ft.*`, что у старого), `src/drafts.ts`
+  (черновик продукта, `saveDraft`), `components/ModalSheet.vue` (окно; на телефоне — лист снизу), `ItemPicker.vue`,
+  `components/finder/*` (`ProductFinder`, `OffDraftCard`, `BarcodeScanner` — ZXing из `public/vendor/`, `KbjuInputs`). Чек-лист переноса (все действия и вызовы API старых экранов) — `docs/FRONTEND_AUDIT.md`.
+  Node — через nvm (`~/.nvm/versions/node/v22…`; в Bash: `export PATH=$HOME/.nvm/versions/node/v22.23.5/bin:$PATH`).
+- Frontend (старый, пока основной): `web/` — Vue 3 **без сборки** (ESM из `web/vendor/`),
+  раздаётся самим API на `/app/` (`Cache-Control: no-cache`). Экраны — один компонент на файл:
+  `web/js/views/<экран>/<Компонент>.js`, помощники экрана — `views/<экран>/shared.js`, а `views/<экран>.js` только
+  реэкспортирует (импорты снаружи — из него). Общее состояние — `web/js/store.js`; действие с сервером из компонента
+  («занято», ошибка, тост) — `useAction()` из `web/js/use-action.js` (`{ inline, done }`), не писать свои `run()`.
+  PWA: `web/sw.js` (network-first); **новый JS-файл — добавить в `SHELL` и поднять `CACHE`** (проверяет
+  `scripts/check_web.sh`), `manifest.webmanifest`.
 - Сканер штрихкодов: BarcodeDetector, иначе `web/vendor/zxing.min.js` (для iPhone). `BarcodeScanner marks` —
   режим «Честного знака»: читает DataMatrix, сканирует пачки подряд (каждый новый код — событие).
 - «Честный знак»: разбор кода GS1 — `app/services/marking.py` (`parse_mark`: 01 GTIN → EAN-13, 21 серийный,
@@ -49,17 +91,27 @@
   (нормализация и сокращения чековых названий, размер упаковки и весовой товар, сопоставление: выученное
   `ReceiptAlias` → строки активного списка → «не еда» → справочник, порог 0,6), модели `Receipt`/`ReceiptAlias`,
   эндпоинты `/receipts` (POST, GET, GET/{id} — переспрашивает «ждём», POST/{id}/apply — через
-  `StockService.check`/`add_extra`/`add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
+  `ShoppingService.check`/`add_extra`, `StockService.add_lot`, дата покупки = дата чека). Веб: `web/js/receipts.js` («🧾 Чек» в
   «Покупках»), сканер `BarcodeScanner qr`. Тариф code-qr — пакет проверок: тратит только add-qr (новый чек),
   запрос статуса info — бесплатный. «Ждущие» чеки: окно само опрашивает (4 с первую минуту, 15 с до 3 мин),
   дальше — фоновая задача в lifespan (`app/services/receipt_poller.py`, раз в `RECEIPT_POLL_MINUTES`=10,
   только при заданном ключе, не в тестах); не дошёл за `RECEIPT_PENDING_DAYS`=3 дня — ошибка; ответ
   «нет пакета» чек не портит. Значок «🧾 Чек · готов» в «Покупках» — расшифрованные, но не разобранные.
-- Время: «сегодня» для учёта — только `app/core/clock.today()` (пояс семьи `APP_TIMEZONE`, по умолчанию
+- Общие помощники: `app/domain.py` — `dec()` (что угодно → Decimal), `monday()`; `app/services/naming.py` —
+  `brand_of`, `display_name` (показ продукта без «Без бренда»); `app/schemas/common.py` — `meal_type`/`meal_list`
+  (одна проверка приёмов пищи для всех схем). Новые копии `_d`/`_now`/`monday` не заводить.
+- Время: «сегодня» для учёта — только `app/core/clock.today()`, и вызывает его роутер: сервисы получают `today`
+  параметром (не зовут `clock.today()` сами) (пояс семьи `APP_TIMEZONE`, по умолчанию
   `Europe/Moscow`; сервер на Amvera в UTC). Метки времени в базе — UTC без пояса (`clock.utc_now()`);
   выборка за местные дни — `clock.utc_bounds(start, end)` (полуинтервал). `date.today()` в коде не использовать.
 - Расчёт целей КБЖУ: `app/services/nutrition.py` (МР 2.3.1.0253-21: Миффлин–Сан Жеор × КФА;
   снижение −15 %, набор +10 %, белок 1,6 г/кг) → `POST /household/targets/calc`.
+
+- Импорт рецептов из YAML (формат — `docs/RECIPE_IMPORT.md`): `POST /recipes/import {content, dry_run, choices, update}`
+  (`app/services/recipe_import.py`: `parse_recipe`, `match`/`similarity` — сопоставление со справочником, статусы
+  matched/fuzzy/ambiguous/missing/chosen/skipped; запись — через `RecipeService.create_recipe`/`update_recipe`).
+  Продукты молча не создаёт: выбор — `choices` (ключ «продукт|бренд» → variant_id, null — пропустить). Новый интерфейс:
+  «Рецепты → Импорт» — `components/recipes/ImportModal.vue` (`ProductFinder initialQuery` — поиск с текстом из файла).
 
 ## Предметная модель (кратко)
 
@@ -71,6 +123,53 @@
   `MealPortion` (член семьи или гость=NULL, вес, `is_eaten`, `eaten_from_pot_id`).
 - **Кастрюля** (`RecipeCookingLog`) резервирует несъеденные порции привязанных блюд;
   привязка с сегодняшнего дня по вместимости, освобождение поздних блюд при убывании.
+  **Допуск** `Household.portion_tolerance` (%, по умолчанию 15, 0…30, `PATCH /household`, «Семья → Допуск по весу»):
+  вышло/осталось меньше плана в пределах допуска — блюда остаются привязанными, а их несъеденные порции
+  уменьшаются пропорционально (`scale_portions`, вниз до грамма). Только события кастрюли: готовка
+  (`PotService.attach_new`), правка остатка и выхода (`PUT …/ingredients {total_cooked_weight}` — остаток сдвигается на
+  разницу, больше — `attach_more`, меньше — `release`), «съели» (`PotService.release(shrink_ok=True)`); правки порций в плане —
+  без допуска (заданный вес не урезается). Долю отдаёт `BaseRepository.tolerance(household_id)`.
+  **Все правила кастрюли — в `app/services/pots.py`** (рефакторинг Р3): чистые `remaining_weight`, `fits`, `shrink`,
+  `fit_weights`, `scale_portions`, `set_remaining` (остаток + «пуста») и `PotService` (привязка/освобождение блюд);
+  в `PlanRepository` — только выборки (`unattached_for_recipe`, `attached_newest_first`). Остаток кастрюли не
+  менять напрямую — через `set_remaining`; автоплан берёт порции из кастрюли через `fit_weights`.
+- **Автоплан** (`docs/AUTOPLAN.md`, `app/services/autoplan.py`, этап 1): у рецепта `in_rotation`, `effort` (easy/special),
+  `meal_types` (JSON; NULL — любой приём пищи), `keeps_days` (по умолч. 2), `is_freezable`; у блюда плана
+  `MealItem.origin` (manual/auto), `pinned`, `auto_reason` — ручная правка auto-блюда (перенос, порции) делает его manual
+  (`PlanService._touch`). Заготовки: `RecipeCookingLog.is_frozen` + `keeps_until`, `POST /recipes/cooking-logs/{id}/freeze`
+  (по умолч. +60 дн.) и `/unfreeze`; свойство `good_until` (keeps_until или готовка + keeps_days − 1; нужна загруженная
+  `recipe` — она в `CookingLogRepository.full_query`). Типичные порции — `GET /plan/typical-portions` (своя медиана
+  съеденного за 90 дн. → одна порция рецепта (выход / порций, если порций > 1) → медиана съеденного другими → доля цели
+  ккал на приём; цель ккал размер порции блюда не меняет — решение 21.11); форма «Добавить в план» берёт их, если на устройстве нет «как в прошлый раз».
+  `GET /plan/batch-check {recipe_id, date_day, weight_g, item_id?}` (`PlanService.batch_check`) — что останется от
+  закладки после готовки, вместе с другими блюдами рецепта без кастрюли в пределах ± (keeps_days − 1) дн. (тот же
+  `batches_for`): `leftover` — меньше порции рецепта, `short` — больше закладки в пределах допуска, `pot` — возьмут из
+  кастрюли; расхождение меньше max(10 г, 1 % закладки) — `ok`; `target` — вес блюда, чтобы съесть закладку целиком («Разделить всю закладку» — пропорционально).
+  `POST /plan/autofill {start, end, meal_types?, dry_run?, cook?}` (этап 2) — только ПУСТЫЕ ячейки: остатки холодильника
+  (пока свежие), заготовки (≤ 14 дн. — в любой день, иначе в дни «без готовки»), затем готовки по оценке (`Scoring` в
+  `autoplan.py`: давно не готовили / срок продуктов ≤ 3 дн. / общие товары / белок / цена при тугом бюджете / штраф
+  повтора); закладка — тот же приём следующих дней (`keeps_days`, выход), причина «та же закладка от …». Перегенерация
+  заменяет auto без 📌, без кастрюли и съеденного (`replaced`). `POST /plan/{id}/alternative` (🔄, следующий по оценке
+  по кругу), `POST /plan/{id}/accept`, `POST /plan/accept {start,end}`, `PATCH /plan/{id} {pinned}` (📌 не делает manual).
+  Настройки — `PlannerSettings` (`planner_settings`, миграция 0023), `GET/PATCH /household/planner`: `meal_types`,
+  `no_cook_days`, `special_days` (0 = пн), `max_special_per_week`. Веб: «✨ Предложить неделю» и ✨ у дня, панель
+  черновика («Принять всё»/«Убрать»), действия ✓ 📌 🔄 ✕ у предложения; предложения — «карандашом» (`.entry.auto`),
+  принятое — с полосой состояния (`.st-to_cook`/`.st-in_fridge`/`.st-product`); «Семья → Планировщик»
+  (`PlannerSettingsCard` в `views/misc.js`); «Для автоплана» в рецепте, «❄️ Заморозить остаток» и блок «Морозилка».
+  Этап 3: шаг 2 генерации — регулярные готовые продукты (`_regulars` в `autoplan.py`: тот же день недели и приём ≥ 4 из
+  8 недель; «сам по себе» → пустая ячейка, source `regular`; «к блюду» → к ячейке с авто-блюдом, source `side`).
+  Этап 4 — отзывы: `PlanFeedback` (`plan_feedback`, миграция 0026; `recipe_id` | `item_key`, `meal_type`, `action`
+  accepted/pinned/replaced/removed) пишут `PlanService.accept`/`accept_range`/`move(pinned)`/`delete_item` и
+  `AutoplanService.alternative` — только для `origin = auto`; `feedback_scores` (затухание вдвое за 30 дн., одинаковые
+  за день — один, ±2, товары ±4) → `Scoring.feedback` (`W_FB`); продукт ≤ −1,5 — реже (`_Regular.rare`, `due()`),
+  ≤ −3 — не ставится; 🔄 пропускает заменённые сегодня. «Любимое» — `Scoring.popular` (доля из 8 недель, `W_POP`);
+  привычка «каждый день» — `_Regular.weekday = None` (≥ 4 дней в неделю в приёме пищи); история 8 недель — `_Ctx.history`.
+- **Обычно берём и снеки** (этап 3, миграция 0024): `HouseholdProduct.regular` (auto/always/never), `regular_qty`,
+  `is_snack` — `PATCH /stock/items/{product_id}`; `GET /shopping-list/regular` (`RegularService.regular` в `services/regular.py`: покупки ≥ 4 из
+  8 полных недель, медиана в неделю − запасы − список; снеки сверх `PlannerSettings.snack_quota` за неделю скрыты);
+  `snack_categories` — в настройках планировщика; `FinanceSummary.snack_spent`. Веб: `RegularBlock` в `views/shopping.js`
+  (предложение «карандашом», «+»/«Добавить всё» через `POST /shopping-lists/{id}/lines`), «Обычно берём» в карточке
+  товара запасов, снеки в «Планировщике» и «Деньгах».
 - **Товар** (`Item`, ключ строкой `items.key`) — базовое наименование без бренда («Кефир 3,2%»); у продукта
   `Product.item_key`. ВСЁ, что «по товару» (запасы, покупки, «базовые» `HouseholdProduct.item_key`, цены,
   единица учёта и упаковки для округления), — по `item_key`, НЕ по `search_name` (он — только для
@@ -103,23 +202,36 @@
   строке (`ShoppingLine.added` — ручная часть, переживает «Пересчитать»), иначе строка «вне плана»; без
   количества — одна упаковка. Чек добавляет с `merge=False` (строку сразу отмечает купленной).
 - **Покупки** = потребность периода − (запасы − съедим до начала периода); рецепт — целыми закладками
-  за период (`Recipe.allow_half` — шаг полкастрюли), затем всегда до целых упаковок (упаковки — по всем
+  за период (`Recipe.allow_half` — шаг полкастрюли; на шаг меньше, если не хватает в пределах допуска — `batches_for`
+  в `pots.py`, то же правило `fits`, что у кастрюли), затем всегда до целых упаковок (упаковки — по всем
   брендам товара; нет упаковки — в списке «📦 Упаковка?», добавили — список пересчитывается); общий
-  `ShoppingList` (один активный на семью), «куплено» сразу создаёт партию.
-- **Финансы** — из цен партий (`app/services/finance.py`).
+  `ShoppingList` (один активный на семью), «куплено» сразу создаёт партию. С допуском семьи
+  `pick_packages(..., tolerance)` берёт на упаковку меньше, если недобор ≤ допуска (400 г, пачка 360 г → одна),
+  а недостачу ≤ допуска при имеющемся запасе не покупает вовсе (только расчёт по плану, не ручные добавки).
+- **Финансы** — из цен партий (`app/services/finance.py`; запросы — только через репозитории).
+- Сервисы запасов и покупок (рефакторинг Р2): `services/stock.py` — `StockService` (партии, расход и отмены, пачки,
+  списание, инвентаризация, настройки товара, сводка; публичный `product(id)`); `services/shopping.py` —
+  `ShoppingService` (потребность плана `needs`, `to_buy`, общий список и отметки, `packages_for`);
+  `services/regular.py` — `RegularService` («обычно берём», `snack_spent`, `is_snack`). DI — `get_*_service` в `deps.py`.
 - **Регистрация** только по одноразовым приглашениям (`RegistrationInvite`), первый
   пользователь — по `FIRST_INVITE_CODE`.
 
 ## Команды
 
 ```bash
-.venv/bin/python -m pytest -q              # 105 тестов, SQLite in-memory (REGISTRATION_MODE=open в conftest)
-.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0020)
+.venv/bin/python -m pytest -q              # 143 теста, SQLite in-memory (REGISTRATION_MODE=open в conftest)
+.venv/bin/alembic upgrade head             # миграции (только PostgreSQL; 0001…0026)
 .venv/bin/alembic check                    # модели == схема — проверять после новой миграции
 .venv/bin/uvicorn app.main:app --reload    # http://localhost:8000/app/
 .venv/bin/python -m scripts.seed           # демо-данные (локально нужен REGISTRATION_MODE=open)
 .venv/bin/python -m scripts.invite         # код приглашения в обход UI
+scripts/check_web.sh                       # фронтенд без браузера: модули грузятся, шаблоны компилируются, sw.js полный
+cd frontend && npm ci && npm run dev       # новый интерфейс: http://localhost:5173/next/ (прокси /api → :8000, VITE_API)
+cd frontend && npm run build               # проверка типов (vue-tsc) + сборка в frontend/dist (её раздаёт /next/)
+cd frontend && npm run api                 # OpenAPI → src/api/openapi.json и schema.d.ts (после изменений API)
 ```
+Общие помощники тестов — `tests/helpers.py` (пользователь, `day()`, продукты, рецепты, план, запасы, автоплан);
+тесты импортируют их оттуда, не друг из друга.
 Миграции проверять на временном Postgres в Docker (upgrade / check / downgrade -1 / upgrade),
 не трогая основную локальную базу пользователя (`food_tracker_db`, порт 5433).
 
@@ -128,7 +240,7 @@
 - `develop` → тестовый стенд Amvera (`food-tracker-test`), автодеплой на push.
 - `main` → боевой стенд (`food-tracker`), деплой после успешного CI. В `main` — только
   после проверки на тесте (PR `develop` → `main`) или по явной просьбе Ивана.
-- Работа — в feature-ветках от `develop`. CI: `.github/workflows/ci.yml` (pytest + цикл миграций).
+- Работа — коммитами прямо в `develop` (без feature-веток и слияний; так просил Иван 20.11). CI: `.github/workflows/ci.yml` (pytest + цикл миграций).
 - Хостинг: `Dockerfile`, `amvera.yml` (порт 8000), `scripts/start.sh` (wait_db → alembic →
   uvicorn), инструкция `docs/DEPLOY_AMVERA.md`. Push в GitHub работает (токен в связке ключей).
 
@@ -148,6 +260,11 @@
   `(?<![а-яё])…(?![а-яё])`.
 - Регэкспы с `\d` и другими `\`-escape внутри шаблонов Vue (`template: \`…\``) ломаются —
   JS-литерал съедает обратный слэш. Проверки выносить в `computed`/функции в `setup`.
+- Встроенный браузер localhost открывает (проверено 19.11, и на `127.0.0.1`, и на `0.0.0.0`). При первом
+  обращении приложение Claude спрашивает у Ивана разрешение на сайт; не ответил (отошёл) — навигация «denied
+  or failed». Тогда попросить разрешить, а не считать localhost недоступным. Обход экранов — скриптом в
+  `javascript_tool`: перехват `console.error`/`onerror` в `window.__errs`, `location.hash = '#/…'`, клик по
+  кнопкам и проверка `.modal`/`.toast`; две ошибки «fetching the script» — это service worker, норма.
 - `preview_start` по `.claude/launch.json` не может запустить сервер (нет доступа к папке проекта) —
   uvicorn запускать через Bash в фоне на временной базе (Docker, порт 5439) и открывать
   `preview_start` с `url` http://localhost:8001/app/; демо-данные — `scripts.seed --url … --user … --password …`.
@@ -159,6 +276,17 @@
 - `gh` на машине нет — статус CI и деплоя смотреть в GitHub Actions / панели Amvera (сказать Ивану).
 - Тесты с датами — через `day()` в `tests/test_api.py` (он берёт `clock.today()`): с 00:00 до 03:00 МСК
   серверное UTC-«сегодня» — вчера, на CI машина в UTC. Проверка: `TZ=UTC .venv/bin/python -m pytest -q`.
+- Шаблоны Vue без браузера — `scripts/check_web.sh` (JavaScriptCore из macOS грузит модули и компилирует шаблоны).
+  Продакшен-сборка Vue прощает незакрытые теги, а несуществующую переменную в `setup` видно только при работе
+  экрана — это по-прежнему проверка в браузере / на стенде.
+- «Вступить в семью» (`HouseholdRepository.move_all_data`) удаляет старую семью, и всё, что не перенесено, пропадает
+  каскадом. Новая таблица с `household_id` — добавить её в перенос (и решить конфликты уникальности) + тест
+  `test_join_keeps_stock_shopping_and_settings`.
+- Ограничения в моделях: `CheckConstraint(..., name="col")` — только суффикс, `naming_convention` (`app/db/base.py`)
+  сам делает `ck_<таблица>_<col>`; в миграции полное имя — через `op.f("ck_...")`, иначе получится
+  `ck_t_ck_t_col`. Новые CHECK на существующие таблицы — `ADD CONSTRAINT … NOT VALID` (миграция 0025): старые строки
+  на стенде не перепроверяются и не ломают деплой. Новое значение строкового поля (источник партии, причина
+  движения, статус) — добавить и в CHECK модели, и миграцией.
 - Необратимые локальные действия (удаление веток, stash, `docker stop` чужих контейнеров)
   требуют подтверждения Ивана.
 

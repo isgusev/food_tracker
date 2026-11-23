@@ -5,11 +5,12 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentMemberDep, CurrentUserDep, RecipeServiceDep
+from app.api.deps import CurrentMemberDep, CurrentUserDep, RecipeImportServiceDep, RecipeServiceDep
 from app.core import clock
 from app.schemas.recipe import (
     CookingLogUpdate,
     CookingLogUpdateIngredients,
+    FreezeIn,
     PotArchiveItem,
     PotUsageResponse,
     RecipeCategoryCreate,
@@ -20,6 +21,7 @@ from app.schemas.recipe import (
     RecipeResponse,
     RecipeUpdate,
 )
+from app.schemas.recipe_import import RecipeImportIn, RecipeImportReport
 
 router = APIRouter(prefix="/recipes", tags=["Рецепты и Сложные Блюда"])
 
@@ -39,6 +41,17 @@ async def create_recipe_template(
     recipe_in: RecipeCreate, service: RecipeServiceDep, me: CurrentMemberDep, current_user: CurrentUserDep
 ):
     return await service.create_recipe(me.household_id, current_user.id, recipe_in)
+
+
+@router.post("/import", response_model=RecipeImportReport)
+async def import_recipes(
+    data: RecipeImportIn, service: RecipeImportServiceDep, me: CurrentMemberDep, current_user: CurrentUserDep
+):
+    """Импорт рецептов из YAML (docs/RECIPE_IMPORT.md). dry_run=true — только отчёт: что создастся/обновится,
+    какие ингредиенты не сопоставились. Затем тот же файл с choices (ключ ингредиента → variant_id, null —
+    пропустить) и update (номера рецептов, которые уже есть и их надо обновить) и dry_run=false.
+    Ошибки — по каждому рецепту отдельно, остальные импортируются."""
+    return await service.run(me.household_id, current_user.id, data)
 
 
 @router.get("/cooking-logs", response_model=list[RecipeCookingLogResponse])
@@ -189,4 +202,18 @@ async def replace_cooking_log_ingredients(
 ):
     """Полная замена фактической закладки кастрюли (добавить/убрать/заменить ингредиент)."""
     pot = await service.get_owned_pot(log_id, me.household_id)
-    return await service.replace_pot_ingredients(pot, payload)
+    return await service.replace_pot_ingredients(pot, payload, clock.today())
+
+
+@router.post("/cooking-logs/{log_id}/freeze", response_model=RecipeCookingLogResponse)
+async def freeze_cooking_log(log_id: int, payload: FreezeIn, service: RecipeServiceDep, me: CurrentMemberDep):
+    """«❄️ Заморозить остаток» — кастрюля становится заготовкой (срок по умолчанию +60 дней)."""
+    pot = await service.get_owned_pot(log_id, me.household_id)
+    return await service.freeze_pot(pot, payload.keeps_until, clock.today())
+
+
+@router.post("/cooking-logs/{log_id}/unfreeze", response_model=RecipeCookingLogResponse)
+async def unfreeze_cooking_log(log_id: int, service: RecipeServiceDep, me: CurrentMemberDep):
+    """Достали заготовку из морозилки — снова обычная кастрюля."""
+    pot = await service.get_owned_pot(log_id, me.household_id)
+    return await service.unfreeze_pot(pot, clock.today())

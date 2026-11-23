@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -65,7 +65,8 @@ class StockRepository(BaseRepository[StockLot]):
     async def get_or_create_settings(self, household_id: int, key: str) -> HouseholdProduct:
         s = await self.settings(household_id, key)
         if s is None:
-            s = HouseholdProduct(household_id=household_id, item_key=key, is_staple=False, is_low=False, needs_check=False)
+            s = HouseholdProduct(household_id=household_id, item_key=key, is_staple=False, is_low=False, needs_check=False,
+                                 regular="auto", is_snack=False)
             self._session.add(s)
             await self._session.flush()
         return s
@@ -121,6 +122,56 @@ class StockRepository(BaseRepository[StockLot]):
         for pid, remaining in (await self._session.execute(stmt)).all():
             out[pid] = out.get(pid, Decimal("0")) + Decimal(str(remaining))
         return out
+
+    async def priced_lots(self, household_id: int) -> list[StockLot]:
+        """Партии с ценой — свежие первыми (последняя цена товара)."""
+        stmt = (
+            select(StockLot)
+            .where(StockLot.household_id == household_id, StockLot.price.isnot(None))
+            .options(joinedload(StockLot.product))
+            .order_by(StockLot.purchased_on.desc(), StockLot.id.desc())
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def cook_movements(self, pot_ids: list[int]) -> list[StockMovement]:
+        """Списания на готовку кастрюль — с партиями (для стоимости кастрюли)."""
+        if not pot_ids:
+            return []
+        stmt = (
+            select(StockMovement)
+            .where(StockMovement.pot_id.in_(pot_ids), StockMovement.reason == "cook")
+            .options(joinedload(StockMovement.lot))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def outgoing_between(self, household_id: int, t0, t1) -> list[StockMovement]:
+        """Расход (delta < 0) за полуинтервал UTC [t0, t1) — с партией и продуктом."""
+        stmt = (
+            select(StockMovement)
+            .where(StockMovement.household_id == household_id, StockMovement.created_at >= t0,
+                   StockMovement.created_at < t1, StockMovement.delta < 0)
+            .options(joinedload(StockMovement.lot).joinedload(StockLot.product))
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def purchases_between(self, household_id: int, start: date, end: date) -> list[StockLot]:
+        """Покупки (партии purchase/manual, в т. ч. из чеков) за дни start…end — с продуктом и категорией."""
+        stmt = (
+            self._lots_query(household_id)
+            .where(StockLot.purchased_on >= start, StockLot.purchased_on <= end,
+                   StockLot.source.in_(("purchase", "manual")))
+            .order_by(StockLot.purchased_on, StockLot.id)
+        )
+        return list((await self._session.execute(stmt)).unique().scalars().all())
+
+    async def spent_between(self, household_id: int, start: date, end: date) -> Decimal:
+        """Сколько потрачено на покупки (партии с ценой) за дни start…end."""
+        stmt = select(func.sum(StockLot.price)).where(
+            StockLot.household_id == household_id, StockLot.price.isnot(None),
+            StockLot.purchased_on >= start, StockLot.purchased_on <= end,
+            StockLot.source.in_(("purchase", "manual")),
+        )
+        return Decimal(str((await self._session.execute(stmt)).scalar() or 0))
 
     async def usual_products(self, household_id: int, keys: set[str]) -> dict[str, int]:
         """«Обычно берёте»: товар → продукт из последней покупки семьи."""

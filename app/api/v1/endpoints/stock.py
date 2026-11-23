@@ -75,8 +75,9 @@ async def inventory(
 
 @router.patch("/items/{product_id}", response_model=list[StockItem])
 async def set_flags(product_id: int, payload: ItemFlags, service: StockServiceDep, me: CurrentMemberDep):
-    """«Базовый» (не учитывать остаток) и «заканчивается» (добавить в покупки)."""
-    await service.set_flags(me.household_id, product_id, payload.is_staple, payload.is_low)
+    """«Базовый» (не учитывать остаток), «заканчивается» (добавить в покупки), «обычно берём»
+    (auto / always / never, своё количество в неделю) и «снек» (в квоту снеков)."""
+    await service.set_flags(me.household_id, product_id, payload)
     return await service.summary(me.household_id, clock.today())
 
 

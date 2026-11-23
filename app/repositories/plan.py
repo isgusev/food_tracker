@@ -9,9 +9,11 @@ from sqlalchemy import case, exists, func, select, update
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.domain import MEAL_ORDER
-from app.models.plan import MealItem, MealPortion, WeekTemplate
+from app.models.plan import MealItem, MealPortion, PlanFeedback, WeekTemplate
 from app.models.product import Product, ProductManufacturer, ProductVariant
 from app.repositories.base import BaseRepository
+
+ZERO = Decimal("0")
 
 # Приёмы пищи — в порядке дня, а не по алфавиту
 MEAL_SORT = case(
@@ -19,13 +21,6 @@ MEAL_SORT = case(
     value=MealItem.meal_type,
     else_=len(MEAL_ORDER),
 )
-
-
-def remaining_weight(item: MealItem) -> Decimal:
-    """Сколько ещё не съедено по блюду (резерв кастрюли / объём покупки)."""
-    return sum(
-        (Decimal(str(p.weight_g)) for p in item.portions if not p.is_eaten), Decimal("0")
-    )
 
 
 class PlanRepository(BaseRepository[MealItem]):
@@ -76,6 +71,60 @@ class PlanRepository(BaseRepository[MealItem]):
         stmt = stmt.order_by(MealItem.date_day, MEAL_SORT, MealItem.id)
         return list((await self._session.execute(stmt)).unique().scalars().all())
 
+    async def eaten_weights(
+        self, household_id: int, since, *, recipe_id: int | None = None, variant_id: int | None = None
+    ) -> list[tuple[int, Decimal]]:
+        """Съеденные порции членов семьи (без гостей) по рецепту или продукту с даты since (UTC)."""
+        stmt = (
+            select(MealPortion.member_id, MealPortion.weight_g)
+            .join(MealItem, MealPortion.meal_item_id == MealItem.id)
+            .where(
+                MealItem.household_id == household_id,
+                MealPortion.is_eaten.is_(True),
+                MealPortion.member_id.isnot(None),
+                MealPortion.eaten_at >= since,
+            )
+        )
+        if recipe_id is not None:
+            stmt = stmt.where(MealItem.recipe_id == recipe_id)
+        else:
+            stmt = stmt.where(MealItem.variant_id == variant_id)
+        return [(m, Decimal(str(w))) for m, w in (await self._session.execute(stmt)).all()]
+
+    def add_feedback(self, item: MealItem, action: str) -> None:
+        """Отзыв о предложении автоплана: по рецепту или по товару готового продукта."""
+        product = item.variant.manufacturer.product if item.variant is not None and item.variant.manufacturer else None
+        self._session.add(PlanFeedback(
+            household_id=item.household_id, recipe_id=item.recipe_id,
+            item_key=product.item_key if product is not None and item.recipe_id is None else None,
+            meal_type=item.meal_type, action=action,
+        ))
+
+    async def feedback_since(self, household_id: int, since) -> list[PlanFeedback]:
+        stmt = select(PlanFeedback).where(PlanFeedback.household_id == household_id, PlanFeedback.created_at >= since)
+        return list((await self._session.execute(stmt)).scalars().all())
+
+    async def last_recipe_dates(self, household_id: int, before: date) -> dict[int, date]:
+        """Последний день, когда рецепт стоял в плане до даты before (для «давно не готовили»)."""
+        stmt = (
+            select(MealItem.recipe_id, func.max(MealItem.date_day))
+            .where(MealItem.household_id == household_id, MealItem.recipe_id.isnot(None),
+                   MealItem.date_day < before)
+            .group_by(MealItem.recipe_id)
+        )
+        return {int(r): d for r, d in (await self._session.execute(stmt)).all() if d is not None}
+
+    async def eaten_from_pots(self, pot_ids: list[int]) -> dict[int, Decimal]:
+        """Сколько съедено из каждой кастрюли (Σ съеденных порций) — одним запросом."""
+        if not pot_ids:
+            return {}
+        stmt = (
+            select(MealPortion.eaten_from_pot_id, func.sum(MealPortion.weight_g))
+            .where(MealPortion.eaten_from_pot_id.in_(pot_ids), MealPortion.is_eaten.is_(True))
+            .group_by(MealPortion.eaten_from_pot_id)
+        )
+        return {int(p): Decimal(str(t or 0)) for p, t in (await self._session.execute(stmt)).all()}
+
     async def reserved_by_pot(self, household_id: int) -> dict[int, Decimal]:
         """Резерв по кастрюлям: Σ несъеденных порций привязанных блюд (один запрос)."""
         stmt = (
@@ -91,20 +140,8 @@ class PlanRepository(BaseRepository[MealItem]):
         rows = (await self._session.execute(stmt)).all()
         return {int(pot): Decimal(str(total or 0)) for pot, total in rows if pot}
 
-    async def attach_to_new_pot(
-        self,
-        household_id: int,
-        recipe_id: int,
-        pot_id: int,
-        from_date: date,
-        capacity_g: Decimal,
-    ) -> int:
-        """Свежая кастрюля: привязываем блюда по рецепту с сегодняшнего дня, пока влезают.
-
-        Прошлые неотмеченные планы кастрюлю не «съедают»; на первом
-        не поместившемся блюде останавливаемся — более поздние остаются
-        «надо приготовить» и попадают в покупки.
-        """
+    async def unattached_for_recipe(self, household_id: int, recipe_id: int, from_date: date) -> list[MealItem]:
+        """Блюда рецепта без кастрюли с даты from_date — в порядке дня (для привязки к свежей кастрюле)."""
         stmt = (
             self.full_query()
             .where(
@@ -115,42 +152,16 @@ class PlanRepository(BaseRepository[MealItem]):
             )
             .order_by(MealItem.date_day, MEAL_SORT, MealItem.id)
         )
-        items = list((await self._session.execute(stmt)).unique().scalars().all())
-        reserved = Decimal("0")
-        attached = 0
-        for item in items:
-            need = remaining_weight(item)
-            if need <= 0:
-                continue  # всё уже съедено
-            if reserved + need > capacity_g:
-                break
-            reserved += need
-            item.cooking_log_id = pot_id
-            attached += 1
-        await self._session.flush()
-        return attached
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
-    async def release_overbooked(self, pot_id: int, available_g: Decimal) -> int:
-        """Кастрюля убыла — с конца отвязываем блюда, которым уже не хватает."""
+    async def attached_newest_first(self, pot_id: int) -> list[MealItem]:
+        """Блюда, привязанные к кастрюле, — с самых поздних (их отвязываем первыми)."""
         stmt = (
             self.full_query()
             .where(MealItem.cooking_log_id == pot_id)
             .order_by(MealItem.date_day.desc(), MEAL_SORT.desc(), MealItem.id.desc())
         )
-        items = list((await self._session.execute(stmt)).unique().scalars().all())
-        reserved = sum((remaining_weight(i) for i in items), Decimal("0"))
-        released = 0
-        for item in items:
-            if reserved <= available_g:
-                break
-            need = remaining_weight(item)
-            if need <= 0:
-                continue
-            reserved -= need
-            item.cooking_log_id = None
-            released += 1
-        await self._session.flush()
-        return released
+        return list((await self._session.execute(stmt)).unique().scalars().all())
 
     async def items_touching_pot(self, pot_id: int) -> list[MealItem]:
         """Блюда, привязанные к кастрюле или с порциями, съеденными из неё."""

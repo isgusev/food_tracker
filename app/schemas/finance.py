@@ -54,6 +54,8 @@ class FinanceSummary(BaseModel):
     monthly_budget: Optional[Decimal] = None
     planned_to_buy: Decimal          # оценка: что ещё купить по плану до конца периода
     planned_unknown: int             # позиций без известной цены
+    snack_spent: Decimal = Decimal("0")       # снеки и сладкое за период (категории семьи + «снек»)
+    snack_quota: Optional[Decimal] = None     # квота ₽ в неделю (настройки планировщика)
 
 
 class BudgetIn(BaseModel):

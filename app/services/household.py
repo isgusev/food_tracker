@@ -15,14 +15,16 @@ from app.models.user import RegistrationInvite
 from app.repositories.household import HouseholdRepository, MemberRepository
 from app.repositories.user import InviteRepository
 from app.schemas.auth import InviteResponse
-from datetime import date
 
 from app.schemas.household import (
     BodyProfile,
     HouseholdResponse,
+    HouseholdUpdate,
     MemberCreate,
     MemberResponse,
     MemberUpdate,
+    PlannerSettingsOut,
+    PlannerSettingsUpdate,
     Targets,
     TargetsCalcIn,
     TargetsCalcOut,
@@ -69,6 +71,20 @@ def _apply_targets(member: HouseholdMember, t: Targets) -> None:
     member.target_carbs = t.carbs
 
 
+def planner_out(s) -> PlannerSettingsOut:
+    """Настройки автоплана; нет строки — значения по умолчанию."""
+    if s is None:
+        return PlannerSettingsOut()
+    return PlannerSettingsOut(
+        meal_types=s.meal_types or None,
+        no_cook_days=s.no_cook_days or [],
+        special_days=s.special_days or [],
+        max_special_per_week=s.max_special_per_week if s.max_special_per_week is not None else 1,
+        snack_categories=s.snack_categories or [],
+        snack_quota=s.snack_quota,
+    )
+
+
 class HouseholdService:
     def __init__(
         self,
@@ -107,6 +123,7 @@ class HouseholdService:
             name=household.name,
             invite_code=household.invite_code,
             monthly_budget=household.monthly_budget,
+            portion_tolerance=household.portion_tolerance if household.portion_tolerance is not None else 15,
             me_member_id=me.id,
             members=[self.member_response(m, me) for m in household.members],
         )
@@ -124,11 +141,36 @@ class HouseholdService:
             profile=_profile(m),
         )
 
-    async def rename(self, me: HouseholdMember, name: str) -> HouseholdResponse:
+    async def update(self, me: HouseholdMember, data: HouseholdUpdate) -> HouseholdResponse:
+        """Название семьи и/или допуск кастрюли и упаковок."""
         household = await self._households.get(me.household_id)
-        household.name = name
+        if data.name is not None:
+            household.name = data.name
+        if data.portion_tolerance is not None:
+            household.portion_tolerance = data.portion_tolerance
         await self._households.flush()
         return await self.get(me)
+
+    async def planner(self, me: HouseholdMember) -> PlannerSettingsOut:
+        return planner_out(await self._households.planner(me.household_id))
+
+    async def update_planner(self, me: HouseholdMember, data: PlannerSettingsUpdate) -> PlannerSettingsOut:
+        """Настройки автоплана; meal_types=null — все приёмы, пустые списки дней — не заданы."""
+        s = await self._households.planner_or_create(me.household_id)
+        fields = data.model_dump(exclude_unset=True)
+        if "meal_types" in fields:
+            s.meal_types = data.meal_types
+        for key in ("no_cook_days", "special_days"):
+            if key in fields:
+                setattr(s, key, fields[key] or None)
+        if data.max_special_per_week is not None:
+            s.max_special_per_week = data.max_special_per_week
+        if "snack_categories" in fields:
+            s.snack_categories = sorted(set(data.snack_categories or [])) or None
+        if "snack_quota" in fields:
+            s.snack_quota = data.snack_quota or None
+        await self._households.flush()
+        return planner_out(s)
 
     async def regenerate_code(self, me: HouseholdMember) -> HouseholdResponse:
         household = await self._households.get(me.household_id)
@@ -171,8 +213,8 @@ class HouseholdService:
 
     # --- ПРИГЛАШЕНИЕ ---
     async def join(self, me: HouseholdMember, code: str) -> HouseholdResponse:
-        """Вступить в семью по коду. Всё, что было у вас (рецепты, холодильник,
-        план, члены семьи без аккаунта), переезжает в новую семью."""
+        """Вступить в семью по коду. Всё, что было у вас (рецепты, холодильник, запасы, план,
+        покупки, чеки, члены семьи без аккаунта), переезжает в новую семью."""
         target = await self._households.get_by_invite_code(code)
         if target is None:
             raise NotFoundError("Семья с таким кодом не найдена")

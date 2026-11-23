@@ -23,3 +23,7 @@ htmlcov/
 
 # рабочие копии агентов Claude Code
 .claude/worktrees/
+
+# новый фронтенд: зависимости и сборка (собирается в Docker / CI)
+frontend/node_modules/
+frontend/dist/

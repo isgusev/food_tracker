@@ -11,12 +11,13 @@
 from __future__ import annotations
 
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.core import clock
 from app.core.exceptions import NotFoundError, ValidationError
 from app.domain import (
+    dec,
     ITEM_IN_FRIDGE,
     ITEM_PRODUCT,
     ITEM_TO_COOK,
@@ -30,10 +31,12 @@ from app.models.household import HouseholdMember
 from app.models.plan import MealItem, MealPortion, WeekTemplate
 from app.models.recipe import RecipeCookingLog
 from app.repositories.household import MemberRepository
-from app.repositories.plan import PlanRepository, remaining_weight
+from app.repositories.plan import PlanRepository
+from app.services.pots import PotService, batches_for, remaining_weight, set_remaining, standard_portion
 from app.repositories.product import VariantRepository
 from app.repositories.recipe import CookingLogRepository, RecipeRepository
 from app.schemas.plan import (
+    BatchCheck,
     TemplateApplied,
     TemplateResponse,
     MealItemCreate,
@@ -43,13 +46,13 @@ from app.schemas.plan import (
     PortionResponse,
     PotSourceStatus,
 )
+from app.services.naming import display_name  # noqa: F401 — показ названия продукта
 from app.services.stock import StockService
 
 ZERO = Decimal("0")
 
 
-def _d(value) -> Decimal:
-    return Decimal(str(value or 0))
+_d = dec
 
 
 def _per_100(source) -> Nutrients:
@@ -64,19 +67,6 @@ def _per_100(source) -> Nutrients:
     return Nutrients(_d(source.calories), _d(source.proteins), _d(source.fats), _d(source.carbs))
 
 
-def display_name(variant, variant_id: int) -> str:
-    manufacturer = variant.manufacturer if variant is not None else None
-    product = manufacturer.product if manufacturer else None
-    if product is None:
-        return f"Продукт #{variant_id}"
-    brand_name = product.brand.name if product.brand else ""
-    m_name = manufacturer.name or ""
-    # производитель — только если отличается от бренда: «Творог (Простоквашино)»
-    parts = [brand_name] + ([m_name] if m_name and m_name.lower() != brand_name.lower() else [])
-    parts = [x for x in parts if x and x.lower() != "без бренда"]
-    return f"{product.name} ({' / '.join(parts)})" if parts else product.name
-
-
 class PlanService:
     def __init__(
         self,
@@ -86,7 +76,9 @@ class PlanService:
         variants: VariantRepository,
         members: MemberRepository,
         stock: StockService,
+        pots: PotService,
     ) -> None:
+        self._pot_svc = pots
         self._plan = plan
         self._recipes = recipes
         self._cooking_logs = cooking_logs
@@ -178,6 +170,9 @@ class PlanService:
             state=state,
             cooking_log_id=item.cooking_log_id,
             portions=portions,
+            origin=item.origin or "manual",
+            pinned=bool(item.pinned),
+            auto_reason=item.auto_reason,
             total_weight_g=sum((_d(p.weight_g) for p in item.portions), ZERO),
             remaining_weight_g=remaining_weight(item),
         )
@@ -206,6 +201,53 @@ class PlanService:
             member = await self._members.get(p.member_id)
             if member is None or member.household_id != household_id:
                 raise NotFoundError(f"Член семьи #{p.member_id} не найден")
+
+    async def batch_check(
+        self, household_id: int, recipe_id: int, day: date, weight: Decimal, today: date, item_id: int | None = None,
+    ) -> BatchCheck:
+        """Подсказка формы: что останется от закладки после готовки (BatchCheck). item_id — правка блюда плана
+        (само оно в «других» не считается; привязано к кастрюле — status pot)."""
+        recipe = await self._recipes.get_by_id(recipe_id, household_id=household_id)
+        if recipe is None:
+            raise NotFoundError("Рецепт не найден")
+        cooked = _d(recipe.estimated_cooked_weight)
+        if cooked <= 0 or weight <= 0:
+            return BatchCheck(status="none", cooked=cooked, planned=weight)
+        if item_id is not None:
+            item = await self.get_owned_item(item_id, household_id)
+            if item.cooking_log_id is not None:
+                return BatchCheck(status="pot", cooked=cooked, planned=weight)
+        else:
+            pot = await self._cooking_logs.find_active_pot(household_id, recipe_id)
+            if pot is not None:
+                booked = (await self._plan.reserved_by_pot(household_id)).get(pot.id, ZERO)
+                if _d(pot.current_remaining_weight) - booked >= weight:
+                    return BatchCheck(status="pot", cooked=cooked, planned=weight)
+        span = timedelta(days=max(1, recipe.keeps_days or 2) - 1)
+        others = sum(
+            (remaining_weight(i) for i in await self._plan.unattached_for_recipe(
+                household_id, recipe_id, max(today, day - span))
+             if i.date_day <= day + span and i.id != item_id),
+            ZERO,
+        )
+        total = weight + others
+        batches = batches_for(total, cooked, bool(recipe.allow_half), await self._plan.tolerance(household_id))
+        leftover = batches * cooked - total
+        portion = standard_portion(recipe)
+        # расхождение в несколько граммов (порция 432,5 г округлена до 433) — не повод для подсказки
+        noise = max(Decimal(10), batches * cooked / 100)
+        if abs(leftover) < noise:
+            status = "ok"
+        elif leftover < 0:
+            status = "short"
+        elif portion is not None and 0 < leftover < portion:
+            status = "leftover"
+        else:
+            status = "ok"
+        return BatchCheck(
+            status=status, cooked=cooked, batches=batches, planned=weight, others=others,
+            leftover=leftover, portion=portion, target=max(ZERO, batches * cooked - others),
+        )
 
     async def create(self, household_id: int, user_id: int, data: MealItemCreate) -> MealItemResponse:
         if data.variant_id is not None:
@@ -238,7 +280,22 @@ class PlanService:
         await self._plan.flush()
         return await self.response(item.id)
 
+    @staticmethod
+    def _touch(item: MealItem) -> None:
+        """Ручная правка предложенного автопланом блюда делает его обычным (manual)."""
+        if item.origin == "auto":
+            item.origin = "manual"
+            item.auto_reason = None
+
     async def move(self, item: MealItem, data: MealItemMove) -> MealItemResponse:
+        """Перенос (ручная правка — блюдо становится обычным) и/или 📌 закрепление.
+        Закрепили предложение автоплана — отзыв «pinned»."""
+        if data.pinned and not item.pinned and item.origin == "auto":
+            self._plan.add_feedback(item, "pinned")
+        if data.date_day is not None or data.meal_type is not None:
+            self._touch(item)
+        if data.pinned is not None:
+            item.pinned = data.pinned
         if data.date_day is not None:
             item.date_day = data.date_day
         if data.meal_type is not None:
@@ -246,8 +303,33 @@ class PlanService:
         await self._plan.flush()
         return await self.response(item.id)
 
+    async def accept(self, item: MealItem) -> MealItemResponse:
+        """«✓ Принять» предложение: блюдо становится обычным (manual); отзыв «accepted»."""
+        if item.origin == "auto":
+            self._plan.add_feedback(item, "accepted")
+        self._touch(item)
+        await self._plan.flush()
+        return await self.response(item.id)
+
+    async def accept_range(self, household_id: int, start: date, end: date) -> int:
+        """«Принять всё» за период: все auto-блюда → manual; отзыв «accepted» — по разу на рецепт/товар
+        (та же закладка на три дня — не три плюса)."""
+        items = [i for i in await self._plan.list_in_range(household_id, start, end) if i.origin == "auto"]
+        seen: set = set()
+        for i in items:
+            key = (i.recipe_id, i.variant_id)
+            if key not in seen:
+                seen.add(key)
+                self._plan.add_feedback(i, "accepted")
+            self._touch(i)
+        await self._plan.flush()
+        return len(items)
+
     async def delete_item(self, item: MealItem) -> None:
-        """Удалить блюдо: съеденное из кастрюли возвращается в неё."""
+        """Удалить блюдо: съеденное из кастрюли возвращается в неё. Убрали несъеденное предложение
+        автоплана — отзыв «removed»."""
+        if item.origin == "auto" and not any(p.is_eaten for p in item.portions):
+            self._plan.add_feedback(item, "removed")
         for p in item.portions:
             await self._return_to_pot(p)
             await self._stock.revert(portion_id=p.id)
@@ -255,19 +337,22 @@ class PlanService:
         await self._plan.flush()
 
     async def add_portion(self, item: MealItem, data: PortionIn) -> MealItemResponse:
+        self._touch(item)
         await self._validate_members(item.household_id, [data])
         if data.member_id is not None and any(p.member_id == data.member_id for p in item.portions):
             raise ValidationError("У этого члена семьи уже есть порция в блюде")
         item.portions.append(MealPortion(member_id=data.member_id, weight_g=data.weight_g))
         await self._plan.flush()
-        await self._release(item.cooking_log_id)
+        await self._pot_svc.release(item.cooking_log_id)
         return await self.response(item.id)
 
     async def update_portion(
-        self, item: MealItem, portion: MealPortion, weight: Decimal
+        self, item: MealItem, portion: MealPortion, weight: Decimal, today: date
     ) -> MealItemResponse:
         """Новый вес порции. У съеденного из кастрюли — пересписание остатка
         (ошибка, если еды не хватает, а не молчаливое обнуление)."""
+        if not portion.is_eaten:
+            self._touch(item)   # правка плана, а не факта «съел»
         if portion.is_eaten and portion.eaten_from_pot_id:
             pot = await self._cooking_logs.get(portion.eaten_from_pot_id)
             if pot is not None:
@@ -276,18 +361,19 @@ class PlanService:
                     raise ValidationError(
                         f"Недостаточно еды в холодильнике: осталось {pot.current_remaining_weight} г"
                     )
-                self._set_remaining(pot, remainder)
+                set_remaining(pot, remainder)
         portion.weight_g = weight
         await self._plan.flush()
         if portion.is_eaten and item.variant_id is not None:
             await self._stock.revert(portion_id=portion.id)
-            await self._stock.consume_portion(item, portion, clock.today())
-        await self._release(portion.eaten_from_pot_id)
-        await self._release(item.cooking_log_id)
+            await self._stock.consume_portion(item, portion, today)
+        await self._pot_svc.release(portion.eaten_from_pot_id)
+        await self._pot_svc.release(item.cooking_log_id)
         return await self.response(item.id)
 
     async def delete_portion(self, item: MealItem, portion: MealPortion) -> MealItemResponse | None:
         """Убрать порцию; последняя порция — блюдо удаляется целиком (вернётся None)."""
+        self._touch(item)
         if len(item.portions) == 1:
             await self.delete_item(item)
             return None
@@ -299,23 +385,23 @@ class PlanService:
 
     # ----------------------------------------------------------------- съедено
     async def eat_portion(
-        self, item: MealItem, portion: MealPortion, weight: Decimal | None
+        self, item: MealItem, portion: MealPortion, weight: Decimal | None, today: date
     ) -> MealItemResponse:
         weight = weight if weight is not None else _d(portion.weight_g)
         if portion.is_eaten:
-            return await self.update_portion(item, portion, weight)
-        await self._eat(item, [(portion, weight)])
+            return await self.update_portion(item, portion, weight, today)
+        await self._eat(item, [(portion, weight)], today)
         return await self.response(item.id)
 
-    async def eat_all(self, item: MealItem) -> MealItemResponse:
+    async def eat_all(self, item: MealItem, today: date) -> MealItemResponse:
         """«Все поели»: несъеденные порции → съедено с плановым весом."""
         todo = [(p, _d(p.weight_g)) for p in item.portions if not p.is_eaten]
         if not todo:
             raise ValidationError("Все порции уже отмечены как съеденные")
-        await self._eat(item, todo)
+        await self._eat(item, todo, today)
         return await self.response(item.id)
 
-    async def _eat(self, item: MealItem, todo: list[tuple[MealPortion, Decimal]]) -> None:
+    async def _eat(self, item: MealItem, todo: list[tuple[MealPortion, Decimal]], today: date) -> None:
         pot = await self._cooking_logs.get(item.cooking_log_id) if item.cooking_log_id else None
         if pot is None and item.recipe_id is not None:
             # ели блюдо, которое есть в холодильнике, но план не был к нему привязан
@@ -330,8 +416,8 @@ class PlanService:
                     f"Недостаточно еды в холодильнике: осталось {pot.current_remaining_weight} г, "
                     f"требуется {quantize(need)} г"
                 )
-            self._set_remaining(pot, remainder)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+            set_remaining(pot, remainder)
+        now = clock.utc_now()
         for portion, weight in todo:
             portion.weight_g = weight
             portion.is_eaten = True
@@ -339,10 +425,11 @@ class PlanService:
             portion.eaten_from_pot_id = pot.id if pot is not None else None
         await self._plan.flush()
         for portion, _ in todo:
-            await self._stock.consume_portion(item, portion, clock.today())
+            await self._stock.consume_portion(item, portion, today)
         if pot is not None:
             # съели больше плана — поздним блюдам может уже не хватить
-            await self._release(pot.id)
+            # (в пределах допуска их порции просто уменьшаются)
+            await self._pot_svc.release(pot.id, shrink_ok=True)
 
     async def uneat_portion(self, item: MealItem, portion: MealPortion) -> MealItemResponse:
         """Отменить «съедено»: вес возвращается в кастрюлю, порция снова в плане."""
@@ -354,7 +441,7 @@ class PlanService:
         portion.eaten_at = None
         portion.eaten_from_pot_id = None
         await self._plan.flush()
-        await self._release(item.cooking_log_id)
+        await self._pot_svc.release(item.cooking_log_id)
         return await self.response(item.id)
 
     async def detach_portion(self, item: MealItem, portion: MealPortion) -> MealItemResponse:
@@ -366,23 +453,11 @@ class PlanService:
         return await self.response(item.id)
 
     # ------------------------------------------------------------- кастрюля
-    @staticmethod
-    def _set_remaining(pot: RecipeCookingLog, remainder: Decimal) -> None:
-        pot.current_remaining_weight = remainder
-        pot.is_finished = remainder <= ZERO
-
     async def _return_to_pot(self, portion: MealPortion) -> None:
         if portion.is_eaten and portion.eaten_from_pot_id:
             pot = await self._cooking_logs.get(portion.eaten_from_pot_id)
             if pot is not None and not pot.is_discarded:
-                self._set_remaining(pot, _d(pot.current_remaining_weight) + _d(portion.weight_g))
-
-    async def _release(self, pot_id: int | None) -> None:
-        if pot_id is None:
-            return
-        pot = await self._cooking_logs.get(pot_id)
-        if pot is not None:
-            await self._plan.release_overbooked(pot.id, _d(pot.current_remaining_weight))
+                set_remaining(pot, _d(pot.current_remaining_weight) + _d(portion.weight_g))
 
     async def pot_status(
         self, household_id: int, recipe_id: int, portion_g: Decimal | None
